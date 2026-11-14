@@ -174,7 +174,8 @@ export function undoLatest(project: FactoryProject): FactoryProject {
   if (dev.pending) throw new Error("Scarta prima la patch in attesa.");
   if (workspaceConflicts(project).length) throw new Error("Risolvi prima i conflitti.");
   const history = dev.history.slice();
-  const index = history.findLastIndex(h => h.status === "applied");
+  let index = history.length - 1;
+  while (index >= 0 && history[index].status !== "applied") index--;
   if (index < 0) throw new Error("Nessuna feature da annullare.");
   const entry = history[index], base = generateFiles(project), files = workspaceFiles(project);
   for (const edit of entry.edits) if ((files[edit.path] ?? null) !== edit.content)
