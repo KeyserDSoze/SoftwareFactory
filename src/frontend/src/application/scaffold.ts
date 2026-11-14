@@ -395,7 +395,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "",
     ].join("\n");
     files["docker/Web.Dockerfile"] = files["docker/Web.Dockerfile"]
-      .replace('EXPOSE 80', 'COPY src/frontend/web/nginx.conf /etc/nginx/conf.d/default.conf\\nEXPOSE 80');
+      .replace('EXPOSE 80', 'COPY src/frontend/web/nginx.conf /etc/nginx/conf.d/default.conf' + String.fromCharCode(10) + 'EXPOSE 80');
     files["README.md"] += [
       "", "## Login OpenID Connect (solo PostgreSQL)",
       "",
