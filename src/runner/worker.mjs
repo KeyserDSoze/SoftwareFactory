@@ -64,9 +64,16 @@ export async function runWorker({
     try { entries = await readdir(path.join(dataDir, "jobs")); }
     catch(e) { if(e.code !== "ENOENT") console.error("Queue read error:", e.message); }
     const queued = [];
+    const retentionHours = Math.min(168, Math.max(1, Number(process.env.RUNNER_RETENTION_HOURS || "24") || 24));
+    const expireBefore = Date.now() - retentionHours * 60 * 60 * 1000;
     for (const id of entries) {
       try {
         const report = await readReport(dataDir, id);
+        if (["passed", "failed", "incomplete"].includes(report.state) &&
+            Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
+          await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
+          continue;
+        }
         if (report.state === "queued") queued.push({ id, acceptedAt: report.acceptedAt });
         // Fail closed on restart rather than pretending interrupted runs completed.
         if (report.state === "running") {

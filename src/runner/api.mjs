@@ -19,6 +19,9 @@ export function createRunnerServer({
     let ids = [];
     try { ids = await readdir(path.join(dataDir, "jobs")); }
     catch (e) { if (e.code !== "ENOENT") throw e; }
+    // Fail closed after 100 retained jobs; worker expires finished reports after 24h.
+    // Prevent an authenticated but abusive client from exhausting VM disk indefinitely.
+    if (ids.length >= 100) return Number.POSITIVE_INFINITY;
     let active = 0;
     for (const id of ids.slice(-100)) {
       try { if (["queued","running"].includes((await readReport(dataDir, id)).state)) active++; }
