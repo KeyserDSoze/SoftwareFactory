@@ -15,6 +15,7 @@ function response(code: string, otherPath = path) {
 function fixture() {
   const project = createProject();
   project.config.name = "Repair Factory";
+  project.config.description = "Invoicing and correction workflows";
   const original = validateProposal(response("namespace RepairFactory; public record Invoice(Guid Id);"), project, "Implement invoice");
   const staged = setPending(project, original);
   return { staged, original };
