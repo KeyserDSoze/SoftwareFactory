@@ -319,6 +319,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       .replace("</ItemGroup>", '<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="' +
         (c.dotnetVersion === "11.0" ? "11.0.0" : "10.0.15") + '" /></ItemGroup>');
     files[apiPath] = files[apiPath]
+      .replace('app.UseCors("web");', "")
       .replace("using FactoryApp.Business;", "using FactoryApp.Business;\nusing FactoryApp.Domain;\nusing FactoryApp.Api;\nusing Microsoft.AspNetCore.RateLimiting;\nusing Npgsql;")
       .replace("var app = builder.Build();", [
         'var connectionString = builder.Configuration["Database:ConnectionString"];',
@@ -334,6 +335,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
         '  await context.Response.WriteAsJsonAsync(new { error = "server_error" });',
         '}));',
         'app.UseRouting();',
+        'app.UseCors("web");',
         'app.UseAuthentication();',
         'app.UseAuthorization();',
         'app.UseRateLimiter();',
