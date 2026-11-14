@@ -55,3 +55,17 @@ jobs:
       - name: Build generated React application
         run: npm install --no-audit --no-fund && npm run build
         working-directory: src/frontend/generated-fixture/src/frontend/web
+      - name: Run generated Playwright browser smoke inside networkless Docker
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+        run: |
+          docker pull mcr.microsoft.com/playwright:v1.64.1-noble
+          timeout 300s node src/runner/scripts/playwright-smoke.mjs src/frontend/generated-fixture
+      - name: Capture Playwright failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-generated-fixture-diagnostics
+          path: src/frontend/generated-fixture/src/frontend/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 3

@@ -44,6 +44,20 @@ describe("application scaffold", () => {
     expect(JSON.stringify(files)).not.toContain("github_pat_");
     expect(JSON.parse(files[".softwarefactory/manifest.json"]).config.database).toBe("postgresql");
   });
+  it("emits a pinned Chromium Playwright suite and CI browser gate", () => {
+    const files = generateFiles(example());
+    const packageJson = JSON.parse(files["src/frontend/web/package.json"]);
+    expect(packageJson.devDependencies["@playwright/test"]).toBe("1.64.1");
+    expect(packageJson.scripts["test:e2e"]).toBe("playwright test");
+    expect(files["src/frontend/web/playwright.config.ts"]).toContain("127.0.0.1:4173");
+    expect(files["src/frontend/web/playwright.config.ts"]).toContain("chromium");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("API raggiungibile");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("API non raggiungibile");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain('toHaveText("Legge & Codice")');
+    expect(files[".github/workflows/ci.yml"]).toContain("npx playwright install --with-deps chromium");
+    expect(files[".github/workflows/ci.yml"]).toContain("npm run test:e2e");
+    expect(files[".gitignore"]).toContain("test-results/");
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";

@@ -188,3 +188,42 @@ test("dependency errors are incomplete, not code defects to repair with AI", asy
     state: "failed", exitCode: 125, stderr: "invalid Docker --mount argument", stdout: "",
   }), true);
 });
+
+test("Playwright step uses matching pinned browser image and no network", () => {
+  const work = "/srv/softwarefactory/workspaces/playwright-test";
+  const pwFiles = {
+    ...code,
+    "src/frontend/web/package.json": JSON.stringify({
+      scripts: { "test:e2e": "playwright test" },
+      devDependencies: { "@playwright/test": "1.64.1" },
+    }),
+    "src/frontend/web/playwright.config.ts": "export default {};",
+    "src/frontend/web/e2e/smoke.spec.ts": "import { test } from '@playwright/test'; test('ok', async () => {});",
+  };
+  const planned = planStep("playwright", pwFiles, work);
+  assert.equal(planned.image, "mcr.microsoft.com/playwright:v1.64.1-noble");
+  assert.equal(planned.skip, undefined);
+  assert.ok(planned.args.includes("none"), "browser job must not have network egress");
+  assert.ok(planned.args.includes("--init"));
+  assert.ok(planned.command.join(" ").includes("./node_modules/.bin/playwright test"));
+  assert.ok(!planned.command.join(" ").includes("npx"));
+  const mismatch = {
+    ...pwFiles,
+    "src/frontend/web/package.json": JSON.stringify({
+      devDependencies: { "@playwright/test": "^1.64.1" },
+    }),
+  };
+  assert.match(planStep("playwright", mismatch, work).skip, /pinned to 1[.]64[.]1/);
+  assert.match(planStep("playwright", pwFiles, work, {
+    RUNNER_PLAYWRIGHT_IMAGE: "mcr.microsoft.com/playwright:v1.55.0-noble",
+  }).skip, /differ/);
+  assert.match(planStep("playwright", { ...pwFiles, "src/frontend/web/playwright.config.ts": undefined },
+    work).skip, /configuration/);
+  assert.equal(isInfrastructureFailure({
+    state: "failed", exitCode: 1, stdout: "",
+    stderr: "browserType.launch: Executable doesn't exist at /ms-playwright/...",
+  }), true);
+  assert.equal(isInfrastructureFailure({
+    state: "failed", exitCode: 1, stdout: "Error: expect(locator).toBeVisible() failed", stderr: "",
+  }), false);
+});
