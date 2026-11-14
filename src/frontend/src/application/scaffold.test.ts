@@ -76,10 +76,47 @@ describe("application scaffold", () => {
     expect(smoke).toContain('status: "scaffold"');
     expect(backend).toContain('"http://web:4173"');
     expect(backend).toContain('"http://127.0.0.1:4173"');
-    expect(workflow).toContain("Verify browser and real ASP.NET Core API");
+    expect(workflow).toContain("Verify browser, real ASP.NET Core API and PostgreSQL");
+    expect(workflow).toContain("E2E_DATABASE=postgresql");
+    expect(workflow).toContain("docker exec");
+    expect(workflow).toContain("openssl rand -hex 24");
     expect(workflow).toContain("E2E_MODE=integration");
     expect(workflow).toContain("E2E_API_ORIGIN=http://127.0.0.1:8080");
     expect(workflow).toContain("curl -fsS http://127.0.0.1:8080/health");
+  });
+  it("generates real PostgreSQL repository, migrations and a browser CRUD journey", () => {
+    const files = generateFiles(example());
+    const infrastructure = files["src/backend/infrastructure/Infrastructure.csproj"];
+    const migrate = files["src/backend/infrastructure/PostgresSchemaMigrator.cs"];
+    const repository = files["src/backend/infrastructure/PostgresWorkItemRepository.cs"];
+    const program = files["src/backend/applications/Api/Program.cs"];
+    expect(infrastructure).toContain('PackageReference Include="Npgsql" Version="10.0.3"');
+    expect(infrastructure).toContain('<TargetFramework>net11.0</TargetFramework>');
+    expect(infrastructure).toContain('EmbeddedResource Include="Migrations/*.sql"');
+    expect(migrate).toContain("factory_schema_migrations");
+    expect(migrate).toContain("pg_advisory_xact_lock");
+    expect(files["src/backend/infrastructure/Migrations/0001_create_work_items.sql"]).toContain("CREATE TABLE work_items");
+    expect(repository).toContain("NpgsqlParameter<Guid>");
+    expect(repository).toContain("WHERE id = $1");
+    expect(program).toContain('app.MapPost("/api/items"');
+    expect(program).toContain('app.MapDelete("/api/items/{id:guid}"');
+    expect(program).toContain("ApplyAsync()");
+    expect(files["src/frontend/web/src/WorkItems.tsx"]).toContain('aria-label="Archivio PostgreSQL"');
+    expect(files["src/frontend/web/src/App.tsx"]).toContain("<WorkItems api={API}/>");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("persists and deletes a work item through real PostgreSQL");
+    expect(files["docker/compose.yml"]).toContain("service_healthy");
+    expect(files["docker/compose.yml"]).toContain('127.0.0.1:5432:5432');
+    expect(files["docker/compose.yml"]).toContain('Password=${DB_PASSWORD:?Set DB_PASSWORD in .env}');
+  });
+  it("does not claim PostgreSQL persistence for other database selections", () => {
+    for (const database of ["mysql", "sqlserver", "sqlite"] as const) {
+      const p = example(); p.config.database = database;
+      const files = generateFiles(p);
+      expect(files["src/backend/infrastructure/PostgresWorkItemRepository.cs"]).toBeUndefined();
+      expect(files["src/frontend/web/src/WorkItems.tsx"]).toBeUndefined();
+      expect(files["src/frontend/web/e2e/smoke.spec.ts"]).not.toContain("persists and deletes a work item");
+      expect(files[".github/workflows/ci.yml"]).not.toContain("E2E_DATABASE=postgresql");
+    }
   });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
