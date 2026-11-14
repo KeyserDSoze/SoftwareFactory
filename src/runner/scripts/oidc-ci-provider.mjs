@@ -54,7 +54,7 @@ function issuePair(subject, role, nonce) {
   const issuedAt = Math.floor(Date.now() / 1000);
   const access = accessToken(subject, role);
   const identity = jwt({ iss: issuer, aud: clientId, sub: subject, iat: issuedAt,
-    exp: issuedAt + 600, auth_time: issuedAt, nonce, role });
+    exp: issuedAt + 600, auth_time: issuedAt, ...(nonce ? { nonce } : {}), role });
   const refresh = randomBytes(32).toString("base64url");
   refreshTokens.set(refresh, { subject, role, nonce, expires: Date.now() + 600_000 });
   return { access_token: access, id_token: identity, token_type: "Bearer", expires_in: 600,
@@ -67,7 +67,7 @@ function authorize(res, url) {
   const nonce = q.get("nonce") || "";
   const valid = q.get("response_type") === "code" && q.get("client_id") === clientId
     && q.get("redirect_uri") === redirectUri && q.get("code_challenge_method") === "S256"
-    && /^[A-Za-z0-9_-]{43,128}$/.test(challenge) && state.length > 16 && nonce.length > 16
+    && /^[A-Za-z0-9_-]{43,128}$/.test(challenge) && state.length > 16 && (!nonce || nonce.length > 16)
     && (q.get("scope") || "").split(" ").includes("openid");
   if (!valid) {
     console.error("OIDC_AUTHORIZE_REJECT", JSON.stringify({
