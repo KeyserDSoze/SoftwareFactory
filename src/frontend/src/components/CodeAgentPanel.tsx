@@ -8,7 +8,8 @@ import RunnerPanel from "./RunnerPanel";
 import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
 import type { RunnerReport } from "../infrastructure/runner";
-import { verifyCurrentRunnerReport } from "../infrastructure/runner";
+import { fetchRunnerJob, verifyCurrentRunnerReport } from "../infrastructure/runner";
+import { readSecret } from "../infrastructure/store";
 
 type Props = {
   project: FactoryProject;
@@ -132,11 +133,37 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     } catch(error) { if (!controller.signal.aborted) fail(error); }
     finally { abortRef.current = null; setPhase(""); onBusy(false); }
   }
-  function approve() {
-    if (busy || !pending) return;
+  async function approve() {
+    const originalProject = projectRef.current, patch = developmentOf(originalProject).pending;
+    if (busy || !patch) return;
     if (!window.confirm("Applicare le modifiche ai file locali? Non saranno pubblicate finché non esegui un push GitHub esplicito.")) return;
-    try { update(approvePending(projectRef.current)); setRequest(""); onNotice("Modifiche applicate localmente. Esporta lo ZIP o pubblica su GitHub dopo averle verificate."); }
-    catch(e) { fail(e); }
+    const isRepair = (patch.repairCount ?? 0) > 0;
+    if (isRepair) onBusy(true, "Verifica esiti runner post-repair");
+    try {
+      if (isRepair) {
+        const evidence = originalProject.development?.lastRunnerEvidence;
+        if (!evidence || evidence.proposalId !== patch.id)
+          throw new Error("Dopo il repair devi rieseguire i test sul nuovo codice prima di approvare.");
+        const required = new Set<string>();
+        if (patch.edits.some(e => e.path.endsWith(".cs"))) required.add("dotnet-build");
+        if (patch.edits.some(e => e.path.startsWith("src/frontend/web/src/"))) required.add("web-build");
+        if ([...required].some(step => !evidence.steps.includes(step as typeof evidence.steps[number])))
+          throw new Error("Ripeti almeno i build .NET/React corrispondenti ai file riparati.");
+        const endpoint = settings.runnerEndpoint || "", key = readSecret("runner.key");
+        const report = await fetchRunnerJob(endpoint, key, evidence.id);
+        const status = await verifyCurrentRunnerReport(originalProject, endpoint, report, evidence);
+        if (status.kind !== "passed")
+          throw new Error("I nuovi test non sono superati o lo snapshot è cambiato: " + status.detail);
+        if (projectRef.current.updatedAt !== originalProject.updatedAt)
+          throw new Error("Il progetto è cambiato durante la verifica: riprova.");
+      }
+      update(approvePending(projectRef.current, { verifiedRepair: isRepair }));
+      setRequest("");
+      onNotice(isRepair
+        ? "Patch riparata, ri-verificata e approvata localmente. Controlla il diff e pubblica manualmente."
+        : "Modifiche applicate localmente. Esporta lo ZIP o pubblica su GitHub dopo averle verificate.");
+    } catch (error) { fail(error); }
+    finally { if (isRepair) onBusy(false); }
   }
   function reject() {
     if (busy || !pending) return;
