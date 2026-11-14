@@ -166,6 +166,12 @@ describe("application scaffold", () => {
     expect(JSON.parse(files["src/frontend/web/package.json"]).dependencies["oidc-client-ts"]).toBe("3.5.0");
     expect(files["docker/compose.yml"]).toContain("AUTH_MODE:-oidc");
     expect(files["docker/compose.yml"]).toContain("Auth__Authority");
+    expect(files["docker/compose.yml"]).toContain("OIDC_PUBLIC_CLIENT_ID");
+    expect(files["docker/Web.Dockerfile"]).toContain("nginx.conf");
+    expect(files["src/frontend/web/nginx.conf"]).toContain("try_files $uri $uri/ /index.html");
+    expect(files["README.md"]).toContain("Auth__Mode=oidc");
+    expect(files["src/frontend/web/nginx.conf"]).toContain("X-Content-Type-Options");
+
     expect(files["docker/compose.yml"]).toContain("AUTH_SIGNING_KEY:-");
     expect(files["docker/compose.yml"]).toContain("AUTH_AUDIENCE:?");
     expect(files[".github/workflows/ci.yml"]).toContain("Auth__Mode=legacy");

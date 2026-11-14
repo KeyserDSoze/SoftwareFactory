@@ -381,6 +381,35 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
     const webManifest = JSON.parse(files[webManifestPath]);
     webManifest.dependencies["oidc-client-ts"] = "3.5.0";
     files[webManifestPath] = JSON.stringify(webManifest, null, 2) + "\n";
+    files["src/frontend/web/nginx.conf"] = [
+      "server {",
+      "  listen 80;",
+      "  server_name _;",
+      "  root /usr/share/nginx/html;",
+      "  index index.html;",
+      "  location / { try_files $uri $uri/ /index.html; }",
+      "  add_header X-Content-Type-Options nosniff always;",
+      "  add_header Referrer-Policy no-referrer always;",
+      "  add_header X-Frame-Options DENY always;",
+      "}",
+      "",
+    ].join("\n");
+    files["docker/Web.Dockerfile"] = files["docker/Web.Dockerfile"]
+      .replace('EXPOSE 80', 'COPY src/frontend/web/nginx.conf /etc/nginx/conf.d/default.conf\\nEXPOSE 80');
+    files["README.md"] += [
+      "", "## Login OpenID Connect (solo PostgreSQL)",
+      "",
+      "Per impostazione predefinita la API richiede Auth__Mode=oidc e Auth__Authority (issuer OIDC), Auth__Audience e i JWT di accesso firmati con chiave asimmetrica RS256 pubblicata su JWKS.",
+      "Configura un client pubblico Authorization Code + PKCE nel provider identita con redirect URI dell'app /auth/callback, post-logout URI / e origini CORS per il token endpoint.",
+      "Nel docker/.env imposta AUTH_MODE=oidc, AUTH_AUTHORITY=https://issuer.example, AUTH_AUDIENCE, OIDC_PUBLIC_AUTHORITY=https://issuer.example, OIDC_PUBLIC_CLIENT_ID=<client-id>.",
+      "Le ultime tre variabili VITE_OIDC_* sono parametri pubblici del client, NON chiavi segrete. Non esporre signing key o client secret in React.",
+      "La SPA usa oidc-client-ts per redirect con PKCE, validazione di state/nonce, callback e logout; Nginx permette il fallback SPA su /auth/callback.",
+      "La modalita Auth__Mode=legacy con Auth__SigningKey e disponibile solo in Development per test senza identity provider, e rifiutata in Production.",
+      "HTTPS e obbligatorio per authority/discovery OIDC in Production. E2E con provider di test HTTP solo sulla rete Docker interna della CI.",
+      "La baseline non implementa ancora sessioni BFF, refresh/revoca comprovati, rotazione signing key in produzione o CSP specifica per il provider.",
+      "",
+    ].join("\n");
+    files["tests/README.md"] += "\nLa Factory verifica il protocollo OAuth2/OIDC con un provider fittizio soltanto in CI; non sostituisce test con provider di identita reale.\n";
     files["src/frontend/web/src/App.tsx"] = files["src/frontend/web/src/App.tsx"]
       .replace('import { useEffect, useState } from "react";', 'import { useEffect, useState } from "react";\nimport WorkItems from "./WorkItems";')
       .replace('</main>;', '<WorkItems api={API}/></main>;');

@@ -109,3 +109,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Limite request body 8 KiB, rate limiter, errori generic JSON e readiness DB protetta
 - Test Chromium reali per 401/403/ownership, JWT CI di dieci minuti e audit PostgreSQL
 - **Rimane da fare:** Identity Provider OIDC/JWKS, login PKCE, refresh/revoca, rotazione chiavi, threat assessment e hardening production
+
+## v0.3 — OIDC/JWKS e accesso PKCE (issue #9, in sviluppo)
+
+- AuthStartup seleziona OIDC RS256/JWKS di default, HTTPS obbligatorio in Production; il percorso HMAC legacy è consentito solo in Development
+- Template frontend oidc-client-ts 3.5.0 con Authorization Code + PKCE, state/nonce, user session e callback/login/logout, parametri pubblici via VITE_
+- Nginx SPA fallback /auth/callback e configurazioni Compose senza segreti hardcoded
+- Provider OIDC RSA effimero **solo per CI** su Docker bridge --internal, con discovery/JWKS, code grant PKCE S256, token e endpoint per test
+- Restano da completare/collaudare: login Chromium completo con redirection, logout/refresh con provider reale, JWKS key rollover in produzione, CSP e BFF opzionale

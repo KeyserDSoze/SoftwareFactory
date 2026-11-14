@@ -96,3 +96,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - CI con tre token effimeri: editor A, reader A, editor B; verificare 401/403, isolamento e conteggi audit sul DB vero.
 - CORS prima di auth; body <= 8 KiB, rate limiter per identity, risposta errore generica. /health pubblico è liveness; /ready richiede auth e connessione al DB.
 - sessionStorage del token nella SPA è dimostrativo e vulnerabile a XSS. Non affermare che esista login OIDC, refresh/revoca o un deploy sicuro in produzione.
+
+## OIDC/JWKS e PKCE dello scaffold (issue #9)
+
+- Auth__Mode=oidc è il default per API PostgreSQL; valida authority OIDC e audience, token RS256 tramite discovery/JWKS e firma pubblica. HTTPS obbligatorio in Production, HTTP solo in Development test. Legacy HS256 non deve mai avviarsi in Production.
+- SPA OIDC via oidc-client-ts 3.5.0, Authorization Code + PKCE con state/nonce e callback /auth/callback. Le variabili VITE_OIDC_* possono contenere soltanto issuer, client ID pubblico e audience, **mai secret o private key**.
+- Nginx esportato deve rispondere alla callback /auth/callback con fallback index.html. Docker Compose inietta le impostazioni OIDC da .env privato, senza imporre una signing key HMAC in modalita OIDC.
+- Provider `src/runner/scripts/oidc-ci-provider.mjs` è fittizio, con chiavi RSA generate per-run e rete Docker --internal; non copiarlo in immagini production, non chiamarlo provider certificato.
+- Il login browser deve essere testato con Chromium vero e prova del code exchange PKCE, insieme a controlli 401/403/owner/audit. Se fallisce, non dichiarare la milestone conclusa.
