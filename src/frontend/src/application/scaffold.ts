@@ -18,9 +18,9 @@ function dockerCompose(c: ProjectConfig): string {
     "    environment:",
     "      ASPNETCORE_ENVIRONMENT: Development",
     "      Database__Provider: " + c.database,
-    '      Database__ConnectionString: "${DATABASE_URL:-}"',
+    c.database === "postgresql" ? '      Database__ConnectionString: "Host=db;Port=5432;Database=app;Username=app;Password=${DB_PASSWORD:?Set DB_PASSWORD in .env}"' : '      Database__ConnectionString: "${DATABASE_URL:-}"',
   ];
-  if (deps.length) services.push("    depends_on:", "      db:", "        condition: service_started");
+  if (deps.length) services.push("    depends_on:", "      db:", "        condition: " + (c.database === "postgresql" ? "service_healthy" : "service_started"));
   services.push(
     "  web:", "    build:", "      context: ..", "      dockerfile: docker/Web.Dockerfile",
     "      args:", "        VITE_API_URL: http://localhost:8080",
@@ -29,7 +29,7 @@ function dockerCompose(c: ProjectConfig): string {
   if (c.database === "postgresql") {
     services.push("  db:", "    image: postgres:17-alpine", "    environment:",
       "      POSTGRES_DB: app", "      POSTGRES_USER: app", '      POSTGRES_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"',
-      "    ports:", '      - "5432:5432"', "    volumes:", "      - pgdata:/var/lib/postgresql/data", "volumes:", "  pgdata:");
+      "    ports:", '      - "127.0.0.1:5432:5432"', "    healthcheck:", '      test: ["CMD-SHELL", "pg_isready -U app -d app"]', "      interval: 2s", "      timeout: 2s", "      retries: 20", "    volumes:", "      - pgdata:/var/lib/postgresql/data", "volumes:", "  pgdata:");
   } else if (c.database === "mysql") {
     services.push("  db:", "    image: mysql:8.4", "    environment:", "      MYSQL_DATABASE: app", "      MYSQL_USER: app",
       '      MYSQL_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"',
@@ -176,15 +176,16 @@ function otherFrontend(kind: FrontendKind): Record<string, string> {
 }
 
 function postgresqlFiles(c: ProjectConfig): Record<string, string> {
-  return {
+  const sources: Record<string, string> = {
     "src/backend/domain/WorkItem.cs": "namespace FactoryApp.Domain;\npublic sealed record WorkItem(Guid Id, string Title, DateTimeOffset CreatedAt);\npublic interface IWorkItemRepository {\n    Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct);\n    Task<WorkItem> AddAsync(string title, CancellationToken ct);\n    Task<bool> DeleteAsync(Guid id, CancellationToken ct);\n}\n",
     "src/backend/business/WorkItemService.cs": "using FactoryApp.Domain;\nnamespace FactoryApp.Business;\npublic sealed class WorkItemService(IWorkItemRepository repository) {\n    public Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct) => repository.ListAsync(ct);\n    public Task<WorkItem> AddAsync(string title, CancellationToken ct) {\n        if (string.IsNullOrWhiteSpace(title) || title.Trim().Length > 120)\n            throw new ArgumentException(\"Title must contain 1 to 120 characters.\", nameof(title));\n        return repository.AddAsync(title.Trim(), ct);\n    }\n    public Task<bool> DeleteAsync(Guid id, CancellationToken ct) => repository.DeleteAsync(id, ct);\n}\n",
-    "src/backend/infrastructure/Infrastructure.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><TargetFramework>net+ c.dotnetVersion +</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>\n  <ItemGroup>\n    <ProjectReference Include=\"../domain/Domain.csproj\" />\n    <PackageReference Include=\"Npgsql\" Version=\"10.0.3\" />\n    <EmbeddedResource Include=\"Migrations/*.sql\" />\n  </ItemGroup>\n</Project>\n",
+    "src/backend/infrastructure/Infrastructure.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><TargetFramework>net__FRAMEWORK__</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>\n  <ItemGroup>\n    <ProjectReference Include=\"../domain/Domain.csproj\" />\n    <PackageReference Include=\"Npgsql\" Version=\"10.0.3\" />\n    <EmbeddedResource Include=\"Migrations/*.sql\" />\n  </ItemGroup>\n</Project>\n",
     "src/backend/infrastructure/PostgresWorkItemRepository.cs": "using FactoryApp.Domain;\nusing Npgsql;\nusing NpgsqlTypes;\nnamespace FactoryApp.Infrastructure;\npublic sealed class PostgresWorkItemRepository(NpgsqlDataSource db) : IWorkItemRepository {\n    public async Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct) {\n        var result = new List<WorkItem>();\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\n            \"SELECT id, title, created_at FROM work_items ORDER BY created_at DESC, id DESC LIMIT 100\",\n            connection);\n        await using var reader = await command.ExecuteReaderAsync(ct);\n        while (await reader.ReadAsync(ct))\n            result.Add(new WorkItem(reader.GetGuid(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2)));\n        return result;\n    }\n    public async Task<WorkItem> AddAsync(string title, CancellationToken ct) {\n        var entry = new WorkItem(Guid.NewGuid(), title, DateTimeOffset.UtcNow);\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\n            \"INSERT INTO work_items (id, title, created_at) VALUES ($1, $2, $3)\", connection);\n        command.Parameters.Add(new NpgsqlParameter<Guid> { TypedValue = entry.Id, NpgsqlDbType = NpgsqlDbType.Uuid });\n        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = entry.Title, NpgsqlDbType = NpgsqlDbType.Text });\n        command.Parameters.Add(new NpgsqlParameter<DateTimeOffset> { TypedValue = entry.CreatedAt, NpgsqlDbType = NpgsqlDbType.TimestampTz });\n        await command.ExecuteNonQueryAsync(ct);\n        return entry;\n    }\n    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct) {\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\"DELETE FROM work_items WHERE id = $1\", connection);\n        command.Parameters.Add(new NpgsqlParameter<Guid> { TypedValue = id, NpgsqlDbType = NpgsqlDbType.Uuid });\n        return await command.ExecuteNonQueryAsync(ct) == 1;\n    }\n}\n",
     "src/backend/infrastructure/PostgresSchemaMigrator.cs": "using Npgsql;\nusing System.Reflection;\nnamespace FactoryApp.Infrastructure;\npublic sealed class PostgresSchemaMigrator(NpgsqlDataSource db) {\n    public async Task ApplyAsync(CancellationToken ct = default) {\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var transaction = await connection.BeginTransactionAsync(ct);\n        await using (var advisory = new NpgsqlCommand(\"SELECT pg_advisory_xact_lock(20261114)\", connection, transaction))\n            await advisory.ExecuteNonQueryAsync(ct);\n        await using (var schema = new NpgsqlCommand(\n            \"CREATE TABLE IF NOT EXISTS factory_schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())\",\n            connection, transaction))\n            await schema.ExecuteNonQueryAsync(ct);\n        var assembly = typeof(PostgresSchemaMigrator).Assembly;\n        var migrations = assembly.GetManifestResourceNames()\n            .Where(name => name.Contains(\".Migrations.\") && name.EndsWith(\".sql\", StringComparison.Ordinal))\n            .OrderBy(name => name, StringComparer.Ordinal)\n            .ToArray();\n        if (migrations.Length == 0) throw new InvalidOperationException(\"No SQL migration embedded.\");\n        foreach (var name in migrations) {\n            var version = name.Split(\".Migrations.\", 2)[1];\n            await using (var check = new NpgsqlCommand(\n                \"SELECT EXISTS(SELECT 1 FROM factory_schema_migrations WHERE version = $1)\",\n                connection, transaction)) {\n                check.Parameters.AddWithValue(version);\n                if ((bool)(await check.ExecuteScalarAsync(ct) ?? false)) continue;\n            }\n            using var stream = assembly.GetManifestResourceStream(name)\n                ?? throw new InvalidOperationException(\"Migration resource missing.\");\n            using var reader = new StreamReader(stream);\n            var sql = await reader.ReadToEndAsync(ct);\n            await using (var migration = new NpgsqlCommand(sql, connection, transaction))\n                await migration.ExecuteNonQueryAsync(ct);\n            await using (var mark = new NpgsqlCommand(\n                \"INSERT INTO factory_schema_migrations(version) VALUES ($1)\",\n                connection, transaction)) {\n                mark.Parameters.AddWithValue(version);\n                await mark.ExecuteNonQueryAsync(ct);\n            }\n        }\n        await transaction.CommitAsync(ct);\n    }\n}\n",
     "src/backend/infrastructure/Migrations/0001_create_work_items.sql": "CREATE TABLE work_items (\n    id uuid PRIMARY KEY,\n    title varchar(120) NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 120),\n    created_at timestamptz NOT NULL\n);\nCREATE INDEX idx_work_items_created ON work_items (created_at DESC, id DESC);\n",
     "src/frontend/web/src/WorkItems.tsx": "import { useEffect, useState } from \"react\";\nimport type { FormEvent } from \"react\";\ntype WorkItem = { id: string; title: string; createdAt: string };\nexport default function WorkItems({ api }: { api: string }) {\n  const [items, setItems] = useState<WorkItem[]>([]);\n  const [title, setTitle] = useState(\"\");\n  const [error, setError] = useState(\"\");\n  const [busy, setBusy] = useState(false);\n  useEffect(() => {\n    const controller = new AbortController();\n    void fetch(api + \"/api/items\", { signal: controller.signal })\n      .then(response => { if (!response.ok) throw Error(\"HTTP \" + response.status); return response.json() as Promise<WorkItem[]>; })\n      .then(setItems)\n      .catch(err => { if (!controller.signal.aborted) setError(\"Archivio non disponibile: \" + String(err)); });\n    return () => controller.abort();\n  }, [api]);\n  const add = async (event: FormEvent<HTMLFormElement>) => {\n    event.preventDefault();\n    const next = title.trim();\n    if (!next || next.length > 120 || busy) return;\n    setBusy(true); setError(\"\");\n    try {\n      const response = await fetch(api + \"/api/items\", {\n        method: \"POST\", headers: { \"Content-Type\": \"application/json\" }, body: JSON.stringify({ title: next }),\n      });\n      if (!response.ok) throw Error(\"HTTP \" + response.status);\n      const created = await response.json() as WorkItem;\n      setItems(old => [created, ...old]); setTitle(\"\");\n    } catch (err) { setError(\"Salvataggio non riuscito: \" + String(err)); }\n    finally { setBusy(false); }\n  };\n  const remove = async (item: WorkItem) => {\n    if (busy) return;\n    setBusy(true); setError(\"\");\n    try {\n      const response = await fetch(api + \"/api/items/\" + encodeURIComponent(item.id), { method: \"DELETE\" });\n      if (!response.ok) throw Error(\"HTTP \" + response.status);\n      setItems(old => old.filter(x => x.id !== item.id));\n    } catch (err) { setError(\"Eliminazione non riuscita: \" + String(err)); }\n    finally { setBusy(false); }\n  };\n  return <section aria-label=\"Archivio PostgreSQL\" style={{ marginTop: 32 }}>\n    <h2>Elementi salvati</h2>\n    <form onSubmit={event => void add(event)}>\n      <label htmlFor=\"work-item-title\">Titolo elemento</label>\n      <input id=\"work-item-title\" value={title} maxLength={120}\n        onChange={event => setTitle(event.target.value)} placeholder=\"Nuovo elemento\" />\n      <button type=\"submit\" disabled={busy || !title.trim()}>Aggiungi</button>\n    </form>\n    {error && <p role=\"alert\">{error}</p>}\n    <ul>{items.map(item => <li key={item.id}>\n      <span>{item.title}</span>{\" \"}\n      <button type=\"button\" disabled={busy} aria-label={\"Elimina \" + item.title}\n        onClick={() => void remove(item)}>Elimina</button>\n    </li>)}</ul>\n  </section>;\n}\n"
   };
+  return Object.fromEntries(Object.entries(sources).map(([path, content]) => [path, content.replaceAll("__FRAMEWORK__", c.dotnetVersion)]));
 }
 
 export function generateFiles(project: FactoryProject): Record<string, string> {
@@ -351,6 +352,34 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       '});',
       '',
     ].join("\n");
+
+    const workflowPath = ".github/workflows/ci.yml";
+    const workflow = files[workflowPath];
+    const marker = "      - name: Verify browser and real ASP.NET Core API";
+    const start = workflow.indexOf(marker);
+    if (start < 0) throw new Error("Generated workflow integration step missing");
+    files[workflowPath] = workflow.slice(0, start) + [
+      "      - name: Verify browser, real ASP.NET Core API and PostgreSQL",
+      "        run: |",
+      "          DB_NAME=sf-ci-db-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT",
+      "          DB_PASSWORD=$(openssl rand -hex 24)",
+      '          trap \'kill $API_PID 2>/dev/null || true; docker rm -f "$DB_NAME" >/dev/null 2>&1 || true\' EXIT',
+      '          docker run -d --name "$DB_NAME" -p 127.0.0.1:54329:5432 -e POSTGRES_USER=app -e POSTGRES_DB=app -e POSTGRES_PASSWORD="$DB_PASSWORD" postgres:17-alpine',
+      "          for i in $(seq 1 45); do",
+      '            if docker exec "$DB_NAME" pg_isready -U app -d app >/dev/null 2>&1; then break; fi',
+      "            sleep 1",
+      "          done",
+      '          docker exec "$DB_NAME" pg_isready -U app -d app',
+      '          Database__Provider=postgresql Database__ConnectionString="Host=127.0.0.1;Port=54329;Database=app;Username=app;Password=$DB_PASSWORD" ASPNETCORE_URLS=http://127.0.0.1:8080 dotnet src/backend/applications/Api/bin/Release/net' + c.dotnetVersion + '/Api.dll &',
+      "          API_PID=$!",
+      "          for i in $(seq 1 45); do",
+      "            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then break; fi",
+      "            if ! kill -0 $API_PID 2>/dev/null; then exit 1; fi",
+      "            sleep 1",
+      "          done",
+      "          curl -fsS http://127.0.0.1:8080/health >/dev/null",
+      "          E2E_MODE=integration E2E_DATABASE=postgresql E2E_WEB_ORIGIN=http://127.0.0.1:4173 E2E_API_ORIGIN=http://127.0.0.1:8080 VITE_API_URL=http://127.0.0.1:8080 npm run test:e2e --prefix src/frontend/web",
+    ].join("\n") + "\n";
   }
   if (c.deployment === "kubernetes") {
     files["infra/kubernetes/api.yaml"] = lines("apiVersion: apps/v1", "kind: Deployment",
