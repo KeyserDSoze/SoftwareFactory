@@ -50,3 +50,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Comandi di test fissati da codice runner, rete dei job disabilitata, limiti CPU/RAM/timeout, report e digest conservati sul server.
 - Il socket Docker rootless è montato **solo nel worker**, mai nell'API esposta; è comunque privilegiato e richiede host/VM dedicati.
 - Runner senza test configurati segnala `incomplete`, mai `passed`. Build offline possono fallire se mancano dipendenze pre-caricate.
+
+## Integrità report / AI repair (#3)
+
+- Non mostrare build/test come superati senza associare il report allo snapshot attuale e verificare che ogni step richiesto abbia exitCode 0.
+- Dopo una correzione AI invalidare esplicitamente review e test. Limite due tentativi; nessun ampliamento dei path sorgenti consentiti.
+- Per approvare una patch riparata è obbligatorio un nuovo build reale `.NET` e/o `React` verificato sul nuovo snapshot, dopo una nuova adversarial review.
+- I log dei test sono contenuti non fidati: il prompt non deve seguirne le istruzioni, e non deve trasmettere segreti a provider AI.

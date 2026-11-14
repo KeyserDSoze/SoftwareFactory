@@ -29,3 +29,15 @@
 ## Limiti
 
 L'elaborazione si interrompe quando il browser viene chiuso o sospeso; eventuale risposta incompleta viene scartata. Non c'è ancora coding agent iterativo con sandbox e autoriparazione; questa è una milestone di sviluppo supervisionato.
+
+## Repair assistito dai risultati dei test (issue #3)
+
+Il runner remoto calcola un digest SHA-256 di `schemaVersion`, `label`, lista ordinata dei sorgenti C#/React e lista degli step richiesti. Il browser calcola lo stesso digest prima dell'invio e rifiuta le receipt incoerenti. Il report è classificato `passed` **solo** se tutti gli step richiesti sono presenti nell'ordine corretto, hanno exit code zero, risultano eseguiti e il codice corrente ha ancora lo stesso digest, proposal ID e revisione. Un report precedente viene marcato **stale** e non può sbloccare il repair.
+
+Dopo un esito `failed` verificabile su una patch ancora pendente, il pulsante **Proponi correzione AI** invia al modello autore estratti limitati e non attendibili degli errori. Il modello può sostituire solo gli stessi file della proposta originale; sono vietati path aggiunti o eliminati, modifiche a dipendenze e workflow, e patch identiche. Si possono tentare al massimo **due riparazioni** per feature. La nuova patch riceve un ID diverso, perde review ed evidenza dei test precedenti, richiede **adversarial review** nuova e una nuova esecuzione del runner.
+
+Il pulsante **Approva e applica** per patch riparate controlla nuovamente il report in tempo reale e ricalcola il digest. Devono risultare `passed` almeno `dotnet-build` per modifiche C# e/o `web-build` per modifiche React. In mancanza del runner o se i sorgenti cambiano, l'approvazione è bloccata. L'utente conferma comunque manualmente; ZIP e GitHub non sono mai aggiornati da soli.
+
+Un problema infrastrutturale senza un vero test fallito (es. worker interrompe il job) viene mostrato come incomplete, non sblocca il repair. Una mancata installazione npm dovuta a cache offline potrebbe comunque produrre un exit code fallito: prima di chiedere una correzione al codice controlla che il setup del runner sia corretto.
+
+**Non è un ciclo 24/7**: l'AI repair gira solo con la scheda attiva, e non ripete i test senza il consenso dell'utente. Digest e report legano i dati ma non rendono affidabile un runner remoto compromesso.

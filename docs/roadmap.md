@@ -29,6 +29,15 @@
 - Compose opzionale con `cloudflared` e documentazione Cloudflare Tunnel/Access
 - **Non ancora production-ready:** host VM dedicato, cache dipendenze egress-controlled, hardening/isolamento più forte e ciclo di autoriparazione
 
+## v0.2 — Snapshot integrity e repair (implementato in #3)
+
+- Digest SHA-256 canonico su sorgenti + test, verifica della receipt e del report effettivamente eseguito
+- Report superati ma non corrispondenti alla revisione corrente marcati come **stale**
+- Repair AI su log di test falliti, massimo due tentativi, gli stessi file, prompt con input non attendibili
+- Nuova review avversaria e nuovo test effettivo su .NET/React come requisito per approvare codice riparato
+- Test di regressione del lifecycle e della report validation
+- Ancora da fare: worker autonomo 24/7 e ripetizione dei test senza browser, isolamenti per-tenant e cache attendibili (issue #2)
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

@@ -14,7 +14,15 @@ SoftwareFactory SPA (browser)
   │     ├── ricerca: gateway HTTPS + fallback Wikipedia
   │     ├── GitHub REST Git Data + create repo (PAT o App broker)
   │     └── OAuth PKCE Google Drive / MS Graph OneDrive app-folder
-  └── App.tsx        Workspace / AI Factory / Architecture / Settings
+  ├── components/    Code Agent / Runner Panel (patch, review, test evidence, repair)
+  ├── infrastructure/runner.ts  API client + canonical snapshot hash and report verification
+  └── App.tsx        Workspace / AI Factory / Code Agent / Architecture / Settings
+
+SoftwareFactory Runner remoto (sperimentale, opzionale):
+  ├── runner-api (Bearer API key, allowlist, queue + SHA-256)
+  ├── runner-worker (rootless Docker socket, solo su VM dedicata)
+  ├── test containers (network none, CPU/RAM/timeout)
+  └── Cloudflare Tunnel (opzionale)
 
 Generato dal composer, salvabile come ZIP o Git commit:
   ├── .github/workflows/ci.yml
@@ -58,3 +66,7 @@ Un PAT con permessi minimi può creare una repository privata nel proprio accoun
 ## Evoluzione architetturale
 
 Per diventare una vera code factory autonoma servono: task graph con file ownership, editing del codice per feature, cicli build/test automatici, sandbox isolata, revisori indipendenti, budget AI e rate limiting, PR/merge policy, code execution agent e secret broker. Nessuna di queste capacità è simulata come già pronta nel MVP.
+
+## Verifica del codice generato (issue #3)
+
+Il Code Agent separa tre concetti: review AI (opinione statica), build/test reale (report del runner) e approvazione umana. La seconda fase è collegata a un digest dei sorgenti e alla proposta che la genera, per evitare che un report relativo a file obsoleti venga mostrato come prova per il codice corrente. Il repair guidato dai log è limitato a due tentativi e agli stessi file della feature originale. Una riparazione invalida la review precedente e tutte le evidenze di test; l'approvazione richiede una nuova review e un nuovo build pertinente realmente riuscito.
