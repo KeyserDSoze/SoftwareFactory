@@ -12,7 +12,15 @@
 - OAuth2 PKCE e backup Google Drive appDataFolder / OneDrive app folder
 - Test dominio/generazione e CI GitHub Actions
 
-## v0.2 — Code generation agent
+## v0.2 — Code generation agent (fase 1 implementata — issue #1)
+
+- Code Agent con patch JSON multi-file controllate, confronto diff, review indipendente, approvazione esplicita, cronologia e undo
+- Override approvati integrati in ZIP e GitHub; proposte ancora in review non pubblicate
+- Conflitti di configurazione rilevati prima di esportare/push; risoluzione guidata con drop dei file in conflitto
+- Documentazione `docs/code-agent.md` e ADR 0004
+- **Ancora da fare:** loop edit/build/test automatico in sandbox isolata, patch repair e test dinamici
+
+## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file
 - Agent loop Plan → Edit → Build → Test → Adversarial review → Repair
