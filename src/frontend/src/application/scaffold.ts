@@ -127,7 +127,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "- `docs/architecture.md`: design e vincoli", "- `adr/`: scelte", "- `infra/`: Terraform/on-prem",
       "- `.softwarefactory/manifest.json`: configurazione esportabile senza credenziali", ""),
     ".gitignore": lines("**/node_modules/", "**/bin/", "**/obj/", "**/dist/", ".env", "**/.env", "!**/.env.example", ".terraform/", "*.tfstate", "*.tfstate.*", "*.tfvars", ".DS_Store"),
-    ".softwarefactory/manifest.json": JSON.stringify({ schemaVersion: 1, generator: "SoftwareFactory", createdAt: new Date().toISOString(),
+    ".softwarefactory/manifest.json": JSON.stringify({ schemaVersion: 1, generator: "SoftwareFactory", createdAt: project.createdAt,
       config: c, stages: project.stages.map(s => ({ id: s.id, status: s.status })) }, null, 2) + "\n",
     "docs/features.md": lines("# Piano feature", "", done("features"), "", "## Piano implementativo", "", done("implementation")),
     "docs/research.md": lines("# Ricerca competitor, tecnica e normativa", "",

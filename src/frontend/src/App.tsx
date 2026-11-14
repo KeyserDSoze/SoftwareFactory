@@ -5,6 +5,9 @@ import {
   Play, Plus, RefreshCw, Search, Settings2, ShieldAlert, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
 import { zipSync, strToU8 } from "fflate";
+import CodeAgentPanel from "./components/CodeAgentPanel";
+import "./components/code-agent.css";
+import { workspaceFiles } from "./domain/development";
 import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE_OPTIONS, STAGES, updateConfig } from "./domain/defaults";
 import type { AiProfile, FactoryProject, FactorySettings, FrontendKind, ProjectConfig, StageId } from "./domain/types";
 import { commitStage, invalidateStages, runStage, stageReady } from "./application/pipeline";
@@ -13,10 +16,11 @@ import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin } from "./
 import { ensureRepository, pushGeneratedFiles, resolveGithubToken } from "./infrastructure/github";
 import { loadProject, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
-type Tab = "workspace" | "pipeline" | "stack" | "connections";
+type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
 const NAV: { id: Tab; title: string; detail: string; icon: typeof Layers3 }[] = [
   { id: "workspace", title: "Workspace", detail: "Panoramica e brief", icon: Layers3 },
   { id: "pipeline", title: "AI Factory", detail: "Generazione e review", icon: BrainCircuit },
+  { id: "code", title: "Code Agent", detail: "Implementazione feature", icon: Terminal },
   { id: "stack", title: "Architecture", detail: "Stack e artefatti", icon: Code2 },
   { id: "connections", title: "Settings", detail: "AI, Git e cloud", icon: Settings2 },
 ];
@@ -76,7 +80,7 @@ export default function App() {
   const current = project.stages.find(s => s.id === selectedStage)!;
   const next = project.stages.find(s => s.status !== "complete");
   const files = useMemo(() => {
-    try { return generateFiles(project); } catch { return {} as Record<string, string>; }
+    try { return workspaceFiles(project); } catch { return {} as Record<string, string>; }
   }, [project]);
   const paths = Object.keys(files).sort();
   function changeProject(nextProject: FactoryProject) {
@@ -285,6 +289,9 @@ export default function App() {
           <section className="panel activity-panel"><div className="panel-title"><div><span className="eyebrow">OPERATION LOG</span><h3>Attività della sessione</h3></div><Activity size={20} /></div>
             {runLog.length ? runLog.map((item, i) => <div key={i} className="log-line"><span className="status-dot" /> {item}</div>) : <p className="dimmed">Le attività appariranno qui dopo il primo task. I checkpoint sono salvati nel progetto.</p>}</section>
         </>}
+        {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy}
+          onBusy={(active, label) => { setBusy(active); setOperation(active ? label || "Code Agent" : ""); }}
+          onProjectChange={changeProject} onNotice={setNotice} onError={setError} />}
         {tab === "stack" && <>
           <SectionHead eyebrow="FACTORY / BLUEPRINT" title="Architettura componibile" text="Puoi modificare frontend, hosting e servizi in qualsiasi momento. I piani AI dipendenti dalla configurazione vengono invalidati." />
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">TARGET APPLICATIONS</span><h3>Frontend multipli</h3></div><Code2 size={20} /></div>

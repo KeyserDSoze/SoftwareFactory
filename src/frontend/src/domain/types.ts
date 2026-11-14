@@ -1,3 +1,5 @@
+import type { DevelopmentWorkspace } from "./development";
+
 export type StageId = "features" | "competitors" | "technical" | "architecture" | "adversarial" | "implementation";
 export type StageStatus = "pending" | "running" | "complete" | "failed";
 export type FrontendKind = "react" | "react-native" | "android" | "ios" | "unity";
@@ -67,6 +69,7 @@ export interface FactoryProject {
   stages: Stage[];
   createdAt: string;
   updatedAt: string;
+  development?: DevelopmentWorkspace;
 }
 export interface Activity {
   id: string;
