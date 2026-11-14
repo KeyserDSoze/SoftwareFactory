@@ -61,6 +61,12 @@ jobs:
         run: |
           docker pull mcr.microsoft.com/playwright:v1.64.1-noble
           timeout 300s node src/runner/scripts/playwright-smoke.mjs src/frontend/generated-fixture
+      - name: Run real React-to-.NET browser integration on private Docker network
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+        run: |
+          docker pull mcr.microsoft.com/dotnet/aspnet:11.0
+          timeout 240s node src/runner/scripts/fullstack-smoke.mjs src/frontend/generated-fixture
       - name: Capture Playwright failures
         if: failure()
         uses: actions/upload-artifact@v4
