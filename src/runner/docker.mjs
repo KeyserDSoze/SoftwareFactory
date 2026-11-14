@@ -93,7 +93,7 @@ export function planStep(step, files, workdir, env = process.env) {
     if (packageVersion !== PLAYWRIGHT_VERSION)
       return { skip: "Playwright package must be pinned to " + PLAYWRIGHT_VERSION + " to match the browser image" };
     const image = imageFor("playwright", files, env);
-    const tagMatch = image.match(/playwright:v(\\d+\\.\\d+\\.\\d+)-/);
+    const tagMatch = image.match(/playwright:v([0-9]+[.][0-9]+[.][0-9]+)-/);
     if (tagMatch && tagMatch[1] !== PLAYWRIGHT_VERSION)
       return { skip: "Playwright container image and package version differ" };
     command = ["/bin/sh", "-c", "cd src/frontend/web && ./node_modules/.bin/playwright test --reporter=line"];
