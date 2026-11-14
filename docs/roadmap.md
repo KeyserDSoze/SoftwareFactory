@@ -38,6 +38,15 @@
 - Test di regressione del lifecycle e della report validation
 - Ancora da fare: worker autonomo 24/7 e ripetizione dei test senza browser, isolamenti per-tenant e cache attendibili (issue #2)
 
+## v0.2 — Runner real Docker CI e preparazione dipendenze (issue #4)
+
+- Docker smoke in CI con runner Node vero: build/test positivo, errore di test intenzionale, dipendenze offline mancanti
+- Separazione fra installazione npm e test senza rete (e conservazione del risultato di preparazione)
+- Opt-in esplicito dell'amministratore per npm via rete soltanto durante la preparazione
+- Restrizione dei package specifier e lifecycle scripts disabilitati, cache/preparazione workspace effimero
+- Distinzione `incomplete` per errori di infrastruttura/setup, anziché incoraggiare false riparazioni AI
+- **Ancora aperto:** provisioning cache immutabili con dependency lock, Playwright completo con browser reali, egress whitelist, daemon rootless production test (#2)
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

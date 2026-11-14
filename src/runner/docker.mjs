@@ -116,7 +116,8 @@ export function planWebDependencies(files, workdir, env = process.env) {
 const INFRA_FAILURE = /(?:Cannot connect to the Docker daemon|error during connect|Unable to find image|pull access denied|manifest unknown|failed to (?:create|start) task|OCI runtime create failed|no space left on device|\bNU1301\b|\bENOTCACHED\b|\bEAI_AGAIN\b|npm error code ENOTFOUND|npm ERR! code ENOTFOUND|network is unreachable|TLS handshake timeout)/i;
 export function isInfrastructureFailure(result) {
   return result.state === "failed" &&
-    (result.exitCode === null || INFRA_FAILURE.test((result.stderr || "") + "\n" + (result.stdout || "")));
+    (result.exitCode === null || result.exitCode === 125 || result.exitCode === 126 ||
+      INFRA_FAILURE.test((result.stderr || "") + "\n" + (result.stdout || "")));
 }
 export function runDockerStep(plan, id, step, { spawnProcess = spawn, timeoutMs = plan.timeoutMs } = {}) {
   const name = "sf-" + id.slice(0, 8) + "-" + step;

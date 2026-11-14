@@ -181,4 +181,7 @@ test("dependency errors are incomplete, not code defects to repair with AI", asy
   assert.equal(isInfrastructureFailure({
     state: "failed", exitCode: 1, stderr: "src/App.tsx(4,2): error TS1005", stdout: "",
   }), false);
+  assert.equal(isInfrastructureFailure({
+    state: "failed", exitCode: 125, stderr: "invalid Docker --mount argument", stdout: "",
+  }), true);
 });

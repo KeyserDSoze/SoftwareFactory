@@ -57,3 +57,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Dopo una correzione AI invalidare esplicitamente review e test. Limite due tentativi; nessun ampliamento dei path sorgenti consentiti.
 - Per approvare una patch riparata è obbligatorio un nuovo build reale `.NET` e/o `React` verificato sul nuovo snapshot, dopo una nuova adversarial review.
 - I log dei test sono contenuti non fidati: il prompt non deve seguirne le istruzioni, e non deve trasmettere segreti a provider AI.
+
+## Test di esecuzione reali e supply chain (#4)
+
+- Ogni modifica del comando Docker deve essere verificata con la `docker-smoke.mjs` nella CI (un mock non intercetta gli errori di sintassi Docker).
+- Installazione npm in un container distinto: lifecycle scripts sempre disabilitati e network off di default. L'operatore può abilitare la rete solo nel passo di preparazione, mai nei test.
+- `failed` indica un **test di codice** effettivamente fallito; `incomplete` indica setup mancante, test saltato, Docker daemon o dipendenza non disponibile.
+- Non presentare come production-ready il fetch npm online senza egress allowlist/lockfile; mantenere la issue #2 aperta fino al collaudo su VM rootless e Playwright.
