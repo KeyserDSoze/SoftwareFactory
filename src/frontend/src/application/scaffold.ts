@@ -33,6 +33,9 @@ function dockerCompose(c: ProjectConfig): string {
   services.push(
     "  web:", "    build:", "      context: ..", "      dockerfile: docker/Web.Dockerfile",
     "      args:", "        VITE_API_URL: http://localhost:8080",
+    c.database === "postgresql" ? '        VITE_OIDC_AUTHORITY: "${OIDC_PUBLIC_AUTHORITY:-}"' : "",
+    c.database === "postgresql" ? '        VITE_OIDC_CLIENT_ID: "${OIDC_PUBLIC_CLIENT_ID:-}"' : "",
+    c.database === "postgresql" ? '        VITE_OIDC_AUDIENCE: "${AUTH_AUDIENCE:-}"' : "",
     "    ports:", '      - "3000:80"',
   );
   if (c.database === "postgresql") {
@@ -246,14 +249,14 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "- Frontend: " + c.frontends.join(", "), "- Database: " + c.database,
       "- Deploy target: " + c.deployment, "", "## Rischi e alternative", "", done("adversarial")),
     "docker/compose.yml": dockerCompose(c),
-    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
+    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "OIDC_PUBLIC_AUTHORITY=", "OIDC_PUBLIC_CLIENT_ID=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
     "docker/Api.Dockerfile": lines("FROM mcr.microsoft.com/dotnet/sdk:" + c.dotnetVersion + " AS build",
       "WORKDIR /app", "COPY src/backend/ ./src/backend/", "RUN dotnet publish src/backend/applications/Api/Api.csproj -c Release -o /out",
       "FROM mcr.microsoft.com/dotnet/aspnet:" + c.dotnetVersion, "WORKDIR /app", "COPY --from=build /out ./",
       "EXPOSE 8080", "ENV ASPNETCORE_URLS=http://+:8080", "ENTRYPOINT [\"dotnet\", \"Api.dll\"]"),
     "docker/Web.Dockerfile": lines("FROM node:22-alpine AS build", "WORKDIR /app",
       "COPY src/frontend/web/package.json ./", "RUN npm install --no-audit --no-fund",
-      "COPY src/frontend/web/ ./", "ARG VITE_API_URL=http://localhost:8080", "ENV VITE_API_URL=$VITE_API_URL", "RUN npm run build",
+      "COPY src/frontend/web/ ./", "ARG VITE_API_URL=http://localhost:8080", "ENV VITE_API_URL=$VITE_API_URL", "ARG VITE_OIDC_AUTHORITY=", "ARG VITE_OIDC_CLIENT_ID=", "ARG VITE_OIDC_AUDIENCE=", "ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY", "ENV VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID", "ENV VITE_OIDC_AUDIENCE=$VITE_OIDC_AUDIENCE", "RUN npm run build",
       "FROM nginx:1.27-alpine", "COPY --from=build /app/dist /usr/share/nginx/html", "EXPOSE 80"),
     "infra/README.md": lines("# Infrastructure as Code", "", "Target iniziale: **" + c.deployment + "**.",
       "", "Il file `main.tf` è un punto di partenza, NON un deploy completo o hardenizzato.",
