@@ -174,6 +174,8 @@ try {
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
   if (outcome.state !== "passed" || !/6 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
+    const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
+    console.error("OIDC_BROWSER_DIAGNOSTICS", snippet.slice(-4));
     throw Error("Playwright integration did not pass all 6 assertions, including PostgreSQL persistence");
   }
   for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
