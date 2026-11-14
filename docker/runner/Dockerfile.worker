@@ -1,0 +1,7 @@
+FROM node:22-alpine
+RUN apk add --no-cache docker-cli
+WORKDIR /app
+COPY src/runner/ ./
+USER node
+ENV RUNNER_DATA_DIR=/data
+CMD ["node", "worker.mjs"]

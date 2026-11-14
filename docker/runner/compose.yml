@@ -1,0 +1,50 @@
+# Run only on a dedicated disposable VM with a rootless Docker daemon.
+# Both services run unprivileged. ONLY the worker gets the rootless Docker socket.
+# Define RUNNER_HOST_WORK_DIR and RUNNER_DOCKER_SOCKET in a private .env file.
+services:
+  runner-api:
+    build:
+      context: ../..
+      dockerfile: docker/runner/Dockerfile.api
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      RUNNER_API_KEY: "${RUNNER_API_KEY:?Set a strong random RUNNER_API_KEY}"
+      RUNNER_ALLOWED_ORIGINS: "${RUNNER_ALLOWED_ORIGINS:?Set explicit https origins}"
+      RUNNER_DATA_DIR: /data
+      RUNNER_PORT: 8787
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - "${RUNNER_DATA_DIR:?Set persistent data directory}:/data:rw"
+
+  runner-worker:
+    build:
+      context: ../..
+      dockerfile: docker/runner/Dockerfile.worker
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      RUNNER_DATA_DIR: /data
+      RUNNER_HOST_WORK_DIR: "${RUNNER_HOST_WORK_DIR:?Set absolute host workspace directory}"
+      DOCKER_HOST: unix:///run/docker.sock
+    volumes:
+      - "${RUNNER_DATA_DIR:?Set persistent data directory}:/data:rw"
+      - "${RUNNER_HOST_WORK_DIR:?Set workspace directory}:${RUNNER_HOST_WORK_DIR:?Set workspace directory}:rw"
+      - "${RUNNER_DOCKER_SOCKET:?Set rootless Docker socket}:/run/docker.sock"
+    depends_on: [runner-api]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set tunnel token}
+    depends_on: [runner-api]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
