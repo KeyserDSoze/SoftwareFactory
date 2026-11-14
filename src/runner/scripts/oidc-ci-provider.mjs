@@ -70,7 +70,7 @@ function authorize(res, url) {
     && /^[A-Za-z0-9_-]{43,128}$/.test(challenge) && state.length > 16 && (!nonce || nonce.length > 16)
     && (q.get("scope") || "").split(" ").includes("openid");
   if (!valid) {
-    console.error("OIDC_AUTHORIZE_REJECT", JSON.stringify({
+    console.log("OIDC_AUTHORIZE_REJECT", JSON.stringify({
       responseType: q.get("response_type"),
       clientMatch: q.get("client_id") === clientId,
       redirectMatch: q.get("redirect_uri") === redirectUri,
