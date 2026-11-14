@@ -64,4 +64,12 @@ Il provider `postgresql` produce un adapter reale Npgsql, non soltanto un manife
 
 L'interfaccia React include un modulo **Elementi salvati** con aggiunta, lista, modifica ed eliminazione persistite. `E2E_MODE=integration E2E_DATABASE=postgresql npm run test:e2e` verifica la UI e il database realmente esistente, quando API/PostgreSQL sono raggiungibili sulle URL configurate. La CI generata prepara e ripulisce un PostgreSQL temporaneo su `127.0.0.1:54329`, con password generata al volo.
 
-L'esempio API non autentica le richieste agli endpoint `/api/items`: non usarlo per dati privati né esporlo su un dominio pubblico. Per altre configurazioni database (SQL Server/MySQL/SQLite) questa integrazione non viene generata: occorre implementare l'adapter specifico.
+L'API richiede JWT reader/editor per /api/items e limita l'accesso per utente. Non pubblicare la demo: manca un Identity Provider con login, key rotation e altre misure production. Per altre configurazioni database (SQL Server/MySQL/SQLite) questa integrazione non viene generata: occorre implementare l'adapter specifico.
+
+## Demo token JWT su PostgreSQL (issue #8)
+
+Lo scaffold PostgreSQL richiede `DB_PASSWORD`, `AUTH_ISSUER`, `AUTH_AUDIENCE` e `AUTH_SIGNING_KEY` in un `docker/.env` privato ignorato da Git. Generare una chiave casuale con `openssl rand -hex 48` e conservarla soltanto nell'ambiente o in un secret manager. Se i parametri mancano, l'API fallisce l'avvio; i valori di esempio non sono segreti preimpostati.
+
+Per test locali con accesso alla chiave, il file esportato `tests/security/issue-tokens.mjs` può emettere token di prova firmati da dieci minuti: con `Auth__Issuer`, `Auth__Audience`, `Auth__SigningKey` impostati nella shell, usare `CI=true node tests/security/issue-tokens.mjs editor owner-a`. La variabile CI è **solo un guardiano contro invocazioni accidentali**, non un controllo di sicurezza né un provider di login. Evitare di mostrare token e chiave nei log.
+
+Nel componente React `Elementi salvati` si incolla il JWT nella casella `Token di accesso (sessione)`: il token vive solo in sessionStorage, non in localStorage né nello ZIP. Con ruolo reader si può leggere, con editor si può scrivere. La CI crea automaticamente la chiave e token per due utenti e verifica 401/403 e isolamento. Non utilizzare questo accesso manuale per utenti di produzione; sessionStorage non protegge da XSS/estensioni.

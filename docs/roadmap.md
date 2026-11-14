@@ -70,7 +70,7 @@
 - Endpoint CRUD completo GET/POST/PUT/DELETE `/api/items`, React `WorkItems` e test browser CRUD reale in modalità integration
 - CI Factory: quattro container Docker (PostgreSQL, API .NET, Vite e Chromium) con rete `--internal` e password effimera
 - CI degli scaffold: Postgres 17 effimero, readiness, processo API con connessione esterna, browser E2E e cleanup
-- Restano aperti: autenticazione/autorizzazione CRUD, migrazioni avanzate/rollback, provider SQL Server/MySQL/SQLite, runner remoto su VM rootless e servizi di produzione
+- Restano aperti: provider identità/login OIDC e rotazione chiavi, migrazioni rollback, provider SQL Server/MySQL/SQLite, runner remoto su VM rootless e servizi di produzione
 
 ## v0.2 — Code generation agent (milestone successive)
 
@@ -100,3 +100,12 @@
 ## Acceptance criteria prima della produzione
 
 Nessun task AI può affermare che il prodotto è compilato/testato senza un risultato di esecuzione. Nessuna credenziale in Git o nei file generati. Ogni configurazione deve propagarsi ai template e agli adapter oppure essere segnalata chiaramente come non implementata. Provisioning cloud e migrazioni richiedono review/approvazione esplicita.
+
+## v0.3 — API protette e audit (issue #8)
+
+- JWT Bearer con validazione issuer/audience/signature/expiration e secret esterno senza default
+- Policy reader/editor e identità sub obbligatoria, isolamento owner_id nel repository, 404 su ID di altri utenti
+- Migrazione 0002 per owner e audit transazionale; record legacy non assegnati a utenti arbitrari
+- Limite request body 8 KiB, rate limiter, errori generic JSON e readiness DB protetta
+- Test Chromium reali per 401/403/ownership, JWT CI di dieci minuti e audit PostgreSQL
+- **Rimane da fare:** Identity Provider OIDC/JWKS, login PKCE, refresh/revoca, rotazione chiavi, threat assessment e hardening production

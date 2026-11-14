@@ -85,5 +85,14 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - La configurazione della password deve essere esterna ai sorgenti (variabile `Database__ConnectionString`, `DB_PASSWORD` in env) e generata casualmente per ogni test CI.
 - La CI Factory deve esercitare **un vero database Postgres** attraverso React→HTTP API→Npgsql→PostgreSQL→API→React, distinguendo da mock e dal semplice test API /health.
 - La CI degli scaffold con PostgreSQL deve preparare un database temporaneo, eseguirne la readiness, lanciare E2E CRUD e ripulire il container e l'API. Zero database condivisi.
-- Non dichiarare gli altri provider (MySQL, SQL Server, SQLite) implementati. L'endpoint CRUD demo PostgreSQL senza auth **non è sicuro per Internet**; bloccare il rilascio production finché mancano identity, authz, validation robusta, auditing e rate limiting.
+- Non dichiarare gli altri provider (MySQL, SQL Server, SQLite) implementati. Il CRUD demo PostgreSQL usa ora JWT/RBAC, owner filter e audit, ma non è pronto per Internet finché mancano Identity Provider, login, rotazione chiavi e sicurezza completa dell'app.
 - L'orchestrazione con Docker rootful nella CI è permessa solo in un host GitHub effimero; la API del runner remoto non deve ricevere permessi Docker o network arbitrari.
+
+## Accesso autenticato PostgreSQL (issue #8)
+
+- Fallire l'avvio senza Auth:Issuer, Auth:Audience e una Auth:SigningKey casuale lunga almeno 48 byte. Non includere segreti di test nel generatore o nelle app esportate.
+- Tutte le route dati richiedono JWT HS256 valido, scadenza, firma, issuer/audience, sub e role; reader/editor può leggere, solo editor può creare/modificare/eliminare. Niente bypass anonimi.
+- Passare owner da JWT e filtrare WHERE owner_id anche su SELECT/UPDATE/DELETE: ID di altri utenti devono produrre 404. Audit nella stessa transazione della scrittura.
+- CI con tre token effimeri: editor A, reader A, editor B; verificare 401/403, isolamento e conteggi audit sul DB vero.
+- CORS prima di auth; body <= 8 KiB, rate limiter per identity, risposta errore generica. /health pubblico è liveness; /ready richiede auth e connessione al DB.
+- sessionStorage del token nella SPA è dimostrativo e vulnerabile a XSS. Non affermare che esista login OIDC, refresh/revoca o un deploy sicuro in produzione.

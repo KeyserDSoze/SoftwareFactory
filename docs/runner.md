@@ -192,3 +192,9 @@ La prova `fullstack-smoke.mjs` non usa più soltanto la API .NET: avvia anche un
 Il nuovo codice backend generato usa `Npgsql 10.0.3` e deve quindi eseguire un restore NuGet durante la fase preparatoria attendibile. Il runner remoto, che per default mantiene `--network none` e non ha una cache NuGet completa, può restituire `incomplete`; non trasformare la mancanza di package in una correzione AI del codice.
 
 **Limite:** il CRUD è un esempio didattico con validazione minima, senza authentication/authorization, con schema migrations forward-only. La verifica green non garantisce sicurezza, backup, migrazioni rollback o scalabilità di PostgreSQL in un cluster. Il runner remoto Cloudflare non riceve ancora accesso automatico a Docker network per lanciare database: il full-stack con DB rimane esclusivamente un'attività CI su host effimero fino a isolamento più forte e approval dedicato.
+
+## Autorizzazione delle API generate (#8)
+
+Il runner remoto ha una sua API key, distinta dai JWT dell'app generata. Nella CI Docker della Factory, API .NET e PostgreSQL ricevono variabili di configurazione e chiave temporanea solo via environment del processo/container; mai nello snapshot sorgente o nel bundle frontend. Playwright usa tre token effimeri reader/editor per identità distinte e verifica 401, 403, owner isolation e audit transazionale Postgres. Il runner remoto non riceve la possibilità di firmare token o controllare segreti/identity provider tramite richieste browser.
+
+Per un deploy pubblico occorrono login OIDC/JWKS, gestione segreti e rotazione chiavi, TLS, controllo XSS e test di sicurezza aggiuntivi. Il codice auth HMAC attuale serve a dimostrare enforcement di policy e proprietà, non a certificare un identity system finale.

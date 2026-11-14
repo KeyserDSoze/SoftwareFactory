@@ -24,3 +24,5 @@ La CI poteva verificare la comunicazione React↔API ASP.NET Core ma l'infrastru
 - Le API /api/items sono volutamente senza auth, rate limit e tenant isolation: servono identity/authz e limitazione delle autorizzazioni prima del rilascio.
 - Solo PostgreSQL dispone di un adapter reale. Le configurazioni MySQL, SQL Server e SQLite continuano a essere placeholder.
 - Il database Postgres nella CI non dimostra backup, failover, resilienza, compliance o isolamento multi-tenant di produzione.
+
+> Nota successiva: le API PostgreSQL sono ora protette da JWT/RBAC e owner_id; vedere ADR 0011. Le annotazioni iniziali sull'assenza di auth descrivono lo stato al momento della ADR 0010.
