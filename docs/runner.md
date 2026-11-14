@@ -198,3 +198,9 @@ Il nuovo codice backend generato usa `Npgsql 10.0.3` e deve quindi eseguire un r
 Il runner remoto ha una sua API key, distinta dai JWT dell'app generata. Nella CI Docker della Factory, API .NET e PostgreSQL ricevono variabili di configurazione e chiave temporanea solo via environment del processo/container; mai nello snapshot sorgente o nel bundle frontend. Playwright usa tre token effimeri reader/editor per identità distinte e verifica 401, 403, owner isolation e audit transazionale Postgres. Il runner remoto non riceve la possibilità di firmare token o controllare segreti/identity provider tramite richieste browser.
 
 Per un deploy pubblico occorrono login OIDC/JWKS, gestione segreti e rotazione chiavi, TLS, controllo XSS e test di sicurezza aggiuntivi. Il codice auth HMAC attuale serve a dimostrare enforcement di policy e proprietà, non a certificare un identity system finale.
+
+## Verifiche OIDC su rete isolata (#9)
+
+La CI Factory avvia oltre ad API, PostgreSQL e Chromium anche `oidc-ci-provider.mjs`, un **provider fittizio non deployabile** con discovery, JWKS e RSA 2048 effimeri. Il browser Chromium è sul loopback `127.0.0.1:4173` del proprio container per consentire Web Crypto/PKCE in un secure context, mentre i servizi di backend comunicano sulla rete Docker `--internal`. Il secondo smoke `oidc-protocol-smoke.mjs`, montato read-only nel container web solo in CI, esercita code grant S256, token refresh monouso, revoca per replay, logout e cambio delle JWK. Nessuna chiave privata raggiunge frontend/runner remoto.
+
+Questo collaudo di protocollo non equivale ad un audit OIDC di produzione, a un provider vero o a una rotazione JWKS completa in ambiente server; i casi reali vanno validati con un IdP scelto dall'operatore e una VM dedicata.

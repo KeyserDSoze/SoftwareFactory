@@ -117,3 +117,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Nginx SPA fallback /auth/callback e configurazioni Compose senza segreti hardcoded
 - Provider OIDC RSA effimero **solo per CI** su Docker bridge --internal, con discovery/JWKS, code grant PKCE S256, token e endpoint per test
 - Restano da completare/collaudare: login Chromium completo con redirection, logout/refresh con provider reale, JWKS key rollover in produzione, CSP e BFF opzionale
+
+### Copertura raggiunta per #9
+
+- Sei prove Chromium con API .NET e PostgreSQL reali, fra cui login/logout code+PKCE tramite provider RSA/JWKS di prova
+- Test protocollare separato su rete privata: RSA/JWK pubblica, codice monouso, PKCE invalido, refresh token rotante con replay negato, logout e rotazione `kid`
+- Frontend browser su loopback per usare Web Crypto in un contesto attendibile, senza disabilitare sicurezza Chromium
+- Da verificare ancora prima della produzione: issuer terzi, TLS di rete, refresh/logout e revoca federata effettivi e key rotation ASP.NET Core contro provider reale

@@ -104,3 +104,6 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Nginx esportato deve rispondere alla callback /auth/callback con fallback index.html. Docker Compose inietta le impostazioni OIDC da .env privato, senza imporre una signing key HMAC in modalita OIDC.
 - Provider `src/runner/scripts/oidc-ci-provider.mjs` è fittizio, con chiavi RSA generate per-run e rete Docker --internal; non copiarlo in immagini production, non chiamarlo provider certificato.
 - Il login browser deve essere testato con Chromium vero e prova del code exchange PKCE, insieme a controlli 401/403/owner/audit. Se fallisce, non dichiarare la milestone conclusa.
+
+- In #9, Playwright deve usare localhost per il web server dentro il container browser; NON introdurre `--unsafely-treat-insecure-origin-as-secure`, `--disable-web-security` o HTTP esterno come secure context artificiale.
+- Il provider OIDC temporaneo e il test protocollare appartengono soltanto alla CI Docker con rete `--internal`: testare PKCE S256 errato, codici e refresh monouso, firma JWKS e rollover `kid`, senza loggare token o chiavi.

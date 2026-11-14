@@ -19,4 +19,10 @@ Il JWT HS256 dello scaffold è una baseline didattica. Usare la stessa chiave si
 
 ## Rischi residui
 
-La fixture OIDC automatizza il login soltanto per test e non è un Identity Provider utilizzabile da utenti reali. Restano aperti test con servizio OIDC esterno, gestione delle sessioni e del logout federato, revoca/refresh e key rollover JWKS, hardening XSS/CSP e scelta tra SPA con token in sessionStorage e BFF cookie HttpOnly. Nessuna credenziale OIDC o chiave di firma va nel bundle. HTTP OIDC con flag Chromium che tratta un origin come sicuro è permesso soltanto in CI isolata, mai per traffico utente.
+La fixture OIDC automatizza il login soltanto per test e non è un Identity Provider utilizzabile da utenti reali. Restano aperti test con servizio OIDC esterno, gestione delle sessioni e del logout federato, revoca/refresh e key rollover JWKS, hardening XSS/CSP e scelta tra SPA con token in sessionStorage e BFF cookie HttpOnly. Nessuna credenziale OIDC o chiave di firma va nel bundle. Il frontend Vite è servito su **127.0.0.1 del container Chromium**, secure context secondo la Web Crypto API, mentre il servizio API, il provider OIDC fittizio e PostgreSQL condividono una Docker bridge **--internal**. Non si abilitano flag Chromium per rendere sicuri origini HTTP non-locali.
+
+## Verifiche addizionali del protocollo
+
+La Factory CI impiega due livelli indipendenti: (a) sei test Chromium che esercitano il redirect OIDC completo con code+PKCE e logout, RS256 sul backend e proprietà dei record PostgreSQL; (b) `oidc-protocol-smoke.mjs` eseguito nella rete Docker privata che verifica la firma JWK, l'assenza di materiale privato in JWKS, il rifiuto dei verifier PKCE errati, la non riutilizzabilità del codice, la rotazione monouso del refresh token, il logout e il cambio `kid` dopo il rollover della chiave temporanea.
+
+Il rollover prova la pubblicazione della nuova chiave JWKS, **non** certifica il refresh automatico delle chiavi di un servizio ASP.NET Core/IdP reale sotto carico. I test di produzione con IdP commerciale/open-source, sicurezza sessione e revoca distribuita restano da completare prima del rilascio.
