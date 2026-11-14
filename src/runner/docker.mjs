@@ -53,7 +53,7 @@ function dockerArgs(workdir, image, command, { network = "none" } = {}) {
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
     "--user=0:0", "--shm-size=256m",
     "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
-    "--mount", "type=bind,src=" + workdir + ",dst=/work,rw",
+    "--mount", "type=bind,src=" + workdir + ",dst=/work",
     "--workdir=/work", "--env=HOME=/tmp", "--env=DOTNET_CLI_HOME=/tmp",
     "--env=NUGET_PACKAGES=/work/.nuget/packages", "--env=NPM_CONFIG_CACHE=/work/.npm",
     "--env=CI=true", image, ...command,
