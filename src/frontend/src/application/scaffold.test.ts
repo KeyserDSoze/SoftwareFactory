@@ -58,6 +58,28 @@ describe("application scaffold", () => {
     expect(files[".github/workflows/ci.yml"]).toContain("npm run test:e2e");
     expect(files[".gitignore"]).toContain("test-results/");
   });
+  it("generates separate mocked and live API browser integration modes", () => {
+    const files = generateFiles(example());
+    const config = files["src/frontend/web/playwright.config.ts"];
+    const smoke = files["src/frontend/web/e2e/smoke.spec.ts"];
+    const backend = files["src/backend/applications/Api/Program.cs"];
+    const workflow = files[".github/workflows/ci.yml"];
+    expect(config).toContain('process.env.E2E_MODE === "integration"');
+    expect(config).toContain("E2E_WEB_ORIGIN");
+    expect(config).toContain("E2E_WEB_SERVER_EXTERNAL");
+    expect(smoke).toContain("const integration =");
+    expect(smoke).toContain('if (!integration) await page.route(api + "/health"');
+    expect(smoke).toContain('page.waitForResponse(response => response.url() === api + "/health")');
+    expect(smoke).toContain('request.get(api + "/api/info")');
+    expect(smoke).toContain('test.skip(!integration');
+    expect(smoke).toContain('status: "scaffold"');
+    expect(backend).toContain('"http://web:4173"');
+    expect(backend).toContain('"http://127.0.0.1:4173"');
+    expect(workflow).toContain("Verify browser and real ASP.NET Core API");
+    expect(workflow).toContain("E2E_MODE=integration");
+    expect(workflow).toContain("E2E_API_ORIGIN=http://127.0.0.1:8080");
+    expect(workflow).toContain("curl -fsS http://127.0.0.1:8080/health");
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";
