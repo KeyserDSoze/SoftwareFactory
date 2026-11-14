@@ -168,7 +168,7 @@ describe("application scaffold", () => {
     expect(files["docker/compose.yml"]).toContain("Auth__Authority");
     expect(files["docker/compose.yml"]).toContain("OIDC_PUBLIC_CLIENT_ID");
     expect(files["docker/Web.Dockerfile"]).toContain("nginx.conf");
-    expect(files["docker/Web.Dockerfile"]).toContain("default.conf\\nEXPOSE 80");
+    expect(files["docker/Web.Dockerfile"]).toContain("default.conf" + String.fromCharCode(10) + "EXPOSE 80");
     expect(files["src/frontend/web/nginx.conf"]).toContain("try_files $uri $uri/ /index.html");
     expect(files["README.md"]).toContain("Auth__Mode=oidc");
     expect(files["src/frontend/web/nginx.conf"]).toContain("X-Content-Type-Options");
