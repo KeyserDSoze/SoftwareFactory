@@ -117,6 +117,7 @@ try {
     "--env=VITE_OIDC_AUTHORITY=http://identity:8999",
     "--env=VITE_OIDC_CLIENT_ID=factory-web",
     "--env=VITE_OIDC_AUDIENCE=factory-client",
+    "--mount", "type=bind,src=" + path.resolve("src/runner/scripts/oidc-protocol-smoke.mjs") + ",dst=/ci-protocol.mjs,readonly",
     "--env=NPM_CONFIG_CACHE=/tmp/.npm",
     "node:22-bookworm-slim",
     "npm", "run", "dev", "--prefix", "src/frontend/web", "--",
@@ -190,6 +191,12 @@ try {
   const idpStats = JSON.parse(await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
     webName, "node", "-e", secretArg]));
   assert.ok(idpStats.redeemed >= 1, "OIDC PKCE authorization code never redeemed");
+  const protocolPath = path.resolve("src/runner/scripts/oidc-protocol-smoke.mjs");
+  await access(protocolPath);
+  const protocol = await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
+    webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
+  assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
+  console.log(protocol);
   console.log("FULLSTACK_OIDC_POSTGRES_PASS: 6 Chromium tests, RS256 JWKS, PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
