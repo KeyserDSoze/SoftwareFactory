@@ -12,7 +12,7 @@
 - ZIP sorgenti e pubblicazione GitHub diretta (PAT fine-grained, GitHub App tramite token broker), branch `main` di default oppure branch separato. Il commit usa fast-forward, mai force push.
 - Google Drive appDataFolder / Microsoft OneDrive app folder: OAuth 2.0 PKCE con client ID configurabile, backup/ripristino JSON.
 - **Repair guidato dagli errori**: report associati al digest SHA-256 del codice; patch AI di correzione con massimo due tentativi, vincoli sui file e nuova review/test prima dell'approvazione.
-- **PostgreSQL reale nello scaffold DDD**: repository Npgsql parametrizzato, migrazione SQL versionata con advisory lock, endpoint demo CRUD e componente React. E2E Chromium verifica UI → API → PostgreSQL → API; test CI su database effimero.
+- **PostgreSQL reale nello scaffold DDD**: repository Npgsql parametrizzato, migrazione SQL versionata con advisory lock, endpoint demo CRUD completo (creazione, elenco, modifica, eliminazione) e componente React. E2E Chromium verifica UI → API → PostgreSQL → API; test CI su database effimero.
 - **Playwright Chromium E2E**: test browser con API simulata e integrazione React↔ASP.NET Core su rete Docker privata.
 - **Runner verificato con Docker reale in CI**: preparazione npm separata dai test senza rete, dipendenze online solo con opt-in dell'amministratore e riconoscimento degli errori di setup.
 - **Remote Test Runner (MVP sperimentale)**: API autenticata con API key, worker Docker rootless separato, job isolati e report con exit code e log; Cloudflare Tunnel opzionale ([guida](docs/runner.md)).

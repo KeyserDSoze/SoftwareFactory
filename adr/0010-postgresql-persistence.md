@@ -11,7 +11,7 @@ La CI poteva verificare la comunicazione React↔API ASP.NET Core ma l'infrastru
 
 ## Decisione
 
-1. Generare un adapter soltanto per `postgresql`, usando Npgsql 10.0.3 pinato, connessioni da `NpgsqlDataSource` singleton e repository SQL con parametri tipizzati. Il dominio definisce `WorkItem`/`IWorkItemRepository`, il business layer `WorkItemService`, la API minimale i percorsi GET/POST/DELETE.
+1. Generare un adapter soltanto per `postgresql`, usando Npgsql 10.0.3 pinato, connessioni da `NpgsqlDataSource` singleton e repository SQL con parametri tipizzati. Il dominio definisce `WorkItem`/`IWorkItemRepository`, il business layer `WorkItemService`, la API minimale i percorsi GET/POST/PUT/DELETE.
 2. Applicare la migrazione SQL `0001_create_work_items.sql` come embedded resource. Il migrator inserisce un record nella tabella `factory_schema_migrations` sotto advisory lock e transazione per impedire doppie migrazioni e garantire ordine. Non creare tabelle casualmente ad ogni request.
 3. La connessione viene letta solo da `Database:ConnectionString` (variabile `Database__ConnectionString`) e iniettata esternamente. Se assente, avvio fallito, non fallback silenzioso. Il Docker Compose generato riceve `DB_PASSWORD` dalla env locale, e PostgreSQL espone la porta host solo su loopback.
 4. Nella CI dello scaffold usare un PostgreSQL temporaneo con password effimera, readiness e teardown; nella CI Factory estendere il bridge privato con un container PostgreSQL e verificare tramite Chromium un create/list/delete con controllo dalla API vera.

@@ -79,7 +79,7 @@ La persistenza non è inclusa in questi risultati: PersistenceOptions è ancora 
 
 ## Implementazione PostgreSQL DDD (issue #7)
 
-Lo scaffold con database `postgresql` genera `WorkItem` e `IWorkItemRepository` nel dominio, `WorkItemService` nel business layer e un adapter `PostgresWorkItemRepository` con `NpgsqlDataSource` in infrastructure. La API minimale espone GET/POST/DELETE su `/api/items`; un componente React permette creazione, elenco ed eliminazione. Gli ID UUID vengono generati dal dominio e le query usano esclusivamente parametri PostgreSQL posizionali, senza interpolazione SQL con dati utente.
+Lo scaffold con database `postgresql` genera `WorkItem` e `IWorkItemRepository` nel dominio, `WorkItemService` nel business layer e un adapter `PostgresWorkItemRepository` con `NpgsqlDataSource` in infrastructure. La API minimale espone GET/POST/PUT/DELETE su `/api/items`; un componente React permette creazione, elenco ed eliminazione. Gli ID UUID vengono generati dal dominio e le query usano esclusivamente parametri PostgreSQL posizionali, senza interpolazione SQL con dati utente.
 
 Un `PostgresSchemaMigrator` all'avvio controlla `factory_schema_migrations`, serializza le migrazioni sotto un advisory lock PostgreSQL e applica i file SQL incorporati in una transazione, marcando le versioni applicate. Una nuova installazione Postgres deve fornire la connessione tramite env; se manca, l'applicazione non avvia silenziosamente un finto database. PostgreSQL è l'unico backend di persistenza implementato; le altre scelte restano placeholder non testati.
 

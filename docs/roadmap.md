@@ -67,7 +67,7 @@
 
 - Npgsql 10.0.3 pinato nello scaffold PostgreSQL, interfaccia dominio, servizio business e repository ADO.NET parametrizzato
 - Migrazione `0001_create_work_items.sql` come embedded resource, versionamento nel DB con advisory lock e applicazione transazionale all'avvio
-- Endpoint CRUD `/api/items`, React `WorkItems` e test browser CRUD reale in modalità integration
+- Endpoint CRUD completo GET/POST/PUT/DELETE `/api/items`, React `WorkItems` e test browser CRUD reale in modalità integration
 - CI Factory: quattro container Docker (PostgreSQL, API .NET, Vite e Chromium) con rete `--internal` e password effimera
 - CI degli scaffold: Postgres 17 effimero, readiness, processo API con connessione esterna, browser E2E e cleanup
 - Restano aperti: autenticazione/autorizzazione CRUD, migrazioni avanzate/rollback, provider SQL Server/MySQL/SQLite, runner remoto su VM rootless e servizi di produzione

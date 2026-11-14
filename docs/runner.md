@@ -187,7 +187,7 @@ Questa verifica non utilizza PostgreSQL, SQL Server, MySQL o altri database: gli
 
 ## Database reale nella CI Factory — issue #7
 
-La prova `fullstack-smoke.mjs` non usa più soltanto la API .NET: avvia anche un database PostgreSQL 17 effimero sulla rete bridge Docker `--internal`. La password viene generata casualmente all'avvio della CI e passata al container API via `Database__ConnectionString`; non viene scritta nei file o nel repository. ASP.NET Core applica le migrazioni SQL versionate, poi Vite e Chromium eseguono l'E2E `persists and deletes a work item through real PostgreSQL` e controllano la persistenza sia dalla pagina sia dal client HTTP. I container e la rete vengono eliminati alla fine.
+La prova `fullstack-smoke.mjs` non usa più soltanto la API .NET: avvia anche un database PostgreSQL 17 effimero sulla rete bridge Docker `--internal`. La password viene generata casualmente all'avvio della CI e passata al container API via `Database__ConnectionString`; non viene scritta nei file o nel repository. ASP.NET Core applica le migrazioni SQL versionate, poi Vite e Chromium eseguono l'E2E `persists and deletes a work item through real PostgreSQL` (incluse modifica e verifica del nuovo valore) e controllano la persistenza sia dalla pagina sia dal client HTTP. I container e la rete vengono eliminati alla fine.
 
 Il nuovo codice backend generato usa `Npgsql 10.0.3` e deve quindi eseguire un restore NuGet durante la fase preparatoria attendibile. Il runner remoto, che per default mantiene `--network none` e non ha una cache NuGet completa, può restituire `incomplete`; non trasformare la mancanza di package in una correzione AI del codice.
 

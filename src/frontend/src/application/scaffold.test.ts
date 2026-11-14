@@ -98,10 +98,16 @@ describe("application scaffold", () => {
     expect(files["src/backend/infrastructure/Migrations/0001_create_work_items.sql"]).toContain("CREATE TABLE work_items");
     expect(repository).toContain("NpgsqlParameter<Guid>");
     expect(repository).toContain("WHERE id = $1");
+    expect(repository).toContain("UPDATE work_items SET title = $2 WHERE id = $1");
+    expect(files["src/backend/business/WorkItemService.cs"]).toContain("UpdateAsync");
+    expect(files["src/backend/domain/WorkItem.cs"]).toContain("UpdateAsync");
     expect(program).toContain('app.MapPost("/api/items"');
     expect(program).toContain('app.MapDelete("/api/items/{id:guid}"');
+    expect(program).toContain('app.MapPut("/api/items/{id:guid}"');
     expect(program).toContain("ApplyAsync()");
     expect(files["src/frontend/web/src/WorkItems.tsx"]).toContain('aria-label="Archivio PostgreSQL"');
+    expect(files["src/frontend/web/src/WorkItems.tsx"]).toContain('method: "PUT"');
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain('getByLabel("Modifica titolo")');
     expect(files["src/frontend/web/src/App.tsx"]).toContain("<WorkItems api={API}/>");
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("persists and deletes a work item through real PostgreSQL");
     expect(files["docker/compose.yml"]).toContain("service_healthy");
