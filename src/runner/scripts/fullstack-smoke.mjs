@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -18,7 +18,8 @@ const uid = process.getuid?.(), gid = process.getgid?.();
 if (!Number.isInteger(uid) || !Number.isInteger(gid)) throw Error("Linux UID/GID required");
 if (root.includes(",") || /[\r\n:]/.test(root)) throw Error("Unsafe workspace path for Docker bind");
 const network = "sf-int-" + randomUUID().replaceAll("-", "").slice(0, 16);
-const apiName = network + "-api", webName = network + "-web";
+const apiName = network + "-api", webName = network + "-web", dbName = network + "-db";
+const dbPassword = randomBytes(24).toString("hex");
 const runId = randomUUID();
 const mount = "type=bind,src=" + root + ",dst=/work";
 const framework = (await readFile(path.join(root, "src/backend/applications/Api/Api.csproj"), "utf8"))
@@ -48,7 +49,7 @@ const logs = async name => {
   try { return (await docker(["logs", "--tail", "65", name])).slice(-6000); }
   catch(e) { return String(e.stderr || e.message).slice(-1500); }
 };
-let networkCreated = false, startedApi = false, startedWeb = false;
+let networkCreated = false, startedApi = false, startedWeb = false, startedDb = false;
 try {
   await docker(["network", "create", "--driver", "bridge", "--internal",
     "--label", "softwarefactory.ci=integration", network]);
@@ -56,10 +57,28 @@ try {
   const inspect = JSON.parse(await docker(["network", "inspect", network]));
   assert.equal(inspect[0].Internal, true, "Network must deny external routing");
   assert.equal(inspect[0].Driver, "bridge");
+  await docker(["run", "-d", "--name", dbName, "--network", network,
+    "--network-alias", "db", "--memory=768m", "--cpus=1", "--pids-limit=128",
+    "--security-opt=no-new-privileges", "--env=POSTGRES_USER=app",
+    "--env=POSTGRES_DB=app", "--env=POSTGRES_PASSWORD=" + dbPassword,
+    "postgres:17-alpine"]);
+  startedDb = true;
+  let databaseReady = false;
+  for (let attempt = 0; attempt < 55; attempt++) {
+    try {
+      await docker(["exec", dbName, "pg_isready", "-U", "app", "-d", "app"], { timeout: 6000 });
+      databaseReady = true;
+      break;
+    } catch { await sleep(800); }
+  }
+  if (!databaseReady) throw Error("PostgreSQL readiness timed out");
+
   await docker(["run", "-d", "--name", apiName, "--network-alias", "api",
     ...common,
     "--env=ASPNETCORE_URLS=http://0.0.0.0:8080",
     "--env=ASPNETCORE_ENVIRONMENT=Development",
+    "--env=Database__Provider=postgresql",
+    "--env=Database__ConnectionString=Host=db;Port=5432;Database=app;Username=app;Password=" + dbPassword,
     "mcr.microsoft.com/dotnet/aspnet:" + framework + ".0",
     "dotnet", "src/backend/applications/Api/bin/Release/net" + framework + ".0/Api.dll"]);
   startedApi = true;
@@ -94,25 +113,28 @@ try {
   args[networkFlag + 1] = network;
   args.splice(args.indexOf(basePlan.image), 0,
     "--env=E2E_MODE=integration",
+    "--env=E2E_DATABASE=postgresql",
     "--env=E2E_API_ORIGIN=http://api:8080",
     "--env=E2E_WEB_ORIGIN=http://web:4173",
     "--env=E2E_WEB_SERVER_EXTERNAL=true",
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
-  if (outcome.state !== "passed" || !/3 passed/.test(outcome.stdout)) {
+  if (outcome.state !== "passed" || !/4 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
-    throw Error("Playwright integration did not pass all 3 assertions");
+    throw Error("Playwright integration did not pass all 4 assertions, including PostgreSQL persistence");
   }
-  console.log("FULLSTACK_INTEGRATION_PASS: 3 Chromium tests with live ASP.NET Core API and private Docker bridge");
+  console.log("FULLSTACK_POSTGRES_PASS: 4 Chromium tests, live ASP.NET Core and PostgreSQL CRUD on private Docker network");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));
   if (startedWeb) console.error("Web logs:", await logs(webName));
+  if (startedDb) console.error("DB logs:", await logs(dbName));
   process.exitCode = 1;
 } finally {
   if (startedWeb) await docker(["rm", "-f", webName]).catch(() => {});
   if (startedApi) await docker(["rm", "-f", apiName]).catch(() => {});
+  if (startedDb) await docker(["rm", "-f", dbName]).catch(() => {});
   if (networkCreated) await docker(["network", "rm", network]).catch(e => {
     console.error("Cleanup network failed:", String(e.message));
     process.exitCode = 1;
