@@ -51,3 +51,9 @@ npm run test:e2e
 ```
 
 Lo smoke usa un mock browser dell'endpoint API per controllare due stati UI. La CI della Factory lo esegue dentro `mcr.microsoft.com/playwright:v1.64.1-noble` con Docker; la CI dello scaffold esportato lo esegue sull'host GitHub con Chromium scaricato.
+
+## Test E2E contro ASP.NET Core reale
+
+Per provarli su un progetto generato, eseguire dotnet build -c Release, npm install, npx playwright install chromium, poi avviare Api.dll sulla porta 8080 del loopback. Da un altro terminale avviare Playwright con E2E_MODE=integration, E2E_WEB_ORIGIN=http://127.0.0.1:4173, E2E_API_ORIGIN=http://127.0.0.1:8080 e VITE_API_URL=http://127.0.0.1:8080. La configurazione Playwright avvierà Vite e fermerà il webServer a fine test.
+
+La CI generata avvia e ferma automaticamente l'API. La CI della Factory esegue inoltre src/runner/scripts/fullstack-smoke.mjs su Docker con rete interna. Questi test coprono API + frontend, non il database.

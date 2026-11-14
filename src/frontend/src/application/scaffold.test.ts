@@ -66,6 +66,7 @@ describe("application scaffold", () => {
     const workflow = files[".github/workflows/ci.yml"];
     expect(config).toContain('process.env.E2E_MODE === "integration"');
     expect(config).toContain("E2E_WEB_ORIGIN");
+    expect(files["src/frontend/web/vite.config.ts"]).toContain('allowedHosts: ["web"]');
     expect(config).toContain("E2E_WEB_SERVER_EXTERNAL");
     expect(smoke).toContain("const integration =");
     expect(smoke).toContain('if (!integration) await page.route(api + "/health"');

@@ -174,3 +174,13 @@ Per testare API/database reali, aggiungere una seconda suite con fixture e conta
 ### Limiti di sicurezza
 
 Il pacchetto Playwright è disponibile nel workspace via fase `npm-prepare` (se la cache offline non lo contiene, occorre un proxy/cache controllato). Nel container browser non vengono esposti socket Docker, secret o rete Internet; Chromium può usare meno sandbox di processo con alcuni UID/daemon rootless. Non considerare questo un isolamento adatto a codice deliberatamente ostile e non pubblicare il runner senza hardening.
+
+## React e API .NET reali su rete Docker privata (issue #6)
+
+Lo scaffold genera due modalità Playwright. Per default npm run test:e2e avvia Chromium e Vite sul loopback e usa risposte simulate /health 200 e 503; il test API reale è skipped. Con E2E_MODE=integration, la UI React chiama il vero backend /health e un terzo test verifica /api/info, nome applicazione, stato e GUID di richiesta. Il caso di errore HTTP 503 resta deliberatamente simulato per verificare il percorso di errore UI.
+
+La CI delle applicazioni generate avvia ASP.NET Core su 127.0.0.1:8080, controlla readiness, avvia Playwright in integration mode con Vite locale e termina il processo con trap. La suite predefinita con mock resta indipendente dal backend.
+
+La CI di SoftwareFactory esegue anche src/runner/scripts/fullstack-smoke.mjs: tre container reali (API ASP.NET Core, Vite e Chromium) su una rete bridge Docker --internal generata per ciascuna esecuzione. I container si parlano con i DNS api:8080 e web:4173; non pubblicano porte host e non hanno accesso a Internet. Lo script verifica che la rete sia davvero Internal, applica limiti CPU/RAM/PIDs e no-new-privileges, ed elimina rete e container nel blocco finally. Il socket Docker è usato solo dall'orchestratore sulla macchina GitHub Actions effimera, mai dalla SPA o dai container test.
+
+Questa verifica non utilizza PostgreSQL, SQL Server, MySQL o altri database: gli adapter di persistenza non sono ancora collegati ai repository applicativi. Prima di poter dichiarare test full-stack con persistenza bisogna implementare il database e aggiungere fixture di migrazione/rollback e isolamento per test. Il runner remoto con Cloudflare mantiene il default --network none: questa orchestrazione non gli concede comandi o reti Docker arbitrari.

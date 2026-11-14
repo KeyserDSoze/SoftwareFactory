@@ -70,3 +70,9 @@ Per diventare una vera code factory autonoma servono: task graph con file owners
 ## Verifica del codice generato (issue #3)
 
 Il Code Agent separa tre concetti: review AI (opinione statica), build/test reale (report del runner) e approvazione umana. La seconda fase è collegata a un digest dei sorgenti e alla proposta che la genera, per evitare che un report relativo a file obsoleti venga mostrato come prova per il codice corrente. Il repair guidato dai log è limitato a due tentativi e agli stessi file della feature originale. Una riparazione invalida la review precedente e tutte le evidenze di test; l'approvazione richiede una nuova review e un nuovo build pertinente realmente riuscito.
+
+## Prove browser con vera API ASP.NET Core (issue #6)
+
+La Factory genera due modalità di test Playwright: UI/mock senza backend esterno e integration con ASP.NET Core vero. La seconda esercita HTTP /health e /api/info su una API effettivamente avviata. In CI, tre container Docker (API, Vite, Chromium) comunicano su una rete bridge privata e interna al job senza esporre porte. La CI dello scaffold usa invece backend e Vite su loopback. Il browser non riceve token né socket Docker.
+
+La persistenza non è inclusa in questi risultati: PersistenceOptions è ancora solo un adapter placeholder. Un esito verde non dimostra funzionamento DB, servizi cloud né un deployment rootless sicuro su server dedicato.

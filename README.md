@@ -12,7 +12,7 @@
 - ZIP sorgenti e pubblicazione GitHub diretta (PAT fine-grained, GitHub App tramite token broker), branch `main` di default oppure branch separato. Il commit usa fast-forward, mai force push.
 - Google Drive appDataFolder / Microsoft OneDrive app folder: OAuth 2.0 PKCE con client ID configurabile, backup/ripristino JSON.
 - **Repair guidato dagli errori**: report associati al digest SHA-256 del codice; patch AI di correzione con massimo due tentativi, vincoli sui file e nuova review/test prima dell'approvazione.
-- **Playwright Chromium E2E per ogni scaffold React**: due test browser reali per il caricamento della UI e gli stati di salute API (simulati); test browser nella CI del progetto generato, oltre al build.
+- **Playwright Chromium E2E**: due test browser con API simulata e test di integrazione reali tra React e ASP.NET Core per /health e /api/info, nella CI dello scaffold e nella rete Docker interna della Factory.
 - **Runner verificato con Docker reale in CI**: preparazione npm separata dai test senza rete, dipendenze online solo con opt-in dell'amministratore e riconoscimento degli errori di setup.
 - **Remote Test Runner (MVP sperimentale)**: API autenticata con API key, worker Docker rootless separato, job isolati e report con exit code e log; Cloudflare Tunnel opzionale ([guida](docs/runner.md)).
 - **Code Agent supervisionato**: patch multi-file a sorgenti C#/React, review avversaria indipendente, confronto delle differenze, approvazione, undo, recovery dei conflitti ed export solo degli override approvati.
@@ -51,7 +51,7 @@ Apri l'indirizzo indicato da Vite (normalmente http://localhost:5173). In altern
 - Per GitHub App serve un **backend broker attendibile**, che rilasci installation token di breve durata: la chiave privata della App non può vivere in una SPA.
 - Per Google/Microsoft occorre registrare un'app OAuth pubblica e autorizzare esattamente l'URL di redirect mostrato in UI.
 - La sessionStorage e i token in memoria **non proteggono** da XSS o estensioni del browser malevole. Non usare modelli/API non fidati con dati sensibili.
-- I test Playwright generati verificano la UI con mock di `/health`: non costituiscono test d'integrazione reali fra frontend, API e database. Per la full suite serve configurare ambienti/fixture di integrazione.
+- Il test E2E in modalità mock usa /health simulato, mentre la modalità integration interroga la vera API ASP.NET Core e verifica la UI. I database selezionabili restano adapter non implementati: non esiste ancora un test di persistenza reale.
 - La pipeline AI gira **solo mentre la scheda è attiva**. Il salvataggio è locale, non è un worker persistente. Il browser può sospenderla in background.
 - Il generatore non garantisce conformità legale, qualità del codice o configurazione cloud pronta per produzione.
 - Gli input di ricerca e i contenuti dell'utente possono finire sui provider scelti: verificare privacy, permessi e termini.

@@ -55,6 +55,14 @@
 - Docker smoke browser vero in CI di SoftwareFactory, oltre ai test mockati del protocollo
 - Limiti: mock API, non verifica DB/integrazioni; offline npm ancora richiede cache, VM rootless e browser multipli da collaudare
 
+## v0.2 — Playwright con API reale e rete privata (issue #6)
+
+- Doppia modalità E2E: mock API per il test base, integration per health/info ASP.NET Core reali
+- Rete bridge Docker --internal per API/Vite/Chromium nella CI Factory, senza pubblicazione porte
+- Test di integrazione anche nella CI degli scaffold generati: ASP.NET Core locale + Playwright
+- Setup Vite con allowedHosts limitato a web nel test Docker, CORS esplicito sulla API
+- Database reale, isolamento worker remoto multi-container e servizi cloud ancora da implementare
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

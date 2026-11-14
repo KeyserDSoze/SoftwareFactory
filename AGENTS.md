@@ -71,3 +71,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Versione di `@playwright/test` e versione di `mcr.microsoft.com/playwright` **identiche** (attualmente 1.64.1).
 - Test generati della baseline usano mock di API `/health` per validare la UI senza backend: non descriverli come integrazione full stack.
 - Browser, server Vite e test nello stesso container senza rete, tramite loopback. Non montare Docker socket nel container browser.
+
+## Integrazione reale API e frontend (issue #6)
+
+- La modalità E2E mock deve restare disponibile offline. Integration usa vera ASP.NET Core /health e /api/info; non spacciare test HTTP per test database.
+- L'orchestrazione src/runner/scripts/fullstack-smoke.mjs deve funzionare solo nella CI con host effimero. Rete Docker --internal per job, zero published ports, cleanup in finally.
+- Mai esporre il socket Docker nella API del runner, nel browser o dentro i container test. Il runner remoto conserva --network none fino ad un progetto di autorizzazioni per job isolato.
+- L'origin web:4173 è ammesso esplicitamente nel CORS .NET e negli allowedHosts di Vite; non usare AllowAnyOrigin o allowedHosts: true.
