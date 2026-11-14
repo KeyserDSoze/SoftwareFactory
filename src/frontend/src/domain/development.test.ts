@@ -37,7 +37,7 @@ describe("safe feature development", () => {
   });
   it("parses a proposed edit but does not alter the export before explicit acceptance", () => {
     const p = project(), original = workspaceFiles(p);
-    const pending = staged();
+    const pending = setPending(p, validateProposal(raw(), p, featureRequest));
     expect(developmentOf(pending).pending?.edits).toHaveLength(1);
     expect(workspaceFiles(pending)).toEqual(original);
     expect(() => approvePending(pending)).toThrow(/review avversaria/i);
@@ -64,7 +64,7 @@ describe("safe feature development", () => {
     draft.config.name = "Renamed Studio";
     const reviewed = saveReview(draft, draft.development!.pending!.id, review);
     expect(workspaceConflicts(reviewed)).toEqual([]);
-    expect(approvePending(reviewed)).toThrow(); // baseline changed; old Program.cs no longer matches
+    expect(() => approvePending(reviewed)).toThrow(/cambiato/); // baseline changed; old Program.cs no longer matches
   });
   it("detects and resolves a changed baseline without dropping unrelated generated files", () => {
     const p = project(), path = "src/backend/applications/Api/Program.cs";
