@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
-import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert } from "lucide-react";
+import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wrench } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
+import type { RunnerJobEvidence } from "../domain/development";
 import { readSecret } from "../infrastructure/store";
-import { fetchRunnerJob, runnerSourceFiles, submitRunnerJob, type RunnerReport, type RunnerStep } from "../infrastructure/runner";
+import {
+  fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
+  verifyCurrentRunnerReport, type RunnerReport, type RunnerStep, type RunnerVerification,
+} from "../infrastructure/runner";
 
 type Props = {
   project: FactoryProject;
   settings: FactorySettings;
   busy: boolean;
-  onProjectChange: (project: FactoryProject) => void;
+  onRunnerBound: (evidence: RunnerJobEvidence) => void;
+  onRepair: (report: RunnerReport, evidence: RunnerJobEvidence) => Promise<void>;
   onNotice: (text: string) => void;
   onError: (text: string) => void;
 };
@@ -20,15 +25,20 @@ const AVAILABLE: { step: RunnerStep; label: string }[] = [
   { step: "playwright", label: "Playwright E2E" },
 ];
 const terminal = (state: string) => ["passed", "failed", "incomplete"].includes(state);
-export default function RunnerPanel({ project, settings, busy, onProjectChange, onNotice, onError }: Props) {
+export default function RunnerPanel({ project, settings, busy, onRunnerBound, onRepair, onNotice, onError }: Props) {
   const [steps, setSteps] = useState<RunnerStep[]>(["dotnet-build", "web-build"]);
   const [report, setReport] = useState<RunnerReport | null>(null);
+  const [verification, setVerification] = useState<RunnerVerification | null>(null);
   const [requesting, setRequesting] = useState(false);
-  const [jobId, setJobId] = useState(() => project.development?.lastRunnerJobId || "");
+  const [repairing, setRepairing] = useState(false);
+  const evidence = project.development?.lastRunnerEvidence;
+  const jobId = evidence?.id || project.development?.lastRunnerJobId || "";
   const endpoint = settings.runnerEndpoint || "";
   const secret = readSecret("runner.key");
-  useEffect(() => { setJobId(project.development?.lastRunnerJobId || ""); }, [project.id]);
+
   useEffect(() => {
+    setReport(null);
+    setVerification(null);
     if (!jobId || !endpoint || !secret) return;
     let disposed = false, timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
@@ -45,45 +55,80 @@ export default function RunnerPanel({ project, settings, busy, onProjectChange, 
     void tick();
     return () => { disposed = true; controller.abort(); if (timer) clearTimeout(timer); };
   }, [jobId, endpoint, secret, onError]);
+
+  useEffect(() => {
+    let disposed = false;
+    setVerification(null);
+    if (!report || report.id !== jobId || !endpoint) return;
+    void verifyCurrentRunnerReport(project, endpoint, report, evidence)
+      .then(verified => { if (!disposed) setVerification(verified); })
+      .catch(() => { if (!disposed) setVerification({ kind: "invalid", detail: "Impossibile verificare il report." }); });
+    return () => { disposed = true; };
+  }, [project, evidence, report, jobId, endpoint]);
+
   const submit = async () => {
-    if (busy || requesting) return;
+    if (busy || requesting || repairing) return;
     if (!endpoint || !secret) { onError("Configura URL e API key del runner nelle Impostazioni."); return; }
     if (!steps.length) { onError("Seleziona almeno un tipo di test."); return; }
     const pending = project.development?.pending;
-    const label = project.config.name + (pending ? " · proposal: " + pending.summary : " · approved workspace");
-    if (!confirm("Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.")) return;
+    const label = (project.config.name + (pending ? " · proposal: " + pending.summary : " · approved workspace")).slice(0, 160);
+    if (!window.confirm("Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.")) return;
     setRequesting(true);
     try {
-      const files = runnerSourceFiles(project, true);
-      const receipt = await submitRunnerJob(endpoint, secret, label.slice(0, 160), files, steps);
-      setJobId(receipt.id);
-      setReport(null);
-      onProjectChange({ ...project, development: {
-        ...(project.development || { revision: 0, overrides: {}, originals: {}, history: [] }),
-        lastRunnerJobId: receipt.id,
-      } });
-      onNotice("Job inviato: " + receipt.id + ". Il worker elaborerà gli step e pubblicherà il report.");
+      const files = runnerSourceFiles(project, pending !== undefined);
+      const checksum = await runnerRequestDigest(label, files, steps);
+      const receipt = await submitRunnerJob(endpoint, secret, label, files, steps);
+      if (receipt.digest !== checksum || !/^[a-f0-9-]{36}$/.test(receipt.id) || receipt.state !== "queued")
+        throw new Error("Digest del runner diverso dallo snapshot locale. Job non considerato verificabile.");
+      const binding: RunnerJobEvidence = {
+        id: receipt.id, digest: checksum, endpoint: runnerEndpoint(endpoint), label: label.trim(),
+        steps: [...steps], submittedAt: new Date().toISOString(),
+        proposalId: pending?.id || null, revision: project.development?.revision ?? 0,
+      };
+      setReport(null); setVerification(null);
+      onRunnerBound(binding);
+      onNotice("Job inviato: " + receipt.id + ". L'esito sarà valido solo per questo snapshot dei sorgenti.");
     } catch(e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setRequesting(false); }
   };
+  const retryRepair = async () => {
+    if (!report || !evidence || busy || requesting || repairing) return;
+    const verified = await verifyCurrentRunnerReport(project, endpoint, report, evidence);
+    if (verified.kind !== "failed" || !project.development?.pending || evidence.proposalId !== project.development.pending.id) {
+      onError("Il report non è più valido per questa patch. Esegui di nuovo i test."); return;
+    }
+    if ((project.development.pending.repairCount ?? 0) >= 2) { onError("Raggiunto il limite di riparazioni AI."); return; }
+    if (!window.confirm("Inviare all'AI il log del test fallito e la patch per proporre una correzione? Sarà richiesta una nuova review. Nessuna modifica verrà applicata automaticamente.")) return;
+    setRepairing(true);
+    try { await onRepair(report, evidence); } finally { setRepairing(false); }
+  };
+  const displayedReport = report?.id === jobId ? report : null;
+  const kind = verification?.kind || "awaiting";
+  const canRepair = displayedReport?.state === "failed" && kind === "failed" &&
+    evidence?.proposalId && project.development?.pending?.id === evidence.proposalId &&
+    (project.development.pending.repairCount ?? 0) < 2;
   return <section className="panel">
     <div className="panel-title"><div><div className="eyebrow">REMOTE EXECUTION / TEST RUNNER</div><h3>Test e compilazione reali</h3></div><Cloud size={20} className="muted" /></div>
-    <p className="helper">Test nel runner Docker remoto, con immagini preconfigurate, rete disabilitata di default e limiti per processo. Il report è una prova di esecuzione, non una certificazione di sicurezza.</p>
+    <p className="helper">L'esito è associato all'impronta SHA-256 del codice inviato. Se la patch o il progetto cambiano, il risultato diventa automaticamente <strong>obsoleto</strong>.</p>
     {!endpoint && <div className="code-agent-warning"><ShieldAlert size={17}/> Configura URL e API key in Settings → Remote runner.</div>}
     <div className="runner-checks">{AVAILABLE.map(({ step, label }) =>
-      <label className="checkline" key={step}><input type="checkbox" checked={steps.includes(step)} disabled={requesting}
+      <label className="checkline" key={step}><input type="checkbox" checked={steps.includes(step)} disabled={requesting || repairing}
         onChange={e => setSteps(current => e.target.checked ? [...current, step] : current.filter(x => x !== step))}/>{label}</label>)}</div>
-    <div className="panel-footer"><span>Le patch non ancora approvate vengono incluse nel test, senza essere pubblicate su GitHub.</span>
-      <button className="secondary" disabled={busy || requesting || !endpoint || !secret || !steps.length}
+    <div className="panel-footer"><span>Le patch non ancora approvate vengono incluse solo nel test. Nessun push o applicazione automatica.</span>
+      <button className="secondary" disabled={busy || requesting || repairing || !endpoint || !secret || !steps.length}
         onClick={() => void submit()}>{requesting ? <RefreshCw size={16} className="spinning"/> : <Play size={16}/>}
-        {requesting ? "Invio..." : "Invia al runner"}</button></div>
+        {requesting ? "Invio..." : "Avvia test sul runner"}</button></div>
     {jobId && <div className="runner-report">
       <div className="runner-report-title"><strong><Activity size={16}/> Job {jobId.slice(0, 8)}</strong>
-        {report && <span className={"runner-state " + report.state}>{report.state.toUpperCase()}</span>}</div>
-      {!report ? <p className="helper">Caricamento report dal runner...</p> : <>
-        <p className="helper">{report.summary}</p>
-        <small>Digest sorgenti + selezione: <code>{report.digest.slice(0, 20)}…</code> · Avviato: {report.startedAt || "in coda"}</small>
-        {report.results.map((result, index) => <details key={index} className="runner-step">
+        {displayedReport && <span className={"runner-state " + kind}>{kind === "awaiting" ? displayedReport.state.toUpperCase() : kind.toUpperCase()}</span>}</div>
+      {!displayedReport ? <p className="helper">Caricamento report dal runner...</p> : <>
+        <p className="helper">{displayedReport.summary}</p>
+        <div className={"runner-verification " + (kind === "passed" ? "ok" : kind === "stale" || kind === "invalid" ? "invalid" : "")}>
+          {kind === "passed" ? <CheckCircle2 size={17}/> : kind === "awaiting" ? <Clock size={17}/> : <ShieldAlert size={17}/>}
+          <span>{verification?.detail || "Verifica fingerprint e risultati in corso..."}</span>
+        </div>
+        <small>Digest snapshot: <code>{displayedReport.digest.slice(0, 20)}…</code> · Avviato: {displayedReport.startedAt || "in coda"}</small>
+        {displayedReport.results.map((result, index) => <details key={index} className="runner-step">
           <summary>{result.state === "passed" ? <CheckCircle2 size={15} className="ok"/> :
             result.state === "failed" ? <ShieldAlert size={15} className="danger"/> : <Clock size={15} className="muted"/>}
             <strong>{result.step}</strong><span>{result.state} · exit {result.exitCode ?? "—"} · {result.durationMs ? Math.round(result.durationMs / 1000) + "s" : "—"}</span></summary>
@@ -92,7 +137,11 @@ export default function RunnerPanel({ project, settings, busy, onProjectChange, 
           {result.stdout && <pre>{result.stdout}</pre>}
           {result.stderr && <pre>{result.stderr}</pre>}
         </details>)}
-        {report.state === "incomplete" && <p className="code-agent-warning">Alcuni step sono stati saltati: esito incompleto, non un test completamente superato.</p>}
+        {kind === "incomplete" && <p className="code-agent-warning">Esito incompleto: test saltati o problema dell'ambiente. Verifica configurazione runner prima di correggere il codice.</p>}
+        {canRepair && <div className="panel-footer"><span>Repair AI: {project.development?.pending?.repairCount ?? 0}/2 · nuova review e nuovo test obbligatori.</span>
+          <button className="secondary" disabled={busy || requesting || repairing} onClick={() => void retryRepair()}>
+            <Wrench size={15}/> {repairing ? "Riparazione in corso..." : "Proponi correzione AI"}</button></div>}
+        {kind === "failed" && !canRepair && <p className="helper">Per correggere è necessaria una proposta ancora pendente, il digest corrente e tentativi AI disponibili.</p>}
       </>}
     </div>}
   </section>;
