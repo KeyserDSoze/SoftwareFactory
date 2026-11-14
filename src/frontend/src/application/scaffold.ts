@@ -174,6 +174,19 @@ function otherFrontend(kind: FrontendKind): Record<string, string> {
     "", "Target selezionato (placeholder). Il generatore MVP non crea ancora un progetto " + human + " compilabile.",
     "Inizializzare toolchain/SDK nativi, CI dedicata, navigation e integration tests prima di considerarlo supportato.") };
 }
+
+function postgresqlFiles(c: ProjectConfig): Record<string, string> {
+  return {
+    "src/backend/domain/WorkItem.cs": "namespace FactoryApp.Domain;\npublic sealed record WorkItem(Guid Id, string Title, DateTimeOffset CreatedAt);\npublic interface IWorkItemRepository {\n    Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct);\n    Task<WorkItem> AddAsync(string title, CancellationToken ct);\n    Task<bool> DeleteAsync(Guid id, CancellationToken ct);\n}\n",
+    "src/backend/business/WorkItemService.cs": "using FactoryApp.Domain;\nnamespace FactoryApp.Business;\npublic sealed class WorkItemService(IWorkItemRepository repository) {\n    public Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct) => repository.ListAsync(ct);\n    public Task<WorkItem> AddAsync(string title, CancellationToken ct) {\n        if (string.IsNullOrWhiteSpace(title) || title.Trim().Length > 120)\n            throw new ArgumentException(\"Title must contain 1 to 120 characters.\", nameof(title));\n        return repository.AddAsync(title.Trim(), ct);\n    }\n    public Task<bool> DeleteAsync(Guid id, CancellationToken ct) => repository.DeleteAsync(id, ct);\n}\n",
+    "src/backend/infrastructure/Infrastructure.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><TargetFramework>net+ c.dotnetVersion +</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>\n  <ItemGroup>\n    <ProjectReference Include=\"../domain/Domain.csproj\" />\n    <PackageReference Include=\"Npgsql\" Version=\"10.0.3\" />\n    <EmbeddedResource Include=\"Migrations/*.sql\" />\n  </ItemGroup>\n</Project>\n",
+    "src/backend/infrastructure/PostgresWorkItemRepository.cs": "using FactoryApp.Domain;\nusing Npgsql;\nusing NpgsqlTypes;\nnamespace FactoryApp.Infrastructure;\npublic sealed class PostgresWorkItemRepository(NpgsqlDataSource db) : IWorkItemRepository {\n    public async Task<IReadOnlyList<WorkItem>> ListAsync(CancellationToken ct) {\n        var result = new List<WorkItem>();\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\n            \"SELECT id, title, created_at FROM work_items ORDER BY created_at DESC, id DESC LIMIT 100\",\n            connection);\n        await using var reader = await command.ExecuteReaderAsync(ct);\n        while (await reader.ReadAsync(ct))\n            result.Add(new WorkItem(reader.GetGuid(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2)));\n        return result;\n    }\n    public async Task<WorkItem> AddAsync(string title, CancellationToken ct) {\n        var entry = new WorkItem(Guid.NewGuid(), title, DateTimeOffset.UtcNow);\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\n            \"INSERT INTO work_items (id, title, created_at) VALUES ($1, $2, $3)\", connection);\n        command.Parameters.Add(new NpgsqlParameter<Guid> { TypedValue = entry.Id, NpgsqlDbType = NpgsqlDbType.Uuid });\n        command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = entry.Title, NpgsqlDbType = NpgsqlDbType.Text });\n        command.Parameters.Add(new NpgsqlParameter<DateTimeOffset> { TypedValue = entry.CreatedAt, NpgsqlDbType = NpgsqlDbType.TimestampTz });\n        await command.ExecuteNonQueryAsync(ct);\n        return entry;\n    }\n    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct) {\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var command = new NpgsqlCommand(\"DELETE FROM work_items WHERE id = $1\", connection);\n        command.Parameters.Add(new NpgsqlParameter<Guid> { TypedValue = id, NpgsqlDbType = NpgsqlDbType.Uuid });\n        return await command.ExecuteNonQueryAsync(ct) == 1;\n    }\n}\n",
+    "src/backend/infrastructure/PostgresSchemaMigrator.cs": "using Npgsql;\nusing System.Reflection;\nnamespace FactoryApp.Infrastructure;\npublic sealed class PostgresSchemaMigrator(NpgsqlDataSource db) {\n    public async Task ApplyAsync(CancellationToken ct = default) {\n        await using var connection = await db.OpenConnectionAsync(ct);\n        await using var transaction = await connection.BeginTransactionAsync(ct);\n        await using (var advisory = new NpgsqlCommand(\"SELECT pg_advisory_xact_lock(20261114)\", connection, transaction))\n            await advisory.ExecuteNonQueryAsync(ct);\n        await using (var schema = new NpgsqlCommand(\n            \"CREATE TABLE IF NOT EXISTS factory_schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())\",\n            connection, transaction))\n            await schema.ExecuteNonQueryAsync(ct);\n        var assembly = typeof(PostgresSchemaMigrator).Assembly;\n        var migrations = assembly.GetManifestResourceNames()\n            .Where(name => name.Contains(\".Migrations.\") && name.EndsWith(\".sql\", StringComparison.Ordinal))\n            .OrderBy(name => name, StringComparer.Ordinal)\n            .ToArray();\n        if (migrations.Length == 0) throw new InvalidOperationException(\"No SQL migration embedded.\");\n        foreach (var name in migrations) {\n            var version = name.Split(\".Migrations.\", 2)[1];\n            await using (var check = new NpgsqlCommand(\n                \"SELECT EXISTS(SELECT 1 FROM factory_schema_migrations WHERE version = $1)\",\n                connection, transaction)) {\n                check.Parameters.AddWithValue(version);\n                if ((bool)(await check.ExecuteScalarAsync(ct) ?? false)) continue;\n            }\n            using var stream = assembly.GetManifestResourceStream(name)\n                ?? throw new InvalidOperationException(\"Migration resource missing.\");\n            using var reader = new StreamReader(stream);\n            var sql = await reader.ReadToEndAsync(ct);\n            await using (var migration = new NpgsqlCommand(sql, connection, transaction))\n                await migration.ExecuteNonQueryAsync(ct);\n            await using (var mark = new NpgsqlCommand(\n                \"INSERT INTO factory_schema_migrations(version) VALUES ($1)\",\n                connection, transaction)) {\n                mark.Parameters.AddWithValue(version);\n                await mark.ExecuteNonQueryAsync(ct);\n            }\n        }\n        await transaction.CommitAsync(ct);\n    }\n}\n",
+    "src/backend/infrastructure/Migrations/0001_create_work_items.sql": "CREATE TABLE work_items (\n    id uuid PRIMARY KEY,\n    title varchar(120) NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 120),\n    created_at timestamptz NOT NULL\n);\nCREATE INDEX idx_work_items_created ON work_items (created_at DESC, id DESC);\n",
+    "src/frontend/web/src/WorkItems.tsx": "import { useEffect, useState } from \"react\";\nimport type { FormEvent } from \"react\";\ntype WorkItem = { id: string; title: string; createdAt: string };\nexport default function WorkItems({ api }: { api: string }) {\n  const [items, setItems] = useState<WorkItem[]>([]);\n  const [title, setTitle] = useState(\"\");\n  const [error, setError] = useState(\"\");\n  const [busy, setBusy] = useState(false);\n  useEffect(() => {\n    const controller = new AbortController();\n    void fetch(api + \"/api/items\", { signal: controller.signal })\n      .then(response => { if (!response.ok) throw Error(\"HTTP \" + response.status); return response.json() as Promise<WorkItem[]>; })\n      .then(setItems)\n      .catch(err => { if (!controller.signal.aborted) setError(\"Archivio non disponibile: \" + String(err)); });\n    return () => controller.abort();\n  }, [api]);\n  const add = async (event: FormEvent<HTMLFormElement>) => {\n    event.preventDefault();\n    const next = title.trim();\n    if (!next || next.length > 120 || busy) return;\n    setBusy(true); setError(\"\");\n    try {\n      const response = await fetch(api + \"/api/items\", {\n        method: \"POST\", headers: { \"Content-Type\": \"application/json\" }, body: JSON.stringify({ title: next }),\n      });\n      if (!response.ok) throw Error(\"HTTP \" + response.status);\n      const created = await response.json() as WorkItem;\n      setItems(old => [created, ...old]); setTitle(\"\");\n    } catch (err) { setError(\"Salvataggio non riuscito: \" + String(err)); }\n    finally { setBusy(false); }\n  };\n  const remove = async (item: WorkItem) => {\n    if (busy) return;\n    setBusy(true); setError(\"\");\n    try {\n      const response = await fetch(api + \"/api/items/\" + encodeURIComponent(item.id), { method: \"DELETE\" });\n      if (!response.ok) throw Error(\"HTTP \" + response.status);\n      setItems(old => old.filter(x => x.id !== item.id));\n    } catch (err) { setError(\"Eliminazione non riuscita: \" + String(err)); }\n    finally { setBusy(false); }\n  };\n  return <section aria-label=\"Archivio PostgreSQL\" style={{ marginTop: 32 }}>\n    <h2>Elementi salvati</h2>\n    <form onSubmit={event => void add(event)}>\n      <label htmlFor=\"work-item-title\">Titolo elemento</label>\n      <input id=\"work-item-title\" value={title} maxLength={120}\n        onChange={event => setTitle(event.target.value)} placeholder=\"Nuovo elemento\" />\n      <button type=\"submit\" disabled={busy || !title.trim()}>Aggiungi</button>\n    </form>\n    {error && <p role=\"alert\">{error}</p>}\n    <ul>{items.map(item => <li key={item.id}>\n      <span>{item.title}</span>{\" \"}\n      <button type=\"button\" disabled={busy} aria-label={\"Elimina \" + item.title}\n        onClick={() => void remove(item)}>Elimina</button>\n    </li>)}</ul>\n  </section>;\n}\n"
+  };
+}
+
 export function generateFiles(project: FactoryProject): Record<string, string> {
   const c = project.config;
   if (!c.name.trim() || !c.description.trim()) throw new Error("Servono nome e descrizione dell'applicazione.");
@@ -287,6 +300,58 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
     files["src/frontend/web/README.md"] = "Dashboard operativa React. Frontend target primario: " + c.frontends.join(", ") + ".\n";
   }
   for (const kind of c.frontends.filter(k => k !== "react")) Object.assign(files, otherFrontend(kind));
+
+  if (c.database === "postgresql") {
+    Object.assign(files, postgresqlFiles(c));
+    const apiPath = "src/backend/applications/Api/Program.cs";
+    files[apiPath] = files[apiPath]
+      .replace("using FactoryApp.Business;", "using FactoryApp.Business;\nusing FactoryApp.Domain;\nusing Npgsql;")
+      .replace("var app = builder.Build();", [
+        'var connectionString = builder.Configuration["Database:ConnectionString"];',
+        'if (string.IsNullOrWhiteSpace(connectionString)) throw new InvalidOperationException("Database:ConnectionString is required for PostgreSQL.");',
+        'builder.Services.AddSingleton(new NpgsqlDataSourceBuilder(connectionString).Build());',
+        'builder.Services.AddScoped<IWorkItemRepository, PostgresWorkItemRepository>();',
+        'builder.Services.AddScoped<WorkItemService>();',
+        'builder.Services.AddSingleton<PostgresSchemaMigrator>();',
+        'var app = builder.Build();',
+        'await app.Services.GetRequiredService<PostgresSchemaMigrator>().ApplyAsync();',
+      ].join("\n"))
+      .replace("app.Run();", [
+        'app.MapGet("/api/items", (WorkItemService service, CancellationToken ct) => service.ListAsync(ct));',
+        'app.MapPost("/api/items", async (CreateWorkItemRequest request, WorkItemService service, CancellationToken ct) => {',
+        '  if (string.IsNullOrWhiteSpace(request.Title) || request.Title.Trim().Length > 120)',
+        '    return Results.BadRequest(new { error = "Title must contain 1 to 120 characters" });',
+        '  var created = await service.AddAsync(request.Title, ct);',
+        '  return Results.Created("/api/items/" + created.Id, created);',
+        '});',
+        'app.MapDelete("/api/items/{id:guid}", async (Guid id, WorkItemService service, CancellationToken ct) =>',
+        '  await service.DeleteAsync(id, ct) ? Results.NoContent() : Results.NotFound());',
+        'app.Run();',
+        'record CreateWorkItemRequest(string Title);',
+      ].join("\n"));
+    files["src/frontend/web/src/App.tsx"] = files["src/frontend/web/src/App.tsx"]
+      .replace('import { useEffect, useState } from "react";', 'import { useEffect, useState } from "react";\nimport WorkItems from "./WorkItems";')
+      .replace('</main>;', '<WorkItems api={API}/></main>;');
+    files["src/frontend/web/e2e/smoke.spec.ts"] += [
+      '',
+      'test("persists and deletes a work item through real PostgreSQL", async ({ page, request }) => {',
+      '  test.skip(!integration || process.env.E2E_DATABASE !== "postgresql", "Requires PostgreSQL integration environment");',
+      '  const unique = "Elemento " + Date.now() + "-" + Math.floor(Math.random() * 100000);',
+      '  await page.goto("/");',
+      '  await page.getByLabel("Titolo elemento").fill(unique);',
+      '  await page.getByRole("button", { name: "Aggiungi" }).click();',
+      '  await expect(page.getByText(unique)).toBeVisible();',
+      '  const stored = await request.get(api + "/api/items");',
+      '  expect(stored.ok()).toBeTruthy();',
+      '  expect((await stored.json()).some((row: { title: string }) => row.title === unique)).toBeTruthy();',
+      '  await page.getByRole("button", { name: "Elimina " + unique }).click();',
+      '  await expect(page.getByText(unique)).toHaveCount(0);',
+      '  const removed = await request.get(api + "/api/items");',
+      '  expect((await removed.json()).some((row: { title: string }) => row.title === unique)).toBeFalsy();',
+      '});',
+      '',
+    ].join("\n");
+  }
   if (c.deployment === "kubernetes") {
     files["infra/kubernetes/api.yaml"] = lines("apiVersion: apps/v1", "kind: Deployment",
       "metadata:", "  name: " + slug + "-api", "spec:", "  replicas: 1", "  selector:",
