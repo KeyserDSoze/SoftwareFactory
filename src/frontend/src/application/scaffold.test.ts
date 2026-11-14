@@ -127,6 +127,10 @@ describe("application scaffold", () => {
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("persists and deletes a work item through real PostgreSQL");
     expect(files["docker/compose.yml"]).toContain("service_healthy");
     expect(files["docker/compose.yml"]).toContain('127.0.0.1:5432:5432');
+    expect(files["docker/compose.yml"]).toContain('127.0.0.1:8080:8080');
+    expect(files["docker/compose.yml"]).toContain("Auth__SigningKey");
+    expect(files["docker/.env.example"]).toContain("AUTH_SIGNING_KEY=");
+    expect(files["docker/.env.example"]).not.toContain("AUTH_SIGNING_KEY=abcdef");
     expect(files["docker/compose.yml"]).toContain('Password=${DB_PASSWORD:?Set DB_PASSWORD in .env}');
   });
   it("does not claim PostgreSQL persistence for other database selections", () => {

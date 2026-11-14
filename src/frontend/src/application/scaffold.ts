@@ -14,7 +14,7 @@ function dockerCompose(c: ProjectConfig): string {
     "      context: ..",
     "      dockerfile: docker/Api.Dockerfile",
     "    ports:",
-    '      - "8080:8080"',
+    '      - "127.0.0.1:8080:8080"',
     "    environment:",
     "      ASPNETCORE_ENVIRONMENT: Development",
     "      Database__Provider: " + c.database,

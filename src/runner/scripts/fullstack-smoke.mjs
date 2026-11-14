@@ -136,7 +136,12 @@ try {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
     throw Error("Playwright integration did not pass all 5 assertions, including PostgreSQL persistence");
   }
-  console.log("FULLSTACK_AUTH_POSTGRES_PASS: 5 Chromium tests, real PostgreSQL CRUD, JWT roles and owner isolation");
+  for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
+    const count = Number(await docker(["exec", dbName, "psql", "-U", "app", "-d", "app",
+      "-tAc", "SELECT count(*) FROM work_item_audit WHERE owner_id='owner-a' AND action='" + action + "'"]));
+    assert.ok(count >= min, "Transactional PostgreSQL audit missing " + action + " events");
+  }
+  console.log("FULLSTACK_AUTH_POSTGRES_PASS: 5 Chromium tests, JWT roles, owner isolation and transactional DB audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));
