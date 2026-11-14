@@ -69,7 +69,19 @@ function authorize(res, url) {
     && q.get("redirect_uri") === redirectUri && q.get("code_challenge_method") === "S256"
     && /^[A-Za-z0-9_-]{43,128}$/.test(challenge) && state.length > 16 && nonce.length > 16
     && (q.get("scope") || "").split(" ").includes("openid");
-  if (!valid) return fail(res, 400, "invalid_request");
+  if (!valid) {
+    console.error("OIDC_AUTHORIZE_REJECT", JSON.stringify({
+      responseType: q.get("response_type"),
+      clientMatch: q.get("client_id") === clientId,
+      redirectMatch: q.get("redirect_uri") === redirectUri,
+      method: q.get("code_challenge_method"),
+      challengeLength: challenge.length,
+      stateLength: state.length,
+      nonceLength: nonce.length,
+      openidScope: (q.get("scope") || "").split(" ").includes("openid")
+    }));
+    return fail(res, 400, "invalid_request");
+  }
   const code = randomBytes(32).toString("base64url");
   codes.set(code, { challenge, state, nonce, expires: Date.now() + 60_000, used: false });
   const to = new URL(redirectUri);
