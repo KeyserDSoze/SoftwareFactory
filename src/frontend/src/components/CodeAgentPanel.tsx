@@ -4,6 +4,8 @@ import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { FeatureEdit, FeatureProposal } from "../domain/development";
 import { approvePending, developmentOf, dropConflictingChanges, rejectPending, saveReview, setPending, undoLatest, validateProposal, workspaceConflicts } from "../domain/development";
 import { lineDiff } from "../application/code-diff";
+import RunnerPanel from "./RunnerPanel";
+import "./runner.css";
 import { proposeCode, reviewCode } from "../application/code-agent";
 
 type Props = {
@@ -163,6 +165,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         <button className="primary" disabled={busy || pending.review?.verdict !== "pass" || !!conflicts.length} onClick={approve}><CheckCircle2 size={16} /> Approva e applica</button>
       </div></div>
     </section>}
+<RunnerPanel project={project} settings={settings} busy={busy} onProjectChange={onProjectChange} onNotice={onNotice} onError={onError} />
     <section className="panel"><div className="panel-title"><div><div className="eyebrow">03 / DEVELOPMENT HISTORY</div><h3>Modifiche approvate</h3></div><GitCommit size={19} className="muted" /></div>
       {dev.history.length === 0 ? <p className="dimmed">Nessuna feature è stata applicata. Le patch approvate saranno tracciate qui.</p> :
         <div className="feature-history">{[...dev.history].reverse().map(entry => <div key={entry.id} className="history-row">

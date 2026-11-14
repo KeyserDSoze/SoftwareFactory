@@ -60,6 +60,7 @@ export interface FactorySettings {
   profiles: AiProfile[];
   assignments: Record<StageId, string>;
   searchEndpoint: string;
+  runnerEndpoint?: string;
   git: GitConfig;
   cloud: CloudConfig;
 }

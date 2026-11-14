@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS: FactorySettings = {
   profiles: [{ id: "default", label: "OpenAI-compatible", baseUrl: "https://api.openai.com/v1", model: "", enabled: true }],
   assignments: { features: "default", competitors: "default", technical: "default", architecture: "default", adversarial: "default", implementation: "default" },
   searchEndpoint: "",
+  runnerEndpoint: "",
   git: { owner: "", repo: "", branch: "main", authMode: "pat", appGateway: "", privateRepo: true },
   cloud: { provider: "google", clientId: "" },
 };

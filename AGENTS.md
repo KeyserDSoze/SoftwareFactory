@@ -42,3 +42,11 @@ npm run fixture
 ```
 
 In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il web generati nel fixture.
+
+## Runner remoto (issue #2)
+
+- I sorgenti possono essere inviati con consenso esplicito a una API `src/runner/` separata dal worker Docker rootless.
+- API key con almeno 32 caratteri; CORS su origin espliciti; segreti solo sessionStorage nel frontend.
+- Comandi di test fissati da codice runner, rete dei job disabilitata, limiti CPU/RAM/timeout, report e digest conservati sul server.
+- Il socket Docker rootless è montato **solo nel worker**, mai nell'API esposta; è comunque privilegiato e richiede host/VM dedicati.
+- Runner senza test configurati segnala `incomplete`, mai `passed`. Build offline possono fallire se mancano dipendenze pre-caricate.

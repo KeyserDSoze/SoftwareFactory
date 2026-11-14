@@ -20,6 +20,15 @@
 - Documentazione `docs/code-agent.md` e ADR 0004
 - **Ancora da fare:** loop edit/build/test automatico in sandbox isolata, patch repair e test dinamici
 
+## v0.2 — Remote runner (MVP, issue #2)
+
+- API HTTP separata dal worker con API key, CORS esplicito, quote payload e coda persistente sul server
+- Worker Docker rootless con step fissi: build/test .NET, build/test web e Playwright quando configurato
+- Isolamento per job: rete off, caps dropped, no-new-privileges, pids/CPU/RAM/timeout, workspace temporaneo
+- UI Code Agent: invio del workspace o della proposta, polling esiti e log, senza dichiarazioni di test non eseguiti
+- Compose opzionale con `cloudflared` e documentazione Cloudflare Tunnel/Access
+- **Non ancora production-ready:** host VM dedicato, cache dipendenze egress-controlled, hardening/isolamento più forte e ciclo di autoriparazione
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

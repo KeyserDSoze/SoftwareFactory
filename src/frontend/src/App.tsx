@@ -342,6 +342,12 @@ export default function App() {
             <p className="helper">Per competitor e documentazione usa un gateway di ricerca web compatibile CORS che risponde a <code>GET ?q=...</code> con <code>{"{results:[{title,url,snippet}]}"}</code>. Senza gateway usa il fallback Wikipedia, che non è sufficiente per verifiche normative o competitive.</p>
             <label>Search gateway URL (opzionale)<input value={settings.searchEndpoint} placeholder="https://gateway.example.com/search" onChange={e => editSettings(s => { s.searchEndpoint = e.target.value; })} /></label>
           </section>
+          <section className="panel"><div className="panel-title"><div><span className="eyebrow">REMOTE EXECUTION</span><h3>Runner Docker remoto</h3></div><Terminal size={20} /></div>
+            <p className="helper">Connetti una API su HTTPS esposta tramite Cloudflare Tunnel e protetta da API key. Il worker Docker deve essere isolato su una macchina dedicata; non inserire credenziali cloud nel runner.</p>
+            <div className="form-grid"><label>Runner API URL<input value={settings.runnerEndpoint || ""} placeholder="https://runner.example.com" onChange={e => editSettings(s => { s.runnerEndpoint = e.target.value; })}/></label>
+              <label>Runner API key (solo sessione)<SecretInput secretKey="runner.key" placeholder="API key del tuo runner"/></label></div>
+            <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
+          </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
             <div className="form-grid"><label>Owner<input value={settings.git.owner} placeholder="Username o organizzazione" onChange={e => editSettings(s => { s.git.owner = e.target.value; })} /></label>
               <label>Repository<input value={settings.git.repo} placeholder="my-application" onChange={e => editSettings(s => { s.git.repo = e.target.value; })} /></label>
