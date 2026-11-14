@@ -4,15 +4,67 @@ import { scrub } from "./common.mjs";
 
 const SAFE_IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{2,180}$/;
 const TIME_LIMIT_MS = 120_000;
+const PACKAGE_VERSION = /^(?:\^|~|>=?|<=?|=)?\d+(?:\.\d+){0,2}(?:-[a-zA-Z0-9.-]+)?(?:\s*\|\|\s*(?:\^|~|>=?|<=?|=)?\d+(?:\.\d+){0,2}(?:-[a-zA-Z0-9.-]+)?)*$/;
+const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const NODE_IMAGE = "node:22-bookworm-slim";
+
 function imageFor(step, files, env) {
   const framework = files["src/backend/applications/Api/Api.csproj"]?.match(/<TargetFramework>net(10|11)\.0<\/TargetFramework>/)?.[1] || "11";
-  const image = step.startsWith("dotnet-") ?
-    (framework === "10" ? (env.RUNNER_DOTNET10_IMAGE || "mcr.microsoft.com/dotnet/sdk:10.0") :
-      (env.RUNNER_DOTNET11_IMAGE || "mcr.microsoft.com/dotnet/sdk:11.0")) :
-    step === "playwright" ? (env.RUNNER_PLAYWRIGHT_IMAGE || "mcr.microsoft.com/playwright:v1.56.1-noble") :
-    (env.RUNNER_NODE_IMAGE || "node:22-alpine");
+  const image = step.startsWith("dotnet-")
+    ? framework === "10"
+      ? (env.RUNNER_DOTNET10_IMAGE || "mcr.microsoft.com/dotnet/sdk:10.0")
+      : (env.RUNNER_DOTNET11_IMAGE || "mcr.microsoft.com/dotnet/sdk:11.0")
+    : step === "playwright"
+      ? (env.RUNNER_PLAYWRIGHT_IMAGE || "mcr.microsoft.com/playwright:v1.56.1-noble")
+      : (env.RUNNER_NODE_IMAGE || NODE_IMAGE);
   if (!SAFE_IMAGE.test(image)) throw new Error("Invalid administrator-configured Docker image");
   return image;
+}
+export function validateNpmManifest(content) {
+  let manifest;
+  try { manifest = JSON.parse(content); }
+  catch { throw new Error("Invalid npm package.json: not valid JSON"); }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
+    throw new Error("Invalid npm package.json: object required");
+  // Install is data-only: no lifecycle scripts. Do not allow package escape via
+  // file:, git+, http(s), npm aliases, workspaces or override registries.
+  for (const field of ["workspaces", "overrides", "resolutions", "bundledDependencies", "bundleDependencies", "publishConfig", "config"]) {
+    if (field in manifest) throw new Error("Unsupported npm manifest field: " + field);
+  }
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+    if (!(field in manifest)) continue;
+    const values = manifest[field];
+    if (!values || typeof values !== "object" || Array.isArray(values) || Object.keys(values).length > 80)
+      throw new Error("Invalid npm dependency table: " + field);
+    for (const [name, version] of Object.entries(values)) {
+      if (!PACKAGE_NAME.test(name) || typeof version !== "string" || !PACKAGE_VERSION.test(version))
+        throw new Error("Unsafe or unsupported npm dependency: " + name);
+    }
+  }
+  if ("scripts" in manifest && (!manifest.scripts || typeof manifest.scripts !== "object" ||
+      Array.isArray(manifest.scripts) || Object.values(manifest.scripts).some(v => typeof v !== "string")))
+    throw new Error("Invalid npm scripts");
+  return manifest;
+}
+function dockerArgs(workdir, image, command, { network = "none" } = {}) {
+  if (!path.isAbsolute(workdir) || /[\n\r:,]/.test(workdir)) throw new Error("Invalid workdir mount");
+  return [
+    "run", "--rm", "--network", network, "--read-only", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
+    "--user=0:0", "--shm-size=256m",
+    "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
+    "--mount", "type=bind,src=" + workdir + ",dst=/work,rw",
+    "--workdir=/work", "--env=HOME=/tmp", "--env=DOTNET_CLI_HOME=/tmp",
+    "--env=NUGET_PACKAGES=/work/.nuget/packages", "--env=NPM_CONFIG_CACHE=/work/.npm",
+    "--env=CI=true", image, ...command,
+  ];
+}
+function createPlan(step, files, workdir, command, env, options = {}) {
+  const image = imageFor(step, files, env);
+  return { image, command, args: dockerArgs(workdir, image, command, options), timeoutMs: TIME_LIMIT_MS };
+}
+function webSourcePresent(files) {
+  return typeof files["src/frontend/web/package.json"] === "string";
 }
 export function planStep(step, files, workdir, env = process.env) {
   let command;
@@ -23,31 +75,48 @@ export function planStep(step, files, workdir, env = process.env) {
     if (!files["tests/backend/Tests.csproj"]) return { skip: "No tests/backend/Tests.csproj (no .NET tests configured)" };
     command = ["dotnet", "test", "tests/backend/Tests.csproj", "-c", "Release", "--nologo"];
   } else if (step === "web-build" || step === "web-test") {
-    if (!files["src/frontend/web/package.json"]) return { skip: "No frontend package.json" };
-    let scripts;
-    try { scripts = JSON.parse(files["src/frontend/web/package.json"]).scripts || {}; }
-    catch { return { skip: "Invalid package.json" }; }
-    if (step === "web-test" && typeof scripts.test !== "string") return { skip: "No npm test script configured" };
-    command = ["/bin/sh", "-c", "cd src/frontend/web && npm install --offline --ignore-scripts --no-audit --no-fund && npm run " +
-      (step === "web-test" ? "test" : "build")];
+    if (!webSourcePresent(files)) return { skip: "No frontend package.json" };
+    const scripts = validateNpmManifest(files["src/frontend/web/package.json"]).scripts || {};
+    if (typeof scripts[step === "web-build" ? "build" : "test"] !== "string")
+      return { skip: "No npm " + (step === "web-build" ? "build" : "test") + " script configured" };
+    command = ["npm", "run", step === "web-test" ? "test" : "build", "--prefix", "src/frontend/web"];
   } else if (step === "playwright") {
     if (!Object.keys(files).some(p => p.startsWith("src/frontend/web/e2e/") && p.endsWith(".spec.ts")))
       return { skip: "No Playwright e2e/*.spec.ts files configured" };
+    if (!webSourcePresent(files)) return { skip: "No frontend package.json for Playwright" };
+    validateNpmManifest(files["src/frontend/web/package.json"]);
     command = ["/bin/sh", "-c", "cd src/frontend/web && npx --no-install playwright test --reporter=line"];
   } else throw new Error("Unsupported execution step");
-  if (!path.isAbsolute(workdir) || /[\n\r:,]/.test(workdir)) throw new Error("Invalid workdir mount");
-  const image = imageFor(step, files, env);
-  const args = [
-    "run", "--rm", "--network", "none", "--read-only", "--cap-drop=ALL",
-    "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
-    "--user=0:0", "--shm-size=256m",
-    "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
-    "--mount", "type=bind,src=" + workdir + ",dst=/work,rw",
-    "--workdir=/work", "--env=HOME=/tmp", "--env=DOTNET_CLI_HOME=/tmp",
-    "--env=NUGET_PACKAGES=/work/.nuget/packages", "--env=NPM_CONFIG_CACHE=/work/.npm",
-    "--env=CI=true", image, ...command,
-  ];
-  return { image, command, args, timeoutMs: TIME_LIMIT_MS };
+  return createPlan(step, files, workdir, command, env);
+}
+/**
+ * Dependency acquisition is a distinct, unprivileged, read-only-rootfs container.
+ * Test containers NEVER have a network. Only the operator can opt in to npm
+ * registry access, and all npm lifecycle scripts remain disabled.
+ */
+export function planWebDependencies(files, workdir, env = process.env) {
+  if (!webSourcePresent(files)) return { skip: "No frontend package.json" };
+  validateNpmManifest(files["src/frontend/web/package.json"]);
+  const online = env.RUNNER_ALLOW_NET_DEPS === "true";
+  const registry = env.RUNNER_NPM_REGISTRY || "https://registry.npmjs.org/";
+  if (online) {
+    const url = new URL(registry);
+    if (url.protocol !== "https:" || url.username || url.password || url.hash || url.search)
+      throw new Error("Registry must be a public HTTPS origin without credentials");
+  }
+  const command = ["npm", "install", "--prefix", "src/frontend/web",
+    "--ignore-scripts", "--no-audit", "--no-fund", "--no-save", "--package-lock=false",
+    "--no-update-notifier", "--no-progress"];
+  if (online) command.push("--registry=" + registry);
+  else command.push("--offline");
+  const image = imageFor("web-build", files, env);
+  return { image, command, args: dockerArgs(workdir, image, command, { network: online ? "bridge" : "none" }),
+    timeoutMs: TIME_LIMIT_MS, online };
+}
+const INFRA_FAILURE = /(?:Cannot connect to the Docker daemon|error during connect|Unable to find image|pull access denied|manifest unknown|failed to (?:create|start) task|OCI runtime create failed|no space left on device|\bNU1301\b|\bENOTCACHED\b|\bEAI_AGAIN\b|npm error code ENOTFOUND|npm ERR! code ENOTFOUND|network is unreachable|TLS handshake timeout)/i;
+export function isInfrastructureFailure(result) {
+  return result.state === "failed" &&
+    (result.exitCode === null || INFRA_FAILURE.test((result.stderr || "") + "\n" + (result.stdout || "")));
 }
 export function runDockerStep(plan, id, step, { spawnProcess = spawn, timeoutMs = plan.timeoutMs } = {}) {
   const name = "sf-" + id.slice(0, 8) + "-" + step;

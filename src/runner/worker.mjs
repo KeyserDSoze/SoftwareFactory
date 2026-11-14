@@ -2,12 +2,15 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from "./common.mjs";
-import { planStep, runDockerStep } from "./docker.mjs";
+import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep } from "./docker.mjs";
 
 export async function executeJob(id, {
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   workspaceRoot = process.env.RUNNER_HOST_WORK_DIR || "/srv/softwarefactory/workspaces",
   executeStep = runDockerStep,
+  createStepPlan = planStep,
+  createDependencyPlan = planWebDependencies,
+  environment = process.env,
 } = {}) {
   const dir = jobDirectory(dataDir, id);
   const reportFile = path.join(dir, "report.json");
@@ -16,11 +19,10 @@ export async function executeJob(id, {
   const input = JSON.parse(await readFile(path.join(dir, "input.json"), "utf8"));
   const { request, digest } = validateRequest(input);
   if (digest !== report.digest) throw new Error("Input digest mismatch");
-  // Workspace path must be identical on the worker and the rootless Docker host.
   const destination = path.resolve(workspaceRoot, id);
   if (!path.isAbsolute(workspaceRoot) || destination === path.resolve(workspaceRoot))
     throw new Error("Invalid worker workspace root");
-  report = { ...report, state: "running", startedAt: new Date().toISOString(), summary: "Worker started" };
+  report = { ...report, state: "running", startedAt: new Date().toISOString(), summary: "Worker started", preparation: null };
   await atomicWrite(reportFile, report);
   try {
     await mkdir(destination, { mode: 0o700, recursive: true });
@@ -30,18 +32,45 @@ export async function executeJob(id, {
       await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       await writeFile(target, content, { mode: 0o600, flag: "wx" });
     }
+    let prepared = false, blocked = "";
     for (const step of request.steps) {
-      const plan = planStep(step, request.files, destination);
-      const result = plan.skip ? { step, state: "skipped", reason: plan.skip } : await executeStep(plan, id, step);
-      report.results.push(result);
+      const plan = createStepPlan(step, request.files, destination, environment);
+      if (plan.skip) {
+        report.results.push({ step, state: "skipped", reason: plan.skip });
+      } else if (step === "web-build" || step === "web-test" || step === "playwright") {
+        if (!prepared) {
+          prepared = true;
+          const setupPlan = createDependencyPlan(request.files, destination, environment);
+          const setupResult = setupPlan.skip
+            ? { step: "npm-prepare", state: "skipped", reason: setupPlan.skip }
+            : await executeStep(setupPlan, id, "npm-prepare");
+          report.preparation = setupResult;
+          await atomicWrite(reportFile, report);
+          if (setupResult.state !== "passed") {
+            blocked = "Node dependency setup failed (not a code test). " +
+              (setupResult.reason || setupResult.stderr || "Inspect runner configuration").slice(0, 450);
+          }
+        }
+        if (blocked) report.results.push({ step, state: "skipped", reason: blocked });
+        else {
+          const result = await executeStep(plan, id, step);
+          report.results.push(isInfrastructureFailure(result) ?
+            { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result);
+        }
+      } else {
+        const result = await executeStep(plan, id, step);
+        report.results.push(isInfrastructureFailure(result) ?
+          { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result);
+      }
       await atomicWrite(reportFile, report);
-      if (result.state === "failed") break;
+      if (report.results[report.results.length - 1].state === "failed") break;
     }
     const failed = report.results.some(r => r.state === "failed");
     const skipped = report.results.some(r => r.state === "skipped");
     report.state = failed ? "failed" : skipped ? "incomplete" : "passed";
-    report.summary = failed ? "At least one execution step failed" :
-      skipped ? "Some steps were not configured; this is NOT a complete pass" : "All requested steps executed and passed";
+    report.summary = failed ? "At least one executed code test failed" :
+      skipped ? "Some checks were skipped due to missing tests or infrastructure setup; NOT a pass" :
+        "All requested steps executed and passed";
   } catch (error) {
     report.state = "failed";
     report.summary = "Worker error: " + scrub(error instanceof Error ? error.message : String(error));
@@ -75,7 +104,6 @@ export async function runWorker({
           continue;
         }
         if (report.state === "queued") queued.push({ id, acceptedAt: report.acceptedAt });
-        // Fail closed on restart rather than pretending interrupted runs completed.
         if (report.state === "running") {
           await atomicWrite(path.join(jobDirectory(dataDir, id), "report.json"), {
             ...report, state: "failed", finishedAt: new Date().toISOString(),
@@ -89,9 +117,13 @@ export async function runWorker({
       try { await executeJob(queued[0].id, { dataDir, workspaceRoot }); }
       catch(e) {
         console.error("Failed to handle job " + queued[0].id + ": " + scrub(e.message));
-        try { const dir = jobDirectory(dataDir, queued[0].id); const report = await readReport(dataDir, queued[0].id);
-          await atomicWrite(path.join(dir, "report.json"), { ...report, state: "failed", finishedAt: new Date().toISOString(), summary: "Worker rejected job" }); }
-        catch { /* cannot persist report */ }
+        try {
+          const dir = jobDirectory(dataDir, queued[0].id);
+          const report = await readReport(dataDir, queued[0].id);
+          await atomicWrite(path.join(dir, "report.json"), {
+            ...report, state: "failed", finishedAt: new Date().toISOString(), summary: "Worker rejected job",
+          });
+        } catch { /* cannot persist report */ }
       }
     } else await new Promise(resolve => setTimeout(resolve, pollMs));
   }
