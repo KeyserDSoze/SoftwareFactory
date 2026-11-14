@@ -143,6 +143,32 @@ describe("application scaffold", () => {
       expect(files[".github/workflows/ci.yml"]).not.toContain("E2E_DATABASE=postgresql");
     }
   });
+  it("emits real OIDC code+PKCE UI and production-only JWKS verifier with explicit legacy-dev mode", () => {
+    const files = generateFiles(example());
+    const auth = files["src/backend/applications/Api/AuthStartup.cs"];
+    const oidc = files["src/frontend/web/src/oidc.ts"];
+    const ui = files["src/frontend/web/src/WorkItems.tsx"];
+    expect(auth).toContain('Auth:Mode"] ?? "oidc"');
+    expect(auth).toContain('mode == "legacy" && builder.Environment.IsProduction()');
+    expect(auth).toContain("options.Authority = issuer");
+    expect(auth).toContain("options.RefreshOnIssuerKeyNotFound = true");
+    expect(auth).toContain("SecurityAlgorithms.RsaSha256");
+    expect(auth).toContain("RequireHttpsMetadata = !builder.Environment.IsDevelopment()");
+    expect(oidc).toContain("UserManager");
+    expect(oidc).toContain('response_type: "code"');
+    expect(oidc).toContain("WebStorageStateStore");
+    expect(oidc).toContain("extraQueryParams");
+    expect(ui).toContain("signinRedirect()");
+    expect(ui).toContain("signinRedirectCallback()");
+    expect(ui).toContain("signoutRedirect()");
+    expect(ui).toContain("Accesso OpenID Connect");
+    expect(JSON.parse(files["src/frontend/web/package.json"]).dependencies["oidc-client-ts"]).toBe("3.5.0");
+    expect(files["docker/compose.yml"]).toContain("AUTH_MODE:-oidc");
+    expect(files["docker/compose.yml"]).toContain("Auth__Authority");
+    expect(files[".github/workflows/ci.yml"]).toContain("Auth__Mode=legacy");
+    expect(oidc).not.toContain("Auth__SigningKey");
+    expect(ui).not.toContain("VITE_OIDC_CLIENT_SECRET");
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";
