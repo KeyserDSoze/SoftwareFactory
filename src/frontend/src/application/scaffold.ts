@@ -55,19 +55,19 @@ function terraform(c: ProjectConfig, slug: string): string {
   const head = ['terraform {', '  required_version = ">= 1.7.0"'];
   if (c.deployment === "azure") {
     return lines(...head, '  required_providers { azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" } }', "}",
-      'variable "subscription_id" { type = string }', 'variable "location" {\\n  type = string\\n  default = "westeurope"\\n}',
-      'provider "azurerm" { features {} subscription_id = var.subscription_id }',
+      'variable "subscription_id" { type = string }', 'variable "location" {\n  type = string\n  default = "westeurope"\n}',
+      'provider "azurerm" {', '  features {}', '  subscription_id = var.subscription_id', '}',
       'resource "azurerm_resource_group" "app" {', '  name = "' + slug + '-rg"', '  location = var.location', '}');
   }
   if (c.deployment === "aws") {
     return lines(...head, '  required_providers { aws = { source = "hashicorp/aws", version = "~> 6.0" } }', "}",
-      'variable "region" {\\n  type = string\\n  default = "eu-west-1"\\n}',
+      'variable "region" {\n  type = string\n  default = "eu-west-1"\n}',
       'provider "aws" { region = var.region }', "# Add a private network, compute, storage and database with reviewed IAM policies.");
   }
   if (c.deployment === "gcp") {
     return lines(...head, '  required_providers { google = { source = "hashicorp/google", version = "~> 7.0" } }', "}",
-      'variable "project_id" { type = string }', 'variable "region" {\\n  type = string\\n  default = "europe-west1"\\n}',
-      'provider "google" { project = var.project_id, region = var.region }',
+      'variable "project_id" { type = string }', 'variable "region" {\n  type = string\n  default = "europe-west1"\n}',
+      'provider "google" {', '  project = var.project_id', '  region = var.region', '}',
       "# Add reviewed Cloud Run/GKE, network, Cloud SQL and IAM resources.");
   }
   return lines(...head, "}", '# Local/on-prem deployment: Docker Compose or Kubernetes manifests are under docker/ and infra/kubernetes/.');
