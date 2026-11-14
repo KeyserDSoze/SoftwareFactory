@@ -22,3 +22,17 @@ Questo avvia solo la SPA Factory. Per provare un'app generata, scarica il suo ZI
 GitHub Pages: workflow `.github/workflows/pages.yml`. Selezionare **Settings → Pages → Build and deployment → Source: GitHub Actions**. L'azione deploya build statici, non credenziali.
 
 Problemi frequenti: alcuni provider AI non espongono CORS per browser; usa un proxy fidato con gestione sicura dei token. Le richieste HTTP a un modello locale sono permesse soltanto su localhost. I test CI non chiamano API AI né cloud vere.
+
+## Remote Test Runner sperimentale (issue #2)
+
+La API e il worker sono in `src/runner/`; non servono per avviare la SPA.
+
+```bash
+cd src/runner
+npm run check
+npm test
+```
+
+I test del runner coprono il protocollo HTTP, autenticazione, allowlist dei file, specifiche di isolamento Docker e report simulati, non lanciano il daemon Docker. La CI verifica anche il build delle immagini API/worker.
+
+Su una VM dedicata con Docker rootless: seguire la guida [Remote Runner](runner.md), comprendendo tunnel Cloudflare, origin CORS, key, gestione socket e limiti delle dipendenze offline. Non usare una VM di produzione condivisa.

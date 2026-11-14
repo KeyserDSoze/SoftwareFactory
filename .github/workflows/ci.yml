@@ -25,6 +25,18 @@ jobs:
       - name: Build Factory
         run: npm run build
         working-directory: src/frontend
+      - name: Validate remote runner syntax
+        run: npm run check
+        working-directory: src/runner
+      - name: Test remote runner protocol and worker
+        run: npm test
+        working-directory: src/runner
+      - name: Check runner Docker Compose configuration
+        run: docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml config --quiet
+      - name: Build remote runner API container
+        run: docker build -f docker/runner/Dockerfile.api -t softwarefactory-runner-api:ci .
+      - name: Build remote runner worker container
+        run: docker build -f docker/runner/Dockerfile.worker -t softwarefactory-runner-worker:ci .
       - name: Generate sample application
         run: npm run fixture
         working-directory: src/frontend
