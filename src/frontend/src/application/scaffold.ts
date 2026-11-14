@@ -20,6 +20,13 @@ function dockerCompose(c: ProjectConfig): string {
     "      Database__Provider: " + c.database,
     c.database === "postgresql" ? '      Database__ConnectionString: "Host=db;Port=5432;Database=app;Username=app;Password=${DB_PASSWORD:?Set DB_PASSWORD in .env}"' : '      Database__ConnectionString: "${DATABASE_URL:-}"',
   ];
+  if (c.database === "postgresql") {
+    services.push(
+      '      Auth__Issuer: "${AUTH_ISSUER:?Set AUTH_ISSUER in docker/.env}"',
+      '      Auth__Audience: "${AUTH_AUDIENCE:?Set AUTH_AUDIENCE in docker/.env}"',
+      '      Auth__SigningKey: "${AUTH_SIGNING_KEY:?Generate a random AUTH_SIGNING_KEY in docker/.env}"',
+    );
+  }
   if (deps.length) services.push("    depends_on:", "      db:", "        condition: " + (c.database === "postgresql" ? "service_healthy" : "service_started"));
   services.push(
     "  web:", "    build:", "      context: ..", "      dockerfile: docker/Web.Dockerfile",
@@ -204,6 +211,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "", "## Prerequisiti", "", "- .NET SDK " + c.dotnetVersion,
       "- Node.js 22 e npm", "- Docker Compose (opzionale)", "",
       "## Avvio locale", "", "1. Imposta `DB_PASSWORD` in un file `docker/.env` locale (non committare segreti).",
+      "2. Per PostgreSQL configura anche AUTH_ISSUER e AUTH_AUDIENCE, poi genera AUTH_SIGNING_KEY con openssl rand -hex 48.",
       "2. `docker compose --env-file docker/.env -f docker/compose.yml up --build`",
       "3. Web: http://localhost:3000 — API: http://localhost:8080/health", "",
       "## Test browser (smoke con API simulata)", "",
@@ -232,7 +240,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "- Frontend: " + c.frontends.join(", "), "- Database: " + c.database,
       "- Deploy target: " + c.deployment, "", "## Rischi e alternative", "", done("adversarial")),
     "docker/compose.yml": dockerCompose(c),
-    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
+    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
     "docker/Api.Dockerfile": lines("FROM mcr.microsoft.com/dotnet/sdk:" + c.dotnetVersion + " AS build",
       "WORKDIR /app", "COPY src/backend/ ./src/backend/", "RUN dotnet publish src/backend/applications/Api/Api.csproj -c Release -o /out",
       "FROM mcr.microsoft.com/dotnet/aspnet:" + c.dotnetVersion, "WORKDIR /app", "COPY --from=build /out ./",
