@@ -91,7 +91,7 @@ export async function backupCloud(project: FactoryProject, settings: FactorySett
     method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body: content,
   });
 }
-export async function restoreCloud(settings: FactorySettings): Promise<FactoryProject> {
+export async function restoreCloud(settings: FactorySettings): Promise<{ project: FactoryProject; settings?: FactorySettings }> {
   const provider = settings.cloud.provider;
   const token = readSecret("cloud." + provider);
   if (!token) throw new Error("Accesso cloud non attivo.");
@@ -109,6 +109,12 @@ export async function restoreCloud(settings: FactorySettings): Promise<FactoryPr
     throw new Error("Backup cloud non valido.");
   const project = data.project as FactoryProject;
   if (!project.id || !Array.isArray(project.stages) || !project.config?.name) throw new Error("Progetto cloud incompleto.");
-  return project;
+  const restored = "settings" in data ? data.settings : undefined;
+  const cloudSettings = restored && typeof restored === "object" && "profiles" in restored && Array.isArray(restored.profiles) &&
+    "assignments" in restored && typeof restored.assignments === "object" && restored.assignments &&
+    "git" in restored && typeof restored.git === "object" && restored.git &&
+    "cloud" in restored && typeof restored.cloud === "object" && restored.cloud
+    ? restored as FactorySettings : undefined;
+  return { project, settings: cloudSettings };
 }
 export function saveCloudConfig(settings: FactorySettings): void { persistSettings(settings); }

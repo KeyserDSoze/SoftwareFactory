@@ -188,8 +188,15 @@ export default function App() {
       else {
         if (!confirm("Ripristinare il progetto dal cloud e sostituire quello locale corrente?")) return;
         const recovered = await restoreCloud(settingsRef.current);
-        changeProject({ ...recovered, stages: recovered.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) });
-        setNotice("Progetto ripristinato dal cloud.");
+        changeProject({ ...recovered.project, stages: recovered.project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) });
+        if (recovered.settings) editSettings(s => {
+          s.profiles = recovered.settings!.profiles;
+          s.assignments = recovered.settings!.assignments;
+          s.searchEndpoint = recovered.settings!.searchEndpoint;
+          s.git = recovered.settings!.git;
+          s.cloud = recovered.settings!.cloud;
+        });
+        setNotice("Progetto e impostazioni non segrete ripristinati dal cloud.");
       }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
@@ -331,7 +338,7 @@ export default function App() {
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
             <div className="form-grid"><label>Owner<input value={settings.git.owner} placeholder="Username o organizzazione" onChange={e => editSettings(s => { s.git.owner = e.target.value; })} /></label>
               <label>Repository<input value={settings.git.repo} placeholder="my-application" onChange={e => editSettings(s => { s.git.repo = e.target.value; })} /></label>
-              <label>Branch<select value={settings.git.branch} onChange={e => editSettings(s => { s.git.branch = e.target.value; })}><option value="main">main (predefinito)</option><option value="develop">develop</option><option value="feature/initial-scaffold">feature/initial-scaffold</option></select></label>
+              <label>Branch<input value={settings.git.branch} placeholder="main oppure feature/nome" onChange={e => editSettings(s => { s.git.branch = e.target.value; })} /></label>
               <label>Tipo connessione<select value={settings.git.authMode} onChange={e => editSettings(s => { s.git.authMode = e.target.value as "pat" | "app"; })}><option value="pat">PAT fine-grained</option><option value="app">GitHub App · gateway server</option></select></label>
               {settings.git.authMode === "pat" ? <label>PAT (temporaneo)<SecretInput secretKey="github.pat" placeholder="github_pat_..." /></label> :
                 <label>GitHub App token gateway HTTPS<input value={settings.git.appGateway} placeholder="https://your-backend.example.com/github/token" onChange={e => editSettings(s => { s.git.appGateway = e.target.value; })} /></label>}</div>

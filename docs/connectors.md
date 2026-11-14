@@ -38,3 +38,5 @@ Al push SoftwareFactory crea una tree e un commit git e tenta di avanzare la ref
 4. Il backup scrive su `/me/drive/special/approot:/softwarefactory-state.json:/content`.
 
 In entrambi i casi i token OAuth hanno durata limitata e non viene implementato un refresh persistente. Il backup sovrascrive lo snapshot precedente e contiene descrizione e piani, **non** PAT/API key. La configurazione OAuth e il consenso dell'utente sono necessari: non esiste una connessione automatica preautorizzata.
+
+Al ripristino si recuperano anche profili AI, routing e configurazione Git/cloud **senza credenziali**: PAT e access token vanno reinseriti nella nuova sessione.
