@@ -12,7 +12,8 @@
 - ZIP sorgenti e pubblicazione GitHub diretta (PAT fine-grained, GitHub App tramite token broker), branch `main` di default oppure branch separato. Il commit usa fast-forward, mai force push.
 - Google Drive appDataFolder / Microsoft OneDrive app folder: OAuth 2.0 PKCE con client ID configurabile, backup/ripristino JSON.
 - **Repair guidato dagli errori**: report associati al digest SHA-256 del codice; patch AI di correzione con massimo due tentativi, vincoli sui file e nuova review/test prima dell'approvazione.
-- **Playwright Chromium E2E**: due test browser con API simulata e test di integrazione reali tra React e ASP.NET Core per /health e /api/info, nella CI dello scaffold e nella rete Docker interna della Factory.
+- **PostgreSQL reale nello scaffold DDD**: repository Npgsql parametrizzato, migrazione SQL versionata con advisory lock, endpoint demo CRUD e componente React. E2E Chromium verifica UI → API → PostgreSQL → API; test CI su database effimero.
+- **Playwright Chromium E2E**: test browser con API simulata e integrazione React↔ASP.NET Core su rete Docker privata.
 - **Runner verificato con Docker reale in CI**: preparazione npm separata dai test senza rete, dipendenze online solo con opt-in dell'amministratore e riconoscimento degli errori di setup.
 - **Remote Test Runner (MVP sperimentale)**: API autenticata con API key, worker Docker rootless separato, job isolati e report con exit code e log; Cloudflare Tunnel opzionale ([guida](docs/runner.md)).
 - **Code Agent supervisionato**: patch multi-file a sorgenti C#/React, review avversaria indipendente, confronto delle differenze, approvazione, undo, recovery dei conflitti ed export solo degli override approvati.
@@ -51,7 +52,7 @@ Apri l'indirizzo indicato da Vite (normalmente http://localhost:5173). In altern
 - Per GitHub App serve un **backend broker attendibile**, che rilasci installation token di breve durata: la chiave privata della App non può vivere in una SPA.
 - Per Google/Microsoft occorre registrare un'app OAuth pubblica e autorizzare esattamente l'URL di redirect mostrato in UI.
 - La sessionStorage e i token in memoria **non proteggono** da XSS o estensioni del browser malevole. Non usare modelli/API non fidati con dati sensibili.
-- Il test E2E in modalità mock usa /health simulato, mentre la modalità integration interroga la vera API ASP.NET Core e verifica la UI. I database selezionabili restano adapter non implementati: non esiste ancora un test di persistenza reale.
+- L'E2E in modalità mock usa /health simulato; in modalità integration verifica l'API .NET e, per il provider PostgreSQL, crea, legge ed elimina un record reale. **Solo PostgreSQL ha un adapter runtime funzionante**: MySQL, SQL Server e SQLite restano configurazioni/placeholder. L'endpoint CRUD demo non ha autenticazione né autorizzazione: non esporlo pubblicamente prima di implementare la sicurezza.
 - La pipeline AI gira **solo mentre la scheda è attiva**. Il salvataggio è locale, non è un worker persistente. Il browser può sospenderla in background.
 - Il generatore non garantisce conformità legale, qualità del codice o configurazione cloud pronta per produzione.
 - Gli input di ricerca e i contenuti dell'utente possono finire sui provider scelti: verificare privacy, permessi e termini.

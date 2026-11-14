@@ -63,6 +63,15 @@
 - Setup Vite con allowedHosts limitato a web nel test Docker, CORS esplicito sulla API
 - Database reale, isolamento worker remoto multi-container e servizi cloud ancora da implementare
 
+## v0.3 — PostgreSQL reale nel backend generato (issue #7)
+
+- Npgsql 10.0.3 pinato nello scaffold PostgreSQL, interfaccia dominio, servizio business e repository ADO.NET parametrizzato
+- Migrazione `0001_create_work_items.sql` come embedded resource, versionamento nel DB con advisory lock e applicazione transazionale all'avvio
+- Endpoint CRUD `/api/items`, React `WorkItems` e test browser CRUD reale in modalità integration
+- CI Factory: quattro container Docker (PostgreSQL, API .NET, Vite e Chromium) con rete `--internal` e password effimera
+- CI degli scaffold: Postgres 17 effimero, readiness, processo API con connessione esterna, browser E2E e cleanup
+- Restano aperti: autenticazione/autorizzazione CRUD, migrazioni avanzate/rollback, provider SQL Server/MySQL/SQLite, runner remoto su VM rootless e servizi di produzione
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

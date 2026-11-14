@@ -76,3 +76,11 @@ Il Code Agent separa tre concetti: review AI (opinione statica), build/test real
 La Factory genera due modalità di test Playwright: UI/mock senza backend esterno e integration con ASP.NET Core vero. La seconda esercita HTTP /health e /api/info su una API effettivamente avviata. In CI, tre container Docker (API, Vite, Chromium) comunicano su una rete bridge privata e interna al job senza esporre porte. La CI dello scaffold usa invece backend e Vite su loopback. Il browser non riceve token né socket Docker.
 
 La persistenza non è inclusa in questi risultati: PersistenceOptions è ancora solo un adapter placeholder. Un esito verde non dimostra funzionamento DB, servizi cloud né un deployment rootless sicuro su server dedicato.
+
+## Implementazione PostgreSQL DDD (issue #7)
+
+Lo scaffold con database `postgresql` genera `WorkItem` e `IWorkItemRepository` nel dominio, `WorkItemService` nel business layer e un adapter `PostgresWorkItemRepository` con `NpgsqlDataSource` in infrastructure. La API minimale espone GET/POST/DELETE su `/api/items`; un componente React permette creazione, elenco ed eliminazione. Gli ID UUID vengono generati dal dominio e le query usano esclusivamente parametri PostgreSQL posizionali, senza interpolazione SQL con dati utente.
+
+Un `PostgresSchemaMigrator` all'avvio controlla `factory_schema_migrations`, serializza le migrazioni sotto un advisory lock PostgreSQL e applica i file SQL incorporati in una transazione, marcando le versioni applicate. Una nuova installazione Postgres deve fornire la connessione tramite env; se manca, l'applicazione non avvia silenziosamente un finto database. PostgreSQL è l'unico backend di persistenza implementato; le altre scelte restano placeholder non testati.
+
+Il test browser d'integrazione verifica i record dopo roundtrip UI→HTTP→DB→HTTP, utilizzando due client separati (pagina e APIRequestContext). In CI, PostgreSQL gira in un container isolato con password casuale, stessa rete Docker privata di API/Vite/Chromium, senza pubblicare porte. La configurazione generata di Docker Compose espone Postgres soltanto su loopback locale in sviluppo, verifica `pg_isready` e inietta il segreto mediante `DB_PASSWORD` esterno al repository. Questa demo **non include auth o segregazione tenant**: non utilizzare l'endpoint CRUD per dati reali esposti su Internet.

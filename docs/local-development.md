@@ -57,3 +57,11 @@ Lo smoke usa un mock browser dell'endpoint API per controllare due stati UI. La 
 Per provarli su un progetto generato, eseguire dotnet build -c Release, npm install, npx playwright install chromium, poi avviare Api.dll sulla porta 8080 del loopback. Da un altro terminale avviare Playwright con E2E_MODE=integration, E2E_WEB_ORIGIN=http://127.0.0.1:4173, E2E_API_ORIGIN=http://127.0.0.1:8080 e VITE_API_URL=http://127.0.0.1:8080. La configurazione Playwright avvierà Vite e fermerà il webServer a fine test.
 
 La CI generata avvia e ferma automaticamente l'API. La CI della Factory esegue inoltre src/runner/scripts/fullstack-smoke.mjs su Docker con rete interna. Questi test coprono API + frontend, non il database.
+
+## Persistenza PostgreSQL nello scaffold
+
+Il provider `postgresql` produce un adapter reale Npgsql, non soltanto un manifest. Per avviare lo scaffold in locale usare `docker compose -f docker/compose.yml --env-file docker/.env up --build`, dopo aver impostato `DB_PASSWORD` casuale in `docker/.env` (non committarlo). Docker Compose crea PostgreSQL, ne attende `pg_isready`, passa una stringa di connessione parametrica alla API e avvia le migrazioni `Migrations/0001_create_work_items.sql`.
+
+L'interfaccia React include un modulo **Elementi salvati** con aggiunta, lista ed eliminazione persistite. `E2E_MODE=integration E2E_DATABASE=postgresql npm run test:e2e` verifica la UI e il database realmente esistente, quando API/PostgreSQL sono raggiungibili sulle URL configurate. La CI generata prepara e ripulisce un PostgreSQL temporaneo su `127.0.0.1:54329`, con password generata al volo.
+
+L'esempio API non autentica le richieste agli endpoint `/api/items`: non usarlo per dati privati né esporlo su un dominio pubblico. Per altre configurazioni database (SQL Server/MySQL/SQLite) questa integrazione non viene generata: occorre implementare l'adapter specifico.

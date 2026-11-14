@@ -78,3 +78,12 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - L'orchestrazione src/runner/scripts/fullstack-smoke.mjs deve funzionare solo nella CI con host effimero. Rete Docker --internal per job, zero published ports, cleanup in finally.
 - Mai esporre il socket Docker nella API del runner, nel browser o dentro i container test. Il runner remoto conserva --network none fino ad un progetto di autorizzazioni per job isolato.
 - L'origin web:4173 è ammesso esplicitamente nel CORS .NET e negli allowedHosts di Vite; non usare AllowAnyOrigin o allowedHosts: true.
+
+## PostgreSQL reale e migrazioni (issue #7)
+
+- Per lo scaffold PostgreSQL produrre un repository reale Npgsql con SQL parametrizzato, schema versionato in `Migrations/*.sql`, tracking della versione e advisory lock transazionale; non usare `EnsureCreated` implicito senza migrations.
+- La configurazione della password deve essere esterna ai sorgenti (variabile `Database__ConnectionString`, `DB_PASSWORD` in env) e generata casualmente per ogni test CI.
+- La CI Factory deve esercitare **un vero database Postgres** attraverso React→HTTP API→Npgsql→PostgreSQL→API→React, distinguendo da mock e dal semplice test API /health.
+- La CI degli scaffold con PostgreSQL deve preparare un database temporaneo, eseguirne la readiness, lanciare E2E CRUD e ripulire il container e l'API. Zero database condivisi.
+- Non dichiarare gli altri provider (MySQL, SQL Server, SQLite) implementati. L'endpoint CRUD demo PostgreSQL senza auth **non è sicuro per Internet**; bloccare il rilascio production finché mancano identity, authz, validation robusta, auditing e rate limiting.
+- L'orchestrazione con Docker rootful nella CI è permessa solo in un host GitHub effimero; la API del runner remoto non deve ricevere permessi Docker o network arbitrari.
