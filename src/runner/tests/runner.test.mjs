@@ -37,9 +37,13 @@ function request(endpoint, options = {}) {
 test("strict file allowlist excludes secrets, path traversal and symlink payloads", () => {
   assert.equal(isAllowedFile("src/backend/domain/Invoice.cs"), true);
   assert.equal(isAllowedFile("src/frontend/web/e2e/login.spec.ts"), true);
+  assert.equal(isAllowedFile("src/backend/infrastructure/Migrations/0001_create_work_items.sql"), true);
   for (const unsafe of ["../../etc/passwd", "src/backend/domain/../.env", ".github/workflows/ci.yml",
     "src/frontend/web/.npmrc", "src/frontend/web/src/.hidden.ts", "/root/.ssh/id_rsa",
-    "src/backend/domain/A.csproj/../../.env", "src/backend/domain/A\\foo.cs"])
+    "src/backend/domain/A.csproj/../../.env", "src/backend/domain/A\\foo.cs",
+    "src/backend/infrastructure/Migrations/secret.sql",
+    "src/backend/infrastructure/Migrations/../../.env",
+    "src/backend/domain/0001_create_work_items.sql"])
     assert.equal(isAllowedFile(unsafe), false, unsafe);
   assert.throws(() => validateRequest({ ...job(), files: { "src/backend/domain/foo.cs": "github_pat_abcdefghijklmnopqrstuvwxyz123456789" } }), /credential/);
   assert.throws(() => validateRequest({ ...job(), steps: ["dotnet-build", "dotnet-build"] }), /duplicated/);

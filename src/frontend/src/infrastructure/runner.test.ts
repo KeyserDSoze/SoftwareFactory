@@ -15,6 +15,8 @@ describe("remote runner browser client", () => {
     const files = runnerSourceFiles(p, false);
     expect(files["src/backend/applications/Api/Program.cs"]).toContain("MapGet");
     expect(files["src/frontend/web/src/App.tsx"]).toContain("Runner fixture");
+    expect(files["src/backend/infrastructure/Migrations/0001_create_work_items.sql"]).toContain("CREATE TABLE work_items");
+    expect(files["src/backend/infrastructure/PostgresWorkItemRepository.cs"]).toContain("Npgsql");
     expect(files[".softwarefactory/manifest.json"]).toBeUndefined();
     expect(files[".github/workflows/ci.yml"]).toBeUndefined();
     expect(files["docs/research.md"]).toBeUndefined();

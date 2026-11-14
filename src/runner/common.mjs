@@ -11,6 +11,7 @@ export const MAX_TOTAL_BYTES = 1_100_000;
 const SECRET_MARKERS = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_[a-zA-Z0-9_]{15,}|gh[pousr]_[a-zA-Z0-9]{20,}/;
 const allowed = [
   /^src\/backend\/(?:applications\/Api|business|domain|infrastructure)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:cs|csproj|json)$/,
+  /^src\/backend\/infrastructure\/Migrations\/[0-9]{4}_[A-Za-z0-9_-]+\.sql$/,
   /^src\/frontend\/web\/(?:src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:ts|tsx|css)|(?:index\.html|package\.json|package-lock\.json|vite\.config\.ts|tsconfig\.json|playwright\.config\.ts)|e2e\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.spec\.ts)$/,
   /^tests\/backend\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:cs|csproj|json)$/,
 ];
