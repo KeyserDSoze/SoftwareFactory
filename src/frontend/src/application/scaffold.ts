@@ -151,7 +151,7 @@ function frontendFiles(name: string): Record<string, string> {
       target: "ES2022", lib: ["ES2022", "DOM"], module: "ESNext", moduleResolution: "Bundler",
       jsx: "react-jsx", strict: true, skipLibCheck: true, noEmit: true, types: ["vite/client"],
     }, include: ["src"] }, null, 2) + "\n",
-    "src/frontend/web/vite.config.ts": lines('import { defineConfig } from "vite";', 'import react from "@vitejs/plugin-react";', "export default defineConfig({ plugins: [react()] });"),
+    "src/frontend/web/vite.config.ts": lines('import { defineConfig } from "vite";', 'import react from "@vitejs/plugin-react";', "export default defineConfig({ plugins: [react()], server: { allowedHosts: [\"web\"] } });"),
     "src/frontend/web/index.html": lines('<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + escapeHtml(name) + '</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>'),
     "src/frontend/web/src/main.tsx": lines('import React from "react";', 'import { createRoot } from "react-dom/client";', 'import App from "./App";', 'createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);'),
     "src/frontend/web/src/App.tsx": lines('import { useEffect, useState } from "react";',
