@@ -46,6 +46,8 @@ jobs:
       - name: Generate sample application
         run: npm run fixture
         working-directory: src/frontend
+      - name: Verify generated JWT fixture with ephemeral signing key
+        run: node src/runner/scripts/auth-fixture-smoke.mjs src/frontend/generated-fixture
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '11.0.x'
