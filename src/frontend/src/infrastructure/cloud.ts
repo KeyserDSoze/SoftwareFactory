@@ -76,7 +76,7 @@ export async function backupCloud(project: FactoryProject, settings: FactorySett
     return;
   }
   const listUrl = new URL("https://www.googleapis.com/drive/v3/files");
-  listUrl.search = new URLSearchParams({ spaces: "appDataFolder", q: "name = '" + SNAPSHOT_NAME + "' and trashed = false", fields: "files(id,name)", page_size: "10" }).toString();
+  listUrl.search = new URLSearchParams({ spaces: "appDataFolder", q: "name = '" + SNAPSHOT_NAME + "' and trashed = false", fields: "files(id,name)", pageSize: "10" }).toString();
   const list = await (await cloudFetch(listUrl.href, token)).json() as { files?: { id: string }[] };
   if (list.files?.[0]?.id) {
     await cloudFetch("https://www.googleapis.com/upload/drive/v3/files/" + encodeURIComponent(list.files[0].id) + "?uploadType=media", token, {

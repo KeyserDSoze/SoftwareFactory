@@ -55,18 +55,18 @@ function terraform(c: ProjectConfig, slug: string): string {
   const head = ['terraform {', '  required_version = ">= 1.7.0"'];
   if (c.deployment === "azure") {
     return lines(...head, '  required_providers { azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" } }', "}",
-      'variable "subscription_id" { type = string }', 'variable "location" { type = string, default = "westeurope" }',
+      'variable "subscription_id" { type = string }', 'variable "location" {\\n  type = string\\n  default = "westeurope"\\n}',
       'provider "azurerm" { features {} subscription_id = var.subscription_id }',
       'resource "azurerm_resource_group" "app" {', '  name = "' + slug + '-rg"', '  location = var.location', '}');
   }
   if (c.deployment === "aws") {
     return lines(...head, '  required_providers { aws = { source = "hashicorp/aws", version = "~> 6.0" } }', "}",
-      'variable "region" { type = string, default = "eu-west-1" }',
+      'variable "region" {\\n  type = string\\n  default = "eu-west-1"\\n}',
       'provider "aws" { region = var.region }', "# Add a private network, compute, storage and database with reviewed IAM policies.");
   }
   if (c.deployment === "gcp") {
     return lines(...head, '  required_providers { google = { source = "hashicorp/google", version = "~> 7.0" } }', "}",
-      'variable "project_id" { type = string }', 'variable "region" { type = string, default = "europe-west1" }',
+      'variable "project_id" { type = string }', 'variable "region" {\\n  type = string\\n  default = "europe-west1"\\n}',
       'provider "google" { project = var.project_id, region = var.region }',
       "# Add reviewed Cloud Run/GKE, network, Cloud SQL and IAM resources.");
   }
@@ -82,7 +82,7 @@ function frontendFiles(name: string): Record<string, string> {
     }, null, 2) + "\n",
     "src/frontend/web/tsconfig.json": JSON.stringify({ compilerOptions: {
       target: "ES2022", lib: ["ES2022", "DOM"], module: "ESNext", moduleResolution: "Bundler",
-      jsx: "react-jsx", strict: true, skipLibCheck: true, noEmit: true,
+      jsx: "react-jsx", strict: true, skipLibCheck: true, noEmit: true, types: ["vite/client"],
     }, include: ["src"] }, null, 2) + "\n",
     "src/frontend/web/vite.config.ts": lines('import { defineConfig } from "vite";', 'import react from "@vitejs/plugin-react";', "export default defineConfig({ plugins: [react()] });"),
     "src/frontend/web/index.html": lines('<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + escapeHtml(name) + '</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>'),
@@ -104,7 +104,7 @@ function otherFrontend(kind: FrontendKind): Record<string, string> {
   const folder = kind === "react-native" ? "mobile-react-native" : kind;
   const human = kind === "unity" ? "Unity" : kind === "ios" ? "iOS Swift" : kind === "android" ? "Android Kotlin" : "React Native TypeScript";
   return { ["src/frontend/" + folder + "/README.md"]: lines("# " + human,
-    "", "Target selezionato. Il generatore MVP non crea ancora un progetto " + human + " compilabile.",
+    "", "Target selezionato (placeholder). Il generatore MVP non crea ancora un progetto " + human + " compilabile.",
     "Inizializzare toolchain/SDK nativi, CI dedicata, navigation e integration tests prima di considerarlo supportato.") };
 }
 export function generateFiles(project: FactoryProject): Record<string, string> {

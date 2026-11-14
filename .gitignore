@@ -7,3 +7,4 @@ coverage/
 *.local
 .DS_Store
 *.tsbuildinfo
+src/frontend/generated-fixture/
