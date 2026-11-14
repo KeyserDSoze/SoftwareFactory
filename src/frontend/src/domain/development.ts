@@ -17,6 +17,8 @@ export type FeatureProposal = {
   tests: string[];
   assumptions: string[];
   review?: FeatureReview;
+  repairCount?: number;
+  previousProposalId?: string;
 };
 export type AppliedFeature = {
   id: string;
@@ -27,6 +29,16 @@ export type AppliedFeature = {
   review: FeatureReview;
   status: "applied" | "reverted" | "superseded";
 };
+export type RunnerJobEvidence = {
+  id: string;
+  digest: string;
+  endpoint: string;
+  label: string;
+  steps: ("dotnet-build" | "dotnet-test" | "web-build" | "web-test" | "playwright")[];
+  submittedAt: string;
+  proposalId: string | null;
+  revision: number;
+};
 export type DevelopmentWorkspace = {
   revision: number;
   overrides: Record<string, string>;
@@ -34,6 +46,7 @@ export type DevelopmentWorkspace = {
   history: AppliedFeature[];
   pending?: FeatureProposal;
   lastRunnerJobId?: string;
+  lastRunnerEvidence?: RunnerJobEvidence;
 };
 export const emptyDevelopment = (): DevelopmentWorkspace => ({
   revision: 0, overrides: {}, originals: {}, history: [],
@@ -202,4 +215,36 @@ export function dropConflictingChanges(project: FactoryProject): FactoryProject 
     ? { ...h, status: "superseded" as const } : h);
   return { ...project, development: { ...dev, revision: dev.revision + 1, overrides, originals, pending: undefined, history },
     updatedAt: new Date().toISOString() };
+}
+
+/**
+ * One guarded attempt at repairing an existing pending proposal.
+ * The AI may REPLACE only the same files, not expand its access to new paths.
+ * Prior review and runner evidence are invalidated: repair never auto-approves.
+ */
+export function replacePendingWithRepair(project: FactoryProject, proposalId: string, raw: string): FactoryProject {
+  const dev = developmentOf(project), old = dev.pending;
+  if (!old || old.id !== proposalId) throw new Error("Proposta cambiata durante la correzione.");
+  if (old.revision !== dev.revision || workspaceConflicts(project).length)
+    throw new Error("Workspace modificato: riparazione annullata.");
+  const previousCount = old.repairCount ?? 0;
+  if (previousCount >= 2) throw new Error("Massimo due riparazioni AI per proposta.");
+  const bare: FactoryProject = { ...project, development: { ...dev, pending: undefined } };
+  const next = validateProposal(raw, bare, old.request);
+  const oldPaths = old.edits.map(e => e.path).sort();
+  const newPaths = next.edits.map(e => e.path).sort();
+  if (JSON.stringify(oldPaths) !== JSON.stringify(newPaths))
+    throw new Error("La riparazione può modificare solo gli stessi file della proposta.");
+  if (next.edits.every(edit => edit.content === old.edits.find(oldEdit => oldEdit.path === edit.path)?.content))
+    throw new Error("La riparazione non ha modificato nessun file.");
+  return {
+    ...project,
+    development: {
+      ...dev,
+      pending: { ...next, repairCount: previousCount + 1, previousProposalId: old.id },
+      lastRunnerJobId: undefined,
+      lastRunnerEvidence: undefined,
+    },
+    updatedAt: new Date().toISOString(),
+  };
 }
