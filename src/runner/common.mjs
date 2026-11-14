@@ -41,7 +41,7 @@ export function validateRequest(raw) {
   if (!Array.isArray(raw.steps) || !raw.steps.length || raw.steps.length > ALLOWED_STEPS.length ||
       raw.steps.some(s => !ALLOWED_STEPS.includes(s)) || new Set(raw.steps).size !== raw.steps.length)
     throw new Error("Unknown or duplicated test step");
-  const sortedFiles = Object.fromEntries(entries.sort(([a],[b]) => a.localeCompare(b)));
+  const sortedFiles = Object.fromEntries(entries.sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0));
   const request = { schemaVersion: RUNNER_PROTOCOL, label: label.trim(), files: sortedFiles, steps: [...raw.steps] };
   const digest = createHash("sha256").update(JSON.stringify(request)).digest("hex");
   return { request, digest, fileCount: entries.length, bytes };
