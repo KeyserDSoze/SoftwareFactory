@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, CircleSlash, Code2, FileCode2, GitCommit, Pause, Play, RefreshCw, RotateCcw, ShieldCheck, ShieldX } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
-import type { FeatureEdit, FeatureProposal } from "../domain/development";
-import { approvePending, developmentOf, dropConflictingChanges, rejectPending, saveReview, setPending, undoLatest, validateProposal, workspaceConflicts } from "../domain/development";
+import type { FeatureEdit, FeatureProposal, RunnerJobEvidence } from "../domain/development";
+import { approvePending, developmentOf, dropConflictingChanges, rejectPending, replacePendingWithRepair, saveReview, setPending, undoLatest, validateProposal, workspaceConflicts } from "../domain/development";
 import { lineDiff } from "../application/code-diff";
 import RunnerPanel from "./RunnerPanel";
 import "./runner.css";
-import { proposeCode, reviewCode } from "../application/code-agent";
+import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
+import type { RunnerReport } from "../infrastructure/runner";
+import { verifyCurrentRunnerReport } from "../infrastructure/runner";
 
 type Props = {
   project: FactoryProject;
@@ -82,6 +84,54 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     } catch(error) { if (!controller.signal.aborted) fail(error); }
     finally { onBusy(false); setPhase(""); abortRef.current = null; }
   }
+  function bindRunnerJob(evidence: RunnerJobEvidence) {
+    const current = projectRef.current;
+    update({
+      ...current,
+      development: { ...developmentOf(current), lastRunnerJobId: evidence.id, lastRunnerEvidence: evidence },
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  async function repair(report: RunnerReport, evidence: RunnerJobEvidence): Promise<void> {
+    const originalProject = projectRef.current;
+    const original = developmentOf(originalProject).pending;
+    if (!original || original.id !== evidence.proposalId || busy) {
+      onError("La proposta non è più disponibile per il repair."); return;
+    }
+    const proof = await verifyCurrentRunnerReport(originalProject, settings.runnerEndpoint || "", report, evidence);
+    if (proof.kind !== "failed" || originalProject.development?.lastRunnerEvidence?.id !== evidence.id) {
+      onError("Report non più valido per i sorgenti attuali."); return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPhase("Correzione AI guidata dagli errori del test");
+    onBusy(true, "Code Agent: repair");
+    try {
+      const raw = await proposeCodeRepair(originalProject, settings, original, report, controller.signal);
+      if (controller.signal.aborted) return;
+      if (projectRef.current.updatedAt !== originalProject.updatedAt ||
+          projectRef.current.development?.pending?.id !== original.id)
+        throw new Error("Il workspace è cambiato: la correzione non sarà applicata.");
+      const revised = replacePendingWithRepair(projectRef.current, original.id, raw);
+      update(revised);
+      setActivePath(revised.development?.pending?.edits[0]?.path || "");
+      setView("diff");
+      setPhase("Adversarial review dopo la correzione");
+      try {
+        const patch = revised.development!.pending!;
+        const review = await reviewCode(revised, settings, patch, controller.signal);
+        if (controller.signal.aborted) return;
+        update(saveReview(projectRef.current, patch.id, review));
+        onNotice(review.verdict === "pass"
+          ? "Patch corretta e review superata. Riesegui i test: il report precedente è invalido. Solo dopo controlla e approva."
+          : "Patch corretta, ma la nuova review è bloccante. Nessun file è stato applicato.");
+      } catch(error) {
+        if (!controller.signal.aborted) onError("La patch corretta è salvata ma la review non è completata: " +
+          (error instanceof Error ? error.message : String(error)));
+      }
+    } catch(error) { if (!controller.signal.aborted) fail(error); }
+    finally { abortRef.current = null; setPhase(""); onBusy(false); }
+  }
   function approve() {
     if (busy || !pending) return;
     if (!window.confirm("Applicare le modifiche ai file locali? Non saranno pubblicate finché non esegui un push GitHub esplicito.")) return;
@@ -134,8 +184,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     </section>
     {pending && <section className="panel">
       <div className="panel-title"><div><div className="eyebrow">02 / PROPOSAL · NOT APPLIED</div><h3>{pending.summary}</h3></div>
-        <span className="count-pill">{pending.edits.length} file</span></div>
-      <p className="helper">La proposta è salvata nel progetto locale ma non modifica ancora i sorgenti esportati.</p>
+        <span className="count-pill">{pending.edits.length} file · Repair {pending.repairCount ?? 0}/2</span></div>
+      <p className="helper">La proposta è salvata nel progetto locale ma non modifica ancora i sorgenti esportati. Dopo una riparazione AI, review e test precedenti non sono più validi.</p>
       <div className="code-review-status">
         {pending.review?.verdict === "pass" ? <ShieldCheck size={20} className="ok" /> :
          pending.review?.verdict === "changes_required" ? <ShieldX size={20} className="danger" /> :
@@ -165,7 +215,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         <button className="primary" disabled={busy || pending.review?.verdict !== "pass" || !!conflicts.length} onClick={approve}><CheckCircle2 size={16} /> Approva e applica</button>
       </div></div>
     </section>}
-<RunnerPanel project={project} settings={settings} busy={busy} onProjectChange={onProjectChange} onNotice={onNotice} onError={onError} />
+<RunnerPanel project={project} settings={settings} busy={busy}
+      onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} />
     <section className="panel"><div className="panel-title"><div><div className="eyebrow">03 / DEVELOPMENT HISTORY</div><h3>Modifiche approvate</h3></div><GitCommit size={19} className="muted" /></div>
       {dev.history.length === 0 ? <p className="dimmed">Nessuna feature è stata applicata. Le patch approvate saranno tracciate qui.</p> :
         <div className="feature-history">{[...dev.history].reverse().map(entry => <div key={entry.id} className="history-row">
