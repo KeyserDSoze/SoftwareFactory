@@ -43,6 +43,11 @@ describe("bounded AI-assisted repair", () => {
     expect(repaired.development?.lastRunnerJobId).toBeUndefined();
     expect(workspaceFiles(repaired)[path]).toBeUndefined(); // still pending, not applied
     expect(() => approvePending(repaired)).toThrow(/review avversaria/i);
+    const reviewedRepair = saveReview(repaired, pending.id, {
+      verdict: "pass", report: "Reviewed repaired source, not a build", completedAt: "2026-11-14",
+    });
+    expect(() => approvePending(reviewedRepair)).toThrow(/test reali/i);
+    expect(approvePending(reviewedRepair, { verifiedRepair: true }).development?.history).toHaveLength(1);
   });
   it("prevents scope creep, no-op repairs and attempts on a replaced pending proposal", () => {
     const { staged, original } = fixture();
