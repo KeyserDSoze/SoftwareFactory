@@ -47,6 +47,14 @@
 - Distinzione `incomplete` per errori di infrastruttura/setup, anziché incoraggiare false riparazioni AI
 - **Ancora aperto:** provisioning cache immutabili con dependency lock, Playwright completo con browser reali, egress whitelist, daemon rootless production test (#2)
 
+## v0.2 — Playwright E2E in browser reali (issue #5)
+
+- Scaffold React con `@playwright/test` 1.64.1 pinato, configurazione webServer localhost e due smoke test Chromium sugli stati /health 200/503 (API mock)
+- CI dello scaffold con install Chromium e comando `npm run test:e2e` dopo build
+- Runner Playwright pinato all'immagine browser `v1.64.1-noble`, stesso path di esecuzione previsto per worker Docker, network off
+- Docker smoke browser vero in CI di SoftwareFactory, oltre ai test mockati del protocollo
+- Limiti: mock API, non verifica DB/integrazioni; offline npm ancora richiede cache, VM rootless e browser multipli da collaudare
+
 ## v0.2 — Code generation agent (milestone successive)
 
 - Task graph con dipendenze, feature implementate come commit incrementali su file

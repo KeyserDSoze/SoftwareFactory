@@ -64,3 +64,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Installazione npm in un container distinto: lifecycle scripts sempre disabilitati e network off di default. L'operatore può abilitare la rete solo nel passo di preparazione, mai nei test.
 - `failed` indica un **test di codice** effettivamente fallito; `incomplete` indica setup mancante, test saltato, Docker daemon o dipendenza non disponibile.
 - Non presentare come production-ready il fetch npm online senza egress allowlist/lockfile; mantenere la issue #2 aperta fino al collaudo su VM rootless e Playwright.
+
+## Playwright E2E reale (#5)
+
+- Lo scaffold React deve includere `playwright.config.ts`, `e2e/smoke.spec.ts` e script `test:e2e`; test Chromium effettivi nella CI, non chiamate mock alla CLI browser.
+- Versione di `@playwright/test` e versione di `mcr.microsoft.com/playwright` **identiche** (attualmente 1.64.1).
+- Test generati della baseline usano mock di API `/health` per validare la UI senza backend: non descriverli come integrazione full stack.
+- Browser, server Vite e test nello stesso container senza rete, tramite loopback. Non montare Docker socket nel container browser.

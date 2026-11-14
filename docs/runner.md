@@ -76,11 +76,11 @@ Le operazioni sono fisse, il client non può scegliere comandi shell, immagini o
 | --- | --- | --- |
 | dotnet-build | `dotnet build src/backend/applications/Api/Api.csproj -c Release` | .NET 10/11 SDK image, progetto |
 | dotnet-test | `dotnet test tests/backend/Tests.csproj -c Release` | progetto di test esplicitamente presente |
-| web-build | `npm install --offline --ignore-scripts && npm run build` | dipendenze npm già presenti nella cache del container |
-| web-test | `npm install --offline --ignore-scripts && npm run test` | script test in package.json e cache prerequisiti |
-| playwright | `npx --no-install playwright test` | spec `src/frontend/web/e2e/*.spec.ts`, Playwright installato, app avviata/configurazione webServer e dipendenze |
+| web-build | `npm run build --prefix src/frontend/web` | dipendenze predisposte nella fase `npm-prepare` separata |
+| web-test | `npm run test --prefix src/frontend/web` | script `test` configurato e fase `npm-prepare` completata |
+| playwright | `./node_modules/.bin/playwright test --reporter=line` | `playwright.config.ts`, spec `e2e/*.spec.ts`, `@playwright/test` 1.64.1, immagine browser Docker 1.64.1, server localhost |
 
-**Limiti importanti:** la cache npm non viene pre-popolata dall'MVP; con `--network none` web build/test possono fallire. La Docker image ufficiale Playwright può non includere il modulo npm Playwright, e l'E2E richiede che l'app di test sia raggiungibile con la corretta configurazione di web server. Non dichiarare copertura completa finché ciò non viene risolto. Test skip → `incomplete`; errori di setup → `failed`.
+**Limiti importanti:** la preparazione npm è offline per impostazione predefinita. Senza pacchetti nella cache il risultato è `incomplete` e i test non vengono eseguiti. Il container Playwright contiene i browser, ma il pacchetto `@playwright/test` viene installato dalla fase di preparazione; versioni differenti sono rifiutate. I test E2E della baseline simulano il backend `/health` e non verificano ancora database o API reali. Le cause ambientali riconosciute non si trasformano in bug dell'app.
 
 ## Test locale del protocollo
 
@@ -149,3 +149,28 @@ La CI usa eccezionalmente il socket Docker dell'host GitHub solo nel job control
 ### UID container: rootless su VM e test CI
 
 Il Docker Engine rootless avviato dall'utente dedicato mappa l'UID `0` del container verso l'UID non privilegiato dell'host; il runner conserva quindi `RUNNER_CONTAINER_UID=0:0` come valore predefinito, con tutte le capability rimosse. In GitHub Actions, dove il Docker Engine della macchina effimera **non** è rootless, lo smoke usa invece l'UID/GID di `runner` tramite un override server-side `RUNNER_CONTAINER_UID=<uid>:<gid>`. Questo permette ai container senza `CAP_DAC_OVERRIDE` di scrivere soltanto sui propri workspace `0700` (senza renderli world-writable). Tale opzione è riservata all'amministratore e non viene accettata dal payload browser. Non usare il setup rootful della CI come modello di deployment pubblico.
+
+## Playwright E2E con browser reali — issue #5
+
+Lo scaffold React genera `src/frontend/web/playwright.config.ts` e `src/frontend/web/e2e/smoke.spec.ts`. Il pacchetto `@playwright/test` è **pinato** alla versione `1.64.1`, la stessa dell'immagine `mcr.microsoft.com/playwright:v1.64.1-noble` selezionata dal runner. Il mismatch di versione, la mancanza della configurazione o l'assenza di spec sono `skipped` e producono esito complessivo `incomplete`, non falsi successi.
+
+La configurazione usa `webServer` di Playwright per avviare il server Vite su `127.0.0.1:4173`. Browser, test e web server sono **dentro lo stesso container**, perciò funzionano con `--network none`: il mock della chiamata a `http://localhost:8080/health` è intercettato dal browser e non richiede contatti con Internet. Le due prove visualizzano l'app React effettiva in Chromium e verificano gli stati UI quando l'endpoint ritorna `200` oppure `503`. Sono test di presentazione e gestione errori, **non** una verifica dei servizi backend.
+
+### Verifica con GitHub Actions
+
+La CI di SoftwareFactory genera il progetto fixture, installa le dipendenze npm in ambiente controllato, costruisce React/.NET e invoca `src/runner/scripts/playwright-smoke.mjs`. Questo script chiama **lo stesso `planStep` e `runDockerStep`** del runner remoto: il Docker Engine avvia realmente l'immagine ufficiale Playwright e il browser Chromium. Il job usa un socket Docker dell'host **solo sulla macchina effimera GitHub**, mai nell'API pubblica o dentro il test container. Il container non ha rete, usa `--read-only`, capability azzerate e limiti CPU/memoria/processi/tempo.
+
+Il progetto generato esporta a sua volta un workflow che installa Chromium e invoca `npm run test:e2e` come gate distinto dal build. Localmente:
+
+```bash
+cd src/frontend/web
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
+
+Per testare API/database reali, aggiungere una seconda suite con fixture e container dei servizi, introducendo reti **private e controllate**; non disabilitare indiscriminatamente `--network none` nel runner AI. Una generazione E2E completa multi-browser e il collaudo rootless su VM Cloudflare rimangono nella issue #2.
+
+### Limiti di sicurezza
+
+Il pacchetto Playwright è disponibile nel workspace via fase `npm-prepare` (se la cache offline non lo contiene, occorre un proxy/cache controllato). Nel container browser non vengono esposti socket Docker, secret o rete Internet; Chromium può usare meno sandbox di processo con alcuni UID/daemon rootless. Non considerare questo un isolamento adatto a codice deliberatamente ostile e non pubblicare il runner senza hardening.

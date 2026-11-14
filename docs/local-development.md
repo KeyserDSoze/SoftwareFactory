@@ -36,3 +36,18 @@ npm test
 I test del runner coprono il protocollo HTTP, autenticazione, allowlist dei file, specifiche di isolamento Docker e report simulati, non lanciano il daemon Docker. La CI verifica anche il build delle immagini API/worker.
 
 Su una VM dedicata con Docker rootless: seguire la guida [Remote Runner](runner.md), comprendendo tunnel Cloudflare, origin CORS, key, gestione socket e limiti delle dipendenze offline. Non usare una VM di produzione condivisa.
+
+## Test browser degli scaffold generati
+
+`npm run fixture` in `src/frontend` genera anche i file `src/frontend/web/playwright.config.ts` e `src/frontend/web/e2e/smoke.spec.ts`. Per eseguire localmente Chromium:
+
+```bash
+cd src/frontend
+npm run fixture
+cd generated-fixture/src/frontend/web
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
+
+Lo smoke usa un mock browser dell'endpoint API per controllare due stati UI. La CI della Factory lo esegue dentro `mcr.microsoft.com/playwright:v1.64.1-noble` con Docker; la CI dello scaffold esportato lo esegue sull'host GitHub con Chromium scaricato.
