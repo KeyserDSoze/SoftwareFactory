@@ -166,6 +166,8 @@ describe("application scaffold", () => {
     expect(JSON.parse(files["src/frontend/web/package.json"]).dependencies["oidc-client-ts"]).toBe("3.5.0");
     expect(files["docker/compose.yml"]).toContain("AUTH_MODE:-oidc");
     expect(files["docker/compose.yml"]).toContain("Auth__Authority");
+    expect(files["docker/compose.yml"]).toContain("AUTH_SIGNING_KEY:-");
+    expect(files["docker/compose.yml"]).toContain("AUTH_AUDIENCE:?");
     expect(files[".github/workflows/ci.yml"]).toContain("Auth__Mode=legacy");
     expect(oidc).not.toContain("Auth__SigningKey");
     expect(ui).not.toContain("VITE_OIDC_CLIENT_SECRET");

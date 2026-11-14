@@ -24,9 +24,9 @@ function dockerCompose(c: ProjectConfig): string {
     services.push(
       '      Auth__Mode: "${AUTH_MODE:-oidc}"',
       '      Auth__Authority: "${AUTH_AUTHORITY:-}"',
-      '      Auth__Issuer: "${AUTH_ISSUER:?Set AUTH_ISSUER in docker/.env}"',
+      '      Auth__Issuer: "${AUTH_ISSUER:-}"',
       '      Auth__Audience: "${AUTH_AUDIENCE:?Set AUTH_AUDIENCE in docker/.env}"',
-      '      Auth__SigningKey: "${AUTH_SIGNING_KEY:?Generate a random AUTH_SIGNING_KEY in docker/.env}"',
+      '      Auth__SigningKey: "${AUTH_SIGNING_KEY:-}"',
     );
   }
   if (deps.length) services.push("    depends_on:", "      db:", "        condition: " + (c.database === "postgresql" ? "service_healthy" : "service_started"));
