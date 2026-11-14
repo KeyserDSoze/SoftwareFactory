@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { randomUUID, randomBytes } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { planStep, runDockerStep, PLAYWRIGHT_VERSION } from "../docker.mjs";
 
@@ -20,6 +21,11 @@ if (root.includes(",") || /[\r\n:]/.test(root)) throw Error("Unsafe workspace pa
 const network = "sf-int-" + randomUUID().replaceAll("-", "").slice(0, 16);
 const apiName = network + "-api", webName = network + "-web", dbName = network + "-db";
 const dbPassword = randomBytes(24).toString("hex");
+const authKey = randomBytes(48).toString("hex");
+const { signCiToken } = await import(pathToFileURL(path.join(root, "tests/security/issue-tokens.mjs")).href);
+const editorToken = signCiToken(authKey, "factory-ci", "factory-client", "owner-a", "editor");
+const readerToken = signCiToken(authKey, "factory-ci", "factory-client", "owner-a", "reader");
+const otherToken = signCiToken(authKey, "factory-ci", "factory-client", "owner-b", "editor");
 const runId = randomUUID();
 const mount = "type=bind,src=" + root + ",dst=/work";
 const framework = (await readFile(path.join(root, "src/backend/applications/Api/Api.csproj"), "utf8"))
@@ -77,6 +83,9 @@ try {
     ...common,
     "--env=ASPNETCORE_URLS=http://0.0.0.0:8080",
     "--env=ASPNETCORE_ENVIRONMENT=Development",
+    "--env=Auth__Issuer=factory-ci",
+    "--env=Auth__Audience=factory-client",
+    "--env=Auth__SigningKey=" + authKey,
     "--env=Database__Provider=postgresql",
     "--env=Database__ConnectionString=Host=db;Port=5432;Database=app;Username=app;Password=" + dbPassword,
     "mcr.microsoft.com/dotnet/aspnet:" + framework + ".0",
@@ -114,17 +123,20 @@ try {
   args.splice(args.indexOf(basePlan.image), 0,
     "--env=E2E_MODE=integration",
     "--env=E2E_DATABASE=postgresql",
+    "--env=E2E_AUTH_TOKEN=" + editorToken,
+    "--env=E2E_READER_TOKEN=" + readerToken,
+    "--env=E2E_OTHER_TOKEN=" + otherToken,
     "--env=E2E_API_ORIGIN=http://api:8080",
     "--env=E2E_WEB_ORIGIN=http://web:4173",
     "--env=E2E_WEB_SERVER_EXTERNAL=true",
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
-  if (outcome.state !== "passed" || !/4 passed/.test(outcome.stdout)) {
+  if (outcome.state !== "passed" || !/5 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
-    throw Error("Playwright integration did not pass all 4 assertions, including PostgreSQL persistence");
+    throw Error("Playwright integration did not pass all 5 assertions, including PostgreSQL persistence");
   }
-  console.log("FULLSTACK_POSTGRES_PASS: 4 Chromium tests, live ASP.NET Core and PostgreSQL CRUD on private Docker network");
+  console.log("FULLSTACK_AUTH_POSTGRES_PASS: 5 Chromium tests, real PostgreSQL CRUD, JWT roles and owner isolation");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));
