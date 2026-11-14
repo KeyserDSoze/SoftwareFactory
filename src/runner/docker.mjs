@@ -31,7 +31,7 @@ export function planStep(step, files, workdir, env = process.env) {
     command = ["/bin/sh", "-c", "cd src/frontend/web && npm install --offline --ignore-scripts --no-audit --no-fund && npm run " +
       (step === "web-test" ? "test" : "build")];
   } else if (step === "playwright") {
-    if (!Object.keys(files).some(p => /^src\/frontend\/web\/e2e\/.test(p)))
+    if (!Object.keys(files).some(p => p.startsWith("src/frontend/web/e2e/") && p.endsWith(".spec.ts")))
       return { skip: "No Playwright e2e/*.spec.ts files configured" };
     command = ["/bin/sh", "-c", "cd src/frontend/web && npx --no-install playwright test --reporter=line"];
   } else throw new Error("Unsupported execution step");
@@ -40,7 +40,7 @@ export function planStep(step, files, workdir, env = process.env) {
   const args = [
     "run", "--rm", "--network", "none", "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
-    "--user=1000:1000", "--shm-size=256m",
+    "--user=0:0", "--shm-size=256m",
     "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
     "--mount", "type=bind,src=" + workdir + ",dst=/work,rw",
     "--workdir=/work", "--env=HOME=/tmp", "--env=DOTNET_CLI_HOME=/tmp",
