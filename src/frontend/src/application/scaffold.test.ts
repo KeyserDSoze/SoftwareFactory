@@ -159,7 +159,8 @@ describe("application scaffold", () => {
     expect(oidc).toContain("WebStorageStateStore");
     expect(oidc).toContain("extraQueryParams");
     expect(ui).toContain("signinRedirect()");
-    expect(ui).toContain("signinRedirectCallback()");
+    expect(oidc).toContain("signinRedirectCallback()");
+    expect(oidc).toContain("signoutRedirectCallback()");
     expect(ui).toContain("signoutRedirect()");
     expect(ui).toContain("Accesso OpenID Connect");
     expect(JSON.parse(files["src/frontend/web/package.json"]).dependencies["oidc-client-ts"]).toBe("3.5.0");
