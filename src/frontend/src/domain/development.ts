@@ -33,6 +33,7 @@ export type DevelopmentWorkspace = {
   originals: Record<string, string | null>;
   history: AppliedFeature[];
   pending?: FeatureProposal;
+  lastRunnerJobId?: string;
 };
 export const emptyDevelopment = (): DevelopmentWorkspace => ({
   revision: 0, overrides: {}, originals: {}, history: [],
