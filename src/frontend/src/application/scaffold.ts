@@ -1,6 +1,7 @@
 import type { FactoryProject, FrontendKind, ProjectConfig } from "../domain/types";
 
-const PLAYWRIGHT_VERSION = "1.64.1"; // Keep in sync with the runner browser image.\nfunction lines(...parts: string[]): string { return parts.join("\n") + "\n"; }
+const PLAYWRIGHT_VERSION = "1.64.1"; // Keep in sync with the runner browser image.
+function lines(...parts: string[]): string { return parts.join("\n") + "\n"; }
 function slugify(name: string): string {
   return name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 42) || "factory-app";
 }
