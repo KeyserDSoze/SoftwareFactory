@@ -7,6 +7,7 @@ const TIME_LIMIT_MS = 120_000;
 const PACKAGE_VERSION = /^(?:\^|~|>=?|<=?|=)?\d+(?:\.\d+){0,2}(?:-[a-zA-Z0-9.-]+)?(?:\s*\|\|\s*(?:\^|~|>=?|<=?|=)?\d+(?:\.\d+){0,2}(?:-[a-zA-Z0-9.-]+)?)*$/;
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const NODE_IMAGE = "node:22-bookworm-slim";
+export const PLAYWRIGHT_VERSION = "1.64.1";
 
 function imageFor(step, files, env) {
   const framework = files["src/backend/applications/Api/Api.csproj"]?.match(/<TargetFramework>net(10|11)\.0<\/TargetFramework>/)?.[1] || "11";
@@ -15,7 +16,7 @@ function imageFor(step, files, env) {
       ? (env.RUNNER_DOTNET10_IMAGE || "mcr.microsoft.com/dotnet/sdk:10.0")
       : (env.RUNNER_DOTNET11_IMAGE || "mcr.microsoft.com/dotnet/sdk:11.0")
     : step === "playwright"
-      ? (env.RUNNER_PLAYWRIGHT_IMAGE || "mcr.microsoft.com/playwright:v1.56.1-noble")
+      ? (env.RUNNER_PLAYWRIGHT_IMAGE || "mcr.microsoft.com/playwright:v" + PLAYWRIGHT_VERSION + "-noble")
       : (env.RUNNER_NODE_IMAGE || NODE_IMAGE);
   if (!SAFE_IMAGE.test(image)) throw new Error("Invalid administrator-configured Docker image");
   return image;
@@ -50,7 +51,7 @@ function dockerArgs(workdir, image, command, { network = "none", containerUser =
   if (!/^\d{1,5}:\d{1,5}$/.test(containerUser)) throw new Error("Invalid container user configuration");
   if (!path.isAbsolute(workdir) || /[\n\r:,]/.test(workdir)) throw new Error("Invalid workdir mount");
   return [
-    "run", "--rm", "--network", network, "--read-only", "--cap-drop=ALL",
+    "run", "--rm", "--init", "--network", network, "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
     "--user=" + containerUser, "--shm-size=256m",
     "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
@@ -85,8 +86,17 @@ export function planStep(step, files, workdir, env = process.env) {
     if (!Object.keys(files).some(p => p.startsWith("src/frontend/web/e2e/") && p.endsWith(".spec.ts")))
       return { skip: "No Playwright e2e/*.spec.ts files configured" };
     if (!webSourcePresent(files)) return { skip: "No frontend package.json for Playwright" };
-    validateNpmManifest(files["src/frontend/web/package.json"]);
-    command = ["/bin/sh", "-c", "cd src/frontend/web && npx --no-install playwright test --reporter=line"];
+    if (!files["src/frontend/web/playwright.config.ts"])
+      return { skip: "No Playwright configuration (webServer and browser target required)" };
+    const manifest = validateNpmManifest(files["src/frontend/web/package.json"]);
+    const packageVersion = manifest.devDependencies?.["@playwright/test"] || manifest.dependencies?.["@playwright/test"];
+    if (packageVersion !== PLAYWRIGHT_VERSION)
+      return { skip: "Playwright package must be pinned to " + PLAYWRIGHT_VERSION + " to match the browser image" };
+    const image = imageFor("playwright", files, env);
+    const tagMatch = image.match(/playwright:v(\\d+\\.\\d+\\.\\d+)-/);
+    if (tagMatch && tagMatch[1] !== PLAYWRIGHT_VERSION)
+      return { skip: "Playwright container image and package version differ" };
+    command = ["/bin/sh", "-c", "cd src/frontend/web && ./node_modules/.bin/playwright test --reporter=line"];
   } else throw new Error("Unsupported execution step");
   return createPlan(step, files, workdir, command, env);
 }
@@ -115,7 +125,7 @@ export function planWebDependencies(files, workdir, env = process.env) {
     containerUser: env.RUNNER_CONTAINER_UID || "0:0" }),
     timeoutMs: TIME_LIMIT_MS, online };
 }
-const INFRA_FAILURE = /(?:Cannot connect to the Docker daemon|error during connect|Unable to find image|pull access denied|manifest unknown|failed to (?:create|start) task|OCI runtime create failed|no space left on device|\bNU1301\b|\bENOTCACHED\b|\bEAI_AGAIN\b|npm error code ENOTFOUND|npm ERR! code ENOTFOUND|network is unreachable|TLS handshake timeout)/i;
+const INFRA_FAILURE = /(?:Executable doesn.t exist at|Please run the following command to download new browsers|Host system is missing dependencies|Cannot connect to the Docker daemon|error during connect|Unable to find image|pull access denied|manifest unknown|failed to (?:create|start) task|OCI runtime create failed|no space left on device|\bNU1301\b|\bENOTCACHED\b|\bEAI_AGAIN\b|npm error code ENOTFOUND|npm ERR! code ENOTFOUND|network is unreachable|TLS handshake timeout)/i;
 export function isInfrastructureFailure(result) {
   return result.state === "failed" &&
     (result.exitCode === null || result.exitCode === 125 || result.exitCode === 126 ||
