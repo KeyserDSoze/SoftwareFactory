@@ -162,10 +162,12 @@ export function rejectPending(project: FactoryProject): FactoryProject {
   const dev = developmentOf(project);
   return { ...project, development: { ...dev, pending: undefined }, updatedAt: new Date().toISOString() };
 }
-export function approvePending(project: FactoryProject): FactoryProject {
+export function approvePending(project: FactoryProject, options: { verifiedRepair?: boolean } = {}): FactoryProject {
   const dev = developmentOf(project), proposal = dev.pending;
   if (!proposal) throw new Error("Nessuna patch in attesa.");
   if (proposal.review?.verdict !== "pass") throw new Error("La review avversaria non ha approvato la patch.");
+  if ((proposal.repairCount ?? 0) > 0 && options.verifiedRepair !== true)
+    throw new Error("Dopo un repair sono obbligatori nuovi test reali superati sul codice corrente.");
   if (proposal.revision !== dev.revision || workspaceConflicts(project).length)
     throw new Error("Patch obsoleta, occorre rigenerarla.");
   const files = workspaceFiles(project);
