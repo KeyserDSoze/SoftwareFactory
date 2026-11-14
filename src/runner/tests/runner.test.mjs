@@ -98,6 +98,9 @@ test("docker plans use fixed commands, no network, limits and no socket exposure
   assert.equal(planWebDependencies(code, work).command.includes("--offline"), true);
   assert.ok(planWebDependencies(code, work).args.includes("none"));
   assert.ok(!planStep("web-build", code, work).args.join(" ").includes("bridge"));
+  assert.ok(planStep("web-build", code, work).args.includes("--user=0:0"));
+  assert.ok(planStep("web-build", code, work, { RUNNER_CONTAINER_UID: "1001:1001" }).args.includes("--user=1001:1001"));
+  assert.throws(() => planStep("web-build", code, work, { RUNNER_CONTAINER_UID: "0:0 --privileged" }), /Invalid container user/);
   assert.throws(() => planStep("run-any-command", code, work), /Unsupported/);
 });
 test("worker writes real step receipts and skips missing tests without false success", async () => {

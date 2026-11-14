@@ -46,12 +46,13 @@ export function validateNpmManifest(content) {
     throw new Error("Invalid npm scripts");
   return manifest;
 }
-function dockerArgs(workdir, image, command, { network = "none" } = {}) {
+function dockerArgs(workdir, image, command, { network = "none", containerUser = "0:0" } = {}) {
+  if (!/^\d{1,5}:\d{1,5}$/.test(containerUser)) throw new Error("Invalid container user configuration");
   if (!path.isAbsolute(workdir) || /[\n\r:,]/.test(workdir)) throw new Error("Invalid workdir mount");
   return [
     "run", "--rm", "--network", network, "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1024m", "--cpus=1",
-    "--user=0:0", "--shm-size=256m",
+    "--user=" + containerUser, "--shm-size=256m",
     "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=128m",
     "--mount", "type=bind,src=" + workdir + ",dst=/work",
     "--workdir=/work", "--env=HOME=/tmp", "--env=DOTNET_CLI_HOME=/tmp",
@@ -61,7 +62,7 @@ function dockerArgs(workdir, image, command, { network = "none" } = {}) {
 }
 function createPlan(step, files, workdir, command, env, options = {}) {
   const image = imageFor(step, files, env);
-  return { image, command, args: dockerArgs(workdir, image, command, options), timeoutMs: TIME_LIMIT_MS };
+  return { image, command, args: dockerArgs(workdir, image, command, { ...options, containerUser: env.RUNNER_CONTAINER_UID || "0:0" }), timeoutMs: TIME_LIMIT_MS };
 }
 function webSourcePresent(files) {
   return typeof files["src/frontend/web/package.json"] === "string";
@@ -110,7 +111,8 @@ export function planWebDependencies(files, workdir, env = process.env) {
   if (online) command.push("--registry=" + registry);
   else command.push("--offline");
   const image = imageFor("web-build", files, env);
-  return { image, command, args: dockerArgs(workdir, image, command, { network: online ? "bridge" : "none" }),
+  return { image, command, args: dockerArgs(workdir, image, command, { network: online ? "bridge" : "none",
+    containerUser: env.RUNNER_CONTAINER_UID || "0:0" }),
     timeoutMs: TIME_LIMIT_MS, online };
 }
 const INFRA_FAILURE = /(?:Cannot connect to the Docker daemon|error during connect|Unable to find image|pull access denied|manifest unknown|failed to (?:create|start) task|OCI runtime create failed|no space left on device|\bNU1301\b|\bENOTCACHED\b|\bEAI_AGAIN\b|npm error code ENOTFOUND|npm ERR! code ENOTFOUND|network is unreachable|TLS handshake timeout)/i;

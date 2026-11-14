@@ -29,6 +29,7 @@ async function submit(files, steps) {
   });
   const report = await executeJob(id, { dataDir, workspaceRoot: work, environment: {
     RUNNER_NODE_IMAGE: "node:22-bookworm-slim", RUNNER_ALLOW_NET_DEPS: "false",
+    RUNNER_CONTAINER_UID: process.getuid() + ":" + process.getgid(),
   } });
   assert.equal(report.digest, checked.digest);
   assert.deepEqual((await readReport(dataDir, id)).results, report.results);
