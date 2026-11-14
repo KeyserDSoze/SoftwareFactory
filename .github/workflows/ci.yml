@@ -31,6 +31,12 @@ jobs:
       - name: Test remote runner protocol and worker
         run: npm test
         working-directory: src/runner
+      - name: Smoke test actual isolated Docker execution (ephemeral CI host)
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+        run: |
+          docker pull node:22-bookworm-slim
+          timeout 240s node src/runner/scripts/docker-smoke.mjs
       - name: Check runner Docker Compose configuration
         run: docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml config --quiet
       - name: Build remote runner API container

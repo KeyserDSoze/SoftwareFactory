@@ -4,7 +4,7 @@ import { workspaceFiles } from "../domain/development";
 
 export type RunnerStep = "dotnet-build" | "dotnet-test" | "web-build" | "web-test" | "playwright";
 export type RunnerStepResult = {
-  step: RunnerStep;
+  step: RunnerStep | "npm-prepare";
   state: "passed" | "failed" | "skipped";
   reason?: string;
   exitCode?: number | null;
@@ -20,6 +20,7 @@ export type RunnerReport = {
   state: "queued" | "running" | "passed" | "failed" | "incomplete";
   summary: string; acceptedAt: string; startedAt: string | null; finishedAt: string | null;
   steps: RunnerStep[]; results: RunnerStepResult[];
+  preparation?: RunnerStepResult | null;
 };
 export type RunnerJobReceipt = { id: string; digest: string; state: "queued" };
 export type RunnerVerification = {

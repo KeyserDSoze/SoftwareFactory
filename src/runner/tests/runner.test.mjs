@@ -6,7 +6,7 @@ import path from "node:path";
 import { once } from "node:events";
 import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate, scrub, atomicWrite } from "../common.mjs";
 import { createRunnerServer } from "../api.mjs";
-import { planStep } from "../docker.mjs";
+import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob } from "../worker.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
@@ -94,7 +94,10 @@ test("docker plans use fixed commands, no network, limits and no socket exposure
   assert.ok(!plan.args.join(" ").includes("docker.sock"));
   assert.equal(planStep("dotnet-test", code, work).skip.includes("No tests"), true);
   assert.equal(planStep("playwright", code, work).skip.includes("No Playwright"), true);
-  assert.equal(planStep("web-build", code, work).command[2].includes("npm install --offline"), true);
+  assert.deepEqual(planStep("web-build", code, work).command, ["npm", "run", "build", "--prefix", "src/frontend/web"]);
+  assert.equal(planWebDependencies(code, work).command.includes("--offline"), true);
+  assert.ok(planWebDependencies(code, work).args.includes("none"));
+  assert.ok(!planStep("web-build", code, work).args.join(" ").includes("bridge"));
   assert.throws(() => planStep("run-any-command", code, work), /Unsupported/);
 });
 test("worker writes real step receipts and skips missing tests without false success", async () => {
@@ -119,4 +122,63 @@ test("worker writes real step receipts and skips missing tests without false suc
     assert.equal((await readReport(dataDir,id)).state,"incomplete");
     assert.equal((await readdir(work)).length, 0);
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(work, { recursive: true, force: true }); }
+});
+
+test("npm preparation permits only registry semver dependencies and never runs lifecycle scripts", () => {
+  const work = "/srv/softwarefactory/workspaces/test-1";
+  const deps = {
+    ...code, "src/frontend/web/package.json": JSON.stringify({
+      scripts: { install: "echo THIS_MUST_NOT_RUN", build: "vite build" },
+      dependencies: { react: "^19.2.0" }, devDependencies: { vite: "^7.1.0" },
+    }),
+  };
+  const offline = planWebDependencies(deps, work, {});
+  assert.ok(offline.command.includes("--ignore-scripts"));
+  assert.ok(offline.command.includes("--offline"));
+  assert.ok(offline.args.includes("none"));
+  assert.ok(!offline.command.join(" ").includes("THIS_MUST_NOT_RUN"));
+  const online = planWebDependencies(deps, work, { RUNNER_ALLOW_NET_DEPS: "true" });
+  assert.ok(online.args.includes("bridge"));
+  assert.ok(!online.command.includes("--offline"));
+  assert.ok(online.command.includes("--registry=https://registry.npmjs.org/"));
+  assert.ok(!planStep("web-build", deps, work).args.includes("bridge"));
+  assert.throws(() => planWebDependencies(deps, work, {
+    RUNNER_ALLOW_NET_DEPS: "true", RUNNER_NPM_REGISTRY: "http://untrusted.example",
+  }), /HTTPS/);
+  assert.throws(() => validateNpmManifest(JSON.stringify({ dependencies: { bad: "git+ssh://attacker" } })), /Unsafe/);
+  assert.throws(() => validateNpmManifest(JSON.stringify({ dependencies: { bad: "file:../../secrets" } })), /Unsafe/);
+  assert.throws(() => validateNpmManifest(JSON.stringify({ workspaces: ["../../"] })), /Unsupported/);
+  assert.throws(() => validateNpmManifest(JSON.stringify({ overrides: { "a": "1.0.0" } })), /Unsupported/);
+});
+test("dependency errors are incomplete, not code defects to repair with AI", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-prep-data-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-prep-work-"));
+  const id = "01234567-89ab-4def-a234-0123456789ac";
+  try {
+    const d = jobDirectory(dataDir, id);
+    await mkdir(d, { recursive: true });
+    const checked = validateRequest(job(["web-build", "web-test"]));
+    await writeFile(path.join(d, "input.json"), JSON.stringify(checked.request));
+    await atomicWrite(path.join(d, "report.json"), {
+      id, digest: checked.digest, state: "queued", label: "prep-failure",
+      acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps,
+    });
+    const calls = [];
+    const report = await executeJob(id, { dataDir, workspaceRoot: work, executeStep: async (plan, job, step) => {
+      calls.push(step);
+      return { step, state: "failed", exitCode: 1, durationMs: 20,
+        image: plan.image, stdout: "", stderr: "npm error code ENOTCACHED" };
+    } });
+    assert.deepEqual(calls, ["npm-prepare"]);
+    assert.equal(report.state, "incomplete");
+    assert.equal(report.preparation.state, "failed");
+    assert.deepEqual(report.results.map(x => x.state), ["skipped", "skipped"]);
+    assert.ok(report.summary.includes("NOT a pass"));
+  } finally { await rm(dataDir, { recursive: true, force: true }); await rm(work, { recursive: true, force: true }); }
+  assert.equal(isInfrastructureFailure({
+    state: "failed", exitCode: 125, stderr: "Cannot connect to the Docker daemon", stdout: "",
+  }), true);
+  assert.equal(isInfrastructureFailure({
+    state: "failed", exitCode: 1, stderr: "src/App.tsx(4,2): error TS1005", stdout: "",
+  }), false);
 });

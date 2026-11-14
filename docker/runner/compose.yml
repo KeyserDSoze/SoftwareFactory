@@ -33,6 +33,8 @@ services:
     environment:
       RUNNER_DATA_DIR: /data
       RUNNER_RETENTION_HOURS: "24"
+      RUNNER_ALLOW_NET_DEPS: "${RUNNER_ALLOW_NET_DEPS:-false}"
+      RUNNER_NPM_REGISTRY: "${RUNNER_NPM_REGISTRY:-https://registry.npmjs.org/}"
       RUNNER_HOST_WORK_DIR: "${RUNNER_HOST_WORK_DIR:?Set absolute host workspace directory}"
       DOCKER_HOST: unix:///run/docker.sock
     volumes:

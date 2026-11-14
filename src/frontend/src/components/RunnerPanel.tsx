@@ -128,6 +128,15 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
           <span>{verification?.detail || "Verifica fingerprint e risultati in corso..."}</span>
         </div>
         <small>Digest snapshot: <code>{displayedReport.digest.slice(0, 20)}…</code> · Avviato: {displayedReport.startedAt || "in coda"}</small>
+        {displayedReport.preparation && <details className="runner-step">
+          <summary>{displayedReport.preparation.state === "passed" ?
+            <CheckCircle2 size={15} className="ok"/> : <ShieldAlert size={15} className="danger"/>}
+            <strong>Preparazione dipendenze npm</strong>
+            <span>{displayedReport.preparation.state} · exit {displayedReport.preparation.exitCode ?? "—"}</span></summary>
+          <p>Preparazione isolata con script lifecycle disabilitati. Un fallimento qui è un problema di setup, non dimostra un bug nel codice.</p>
+          {displayedReport.preparation.stdout && <pre>{displayedReport.preparation.stdout}</pre>}
+          {displayedReport.preparation.stderr && <pre>{displayedReport.preparation.stderr}</pre>}
+        </details>}
         {displayedReport.results.map((result, index) => <details key={index} className="runner-step">
           <summary>{result.state === "passed" ? <CheckCircle2 size={15} className="ok"/> :
             result.state === "failed" ? <ShieldAlert size={15} className="danger"/> : <Clock size={15} className="muted"/>}
