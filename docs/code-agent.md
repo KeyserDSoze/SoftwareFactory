@@ -41,3 +41,7 @@ Il pulsante **Approva e applica** per patch riparate controlla nuovamente il rep
 Un problema infrastrutturale senza un vero test fallito (es. worker interrompe il job) viene mostrato come incomplete, non sblocca il repair. Una mancata installazione npm dovuta a cache offline potrebbe comunque produrre un exit code fallito: prima di chiedere una correzione al codice controlla che il setup del runner sia corretto.
 
 **Non è un ciclo 24/7**: l'AI repair gira solo con la scheda attiva, e non ripete i test senza il consenso dell'utente. Digest e report legano i dati ma non rendono affidabile un runner remoto compromesso.
+
+## Scrittura di test browser da parte del Code Agent (issue #5)
+
+Il Code Agent può generare o aggiornare anche test `src/frontend/web/e2e/*.spec.ts` (comprese sottocartelle con path sicuri), oltre ai sorgenti React/C#. I test Playwright si validano come file di codice: proposta JSON, diff, review avversaria e approvazione manuale; restano esclusi workflow, package.json e `playwright.config.ts` per ridurre lo scope di modifica dell'AI. Se una patch riparata modifica uno spec E2E, il gate di approvazione richiede un nuovo esito positivo `playwright` sullo snapshot aggiornato.

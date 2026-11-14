@@ -27,12 +27,14 @@ function staged() {
 describe("safe feature development", () => {
   it("restricts file ownership and prevents traversal, hidden files and pipeline edits", () => {
     for (const path of ["src/backend/domain/Invoice.cs", "src/backend/applications/Api/Program.cs",
-      "src/frontend/web/src/components/Invoices.tsx", "src/frontend/web/src/theme.css"]) {
+      "src/frontend/web/src/components/Invoices.tsx", "src/frontend/web/src/theme.css",
+      "src/frontend/web/e2e/feature.spec.ts"]) {
       expect(allowedCodePath(path)).toBe(true);
     }
     for (const path of ["../.github/workflows/ci.yml", "/etc/passwd", "src/backend/domain/../../.env",
       "src/frontend/web/package.json", ".github/workflows/ci.yml", "src/backend/domain/A.csproj",
-      "src/frontend/web/src/../.env", "src/backend/domain//A.cs", "src/frontend/web/src/.hidden.ts",
+      "src/frontend/web/src/../.env", "src/backend/domain//A.cs", "src/frontend/web/src/.hidden.ts", "src/frontend/web/e2e/feature.ts",
+      "src/frontend/web/e2e/../config.spec.ts",
       "src\\backend\\domain\\Secret.cs"]) expect(allowedCodePath(path)).toBe(false);
   });
   it("parses a proposed edit but does not alter the export before explicit acceptance", () => {

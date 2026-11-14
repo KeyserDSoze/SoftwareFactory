@@ -147,6 +147,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         const required = new Set<string>();
         if (patch.edits.some(e => e.path.endsWith(".cs"))) required.add("dotnet-build");
         if (patch.edits.some(e => e.path.startsWith("src/frontend/web/src/"))) required.add("web-build");
+        if (patch.edits.some(e => e.path.startsWith("src/frontend/web/e2e/"))) required.add("playwright");
         if ([...required].some(step => !evidence.steps.includes(step as typeof evidence.steps[number])))
           throw new Error("Ripeti almeno i build .NET/React corrispondenti ai file riparati.");
         const endpoint = settings.runnerEndpoint || "", key = readSecret("runner.key");

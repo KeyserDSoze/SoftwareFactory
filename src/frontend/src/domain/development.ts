@@ -59,7 +59,8 @@ export function allowedCodePath(path: string): boolean {
       path.includes("\\") || path.startsWith("/") || path.includes("//") ||
       /[\x00-\x1f]/.test(path) || path.split("/").some(s => s.startsWith("."))) return false;
   return /^src\/backend\/(?:applications\/Api|business|domain|infrastructure)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z][A-Za-z0-9_-]*\.cs$/.test(path) ||
-    /^src\/frontend\/web\/src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z][A-Za-z0-9_-]*\.(?:ts|tsx|css)$/.test(path);
+    /^src\/frontend\/web\/src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z][A-Za-z0-9_-]*\.(?:ts|tsx|css)$/.test(path) ||
+    /^src\/frontend\/web\/e2e\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z][A-Za-z0-9_-]*\.spec\.ts$/.test(path);
 }
 export function workspaceConflicts(project: FactoryProject): string[] {
   const dev = developmentOf(project);
