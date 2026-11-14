@@ -84,8 +84,8 @@ try {
     "--env=CI=true", "--env=OIDC_CI_SECRET=" + idpControl,
     "--env=OIDC_ISSUER=http://identity:8999", "--env=OIDC_CLIENT_ID=factory-web",
     "--env=OIDC_AUDIENCE=factory-client",
-    "--env=OIDC_REDIRECT_URI=http://web:4173/auth/callback",
-    "--env=OIDC_ALLOWED_ORIGIN=http://web:4173",
+    "--env=OIDC_REDIRECT_URI=http://127.0.0.1:4173/auth/callback",
+    "--env=OIDC_ALLOWED_ORIGIN=http://127.0.0.1:4173",
     "node:22-bookworm-slim", "node", "/provider.mjs"]);
   startedIdp = true;
   let idpReady = false;
@@ -159,7 +159,6 @@ try {
     "--env=E2E_MODE=integration",
     "--env=E2E_DATABASE=postgresql",
     "--env=E2E_AUTH_MODE=oidc",
-    "--env=E2E_INSECURE_OIDC_HTTP=true",
     "--env=E2E_AUTH_TOKEN=" + editorToken,
     "--env=E2E_READER_TOKEN=" + readerToken,
     "--env=E2E_OTHER_TOKEN=" + otherToken,
@@ -167,8 +166,12 @@ try {
     "--env=E2E_EXPIRED_TOKEN=" + expiredToken,
     "--env=E2E_MISSING_ROLE_TOKEN=" + missingRoleToken,
     "--env=E2E_API_ORIGIN=http://api:8080",
-    "--env=E2E_WEB_ORIGIN=http://web:4173",
-    "--env=E2E_WEB_SERVER_EXTERNAL=true",
+    "--env=E2E_WEB_ORIGIN=http://127.0.0.1:4173",
+    "--env=VITE_API_URL=http://api:8080",
+    "--env=VITE_OIDC_AUTHORITY=http://identity:8999",
+    "--env=VITE_OIDC_CLIENT_ID=factory-web",
+    "--env=VITE_OIDC_AUDIENCE=factory-client",
+    "--env=E2E_WEB_SERVER_EXTERNAL=false",
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
