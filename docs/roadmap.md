@@ -202,3 +202,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - HTTP `Idempotency-Key` UUID v4 opzionale con hash nel journal, replay stesso digest/job ID, conflitto 409, formato 422, lock occupato 503 con Retry-After e fail-closed su report corrotti.
 - Frontend conserva la chiave sino ad accettazione confermata e la riusa dopo errore di rete; nuove esecuzioni confermate usano UUID diverso. Retention prende lo stesso lock. Test concorrenti su due API con filesystem comune.
 - Restano #2: isolamento runner su VM rootless reale, fencing multi-host, rate limit per client/IP, audit off-host, recovery container orfani e orchestration repair supervisionata.
+
+
+## v0.2 — Ricognizione e cleanup conservativo dei container orfani (#21)
+
+- Container identificati da nome con UUID completo e label Docker statiche per job/step: niente collisioni per job con uguale prefisso di otto caratteri.
+- Strumento amministrativo solo lato worker: dry-run, `--apply --confirm-job` esplicito, report/journal verificati, claim assente, stato failed/incomplete e nuova verifica nome/label prima di `docker rm -f`.
+- Test di sicurezza per spoofing e lock più smoke Docker reale con container non appartenente al job mantenuto intatto.
+- Rimangono in #2: riconciliazione unattended con fencing cross-host, attestazione esterna, VM rootless reale, quote tenant e orchestrazione repair supervisionata.

@@ -8,6 +8,9 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
+import { execFile as execFileCallback } from "node:child_process";
+import { reconcileRunnerContainers, runnerContainerIdentity } from "../orphans.mjs";
 import { atomicWrite, jobDirectory, readReport, validateRequest } from "../common.mjs";
 import { executeJob } from "../worker.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
@@ -69,7 +72,56 @@ try {
   assert.equal(missing.results[0].state, "skipped");
   assert.ok(missing.results[0].reason.includes("dependency setup"));
 
-  console.log("REAL_DOCKER_SMOKE_PASS: actual networkless build, intentional failure and offline dependency block verified");
+  // Real Docker isolation check: a labelled orphan can be removed manually,
+  // while a separate unrelated container stays intact. No credentials exposed.
+  const execDocker = promisify(execFileCallback);
+  const docker = async args => (await execDocker("docker", args, { timeout: 15000 })).stdout;
+  const orphanId = randomUUID(), foreignId = randomUUID();
+  const orphanDir = jobDirectory(dataDir, orphanId);
+  const checked = validateRequest({ label: "CI orphan", files, steps: ["web-build"] });
+  await mkdir(orphanDir, { recursive: true });
+  await writeFile(path.join(orphanDir, "input.json"), JSON.stringify(checked.request));
+  await atomicWrite(path.join(orphanDir, "report.json"), {
+    id: orphanId, label: "CI orphan", digest: checked.digest,
+    steps: checked.request.steps, state: "queued",
+    acceptedAt: new Date().toISOString(), results: [],
+  });
+  const accepted = await readReport(dataDir, orphanId);
+  await recordJobEvidence(dataDir, orphanId, accepted, "accepted");
+  await recordJobEvidence(dataDir, orphanId, {
+    ...accepted, state: "running", startedAt: new Date().toISOString(),
+  }, "started");
+  await recordJobEvidence(dataDir, orphanId, {
+    ...(await readReport(dataDir, orphanId)), state: "failed",
+    finishedAt: new Date().toISOString(), summary: "CI simulated orphan",
+  }, "finished");
+  const identity = runnerContainerIdentity(orphanId, "web-build");
+  const foreignName = "ci-foreign-" + foreignId;
+  try {
+    await docker(["create", "--name", identity.name,
+      ...identity.labels.flatMap(([name, value]) => ["--label", name + "=" + value]),
+      "node:22-bookworm-slim", "node", "-e", "process.exit(0)"]);
+    await docker(["create", "--name", foreignName,
+      "node:22-bookworm-slim", "node", "-e", "process.exit(0)"]);
+    const preview = await reconcileRunnerContainers({ dataDir, jobId: orphanId, runDocker: docker });
+    assert.equal(preview.applied, false);
+    assert.equal(preview.eligible, true);
+    assert.equal(preview.containers.length, 1);
+    assert.equal(preview.containers[0].name, identity.name);
+    await docker(["inspect", identity.name]); // no deletion during dry-run
+    const applied = await reconcileRunnerContainers({
+      dataDir, jobId: orphanId, apply: true, confirmJob: orphanId, runDocker: docker,
+    });
+    assert.equal(applied.removed.length, 1);
+    await assert.rejects(docker(["inspect", identity.name]));
+    await docker(["inspect", foreignName]); // foreign container must survive
+    assert.equal((await verifyJobEvidence(dataDir, orphanId)).report.state, "failed");
+  } finally {
+    await docker(["rm", "-f", identity.name]).catch(() => {});
+    await docker(["rm", "-f", foreignName]).catch(() => {});
+  }
+
+  console.log("REAL_DOCKER_SMOKE_PASS: actual networkless build, failure, offline dependency and labelled orphan cleanup verified");
 } finally {
   await rm(dataDir, { recursive: true, force: true });
   await rm(work, { recursive: true, force: true });

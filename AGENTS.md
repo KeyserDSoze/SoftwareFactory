@@ -201,3 +201,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `RUNNER_MAX_QUEUED` default 4, massimo 100 directory job conservate; considerare errori di report come problemi fail-closed, non quote libere. Coda/retention devono coordinarsi con lo stesso lock.
 - `Idempotency-Key` è un UUID v4 opzionale: salvare **solo hash SHA-256** nel report/journal, riutilizzare receipt per key+digest uguali (anche a quota piena), 409 per stessa key con digest diverso, 422 formato non valido; la durata è quella di retention. Il client React conserva la key per retry manuale su invio dall'esito sconosciuto, ma crea una chiave nuova dopo conferma.
 - Testare richieste concorrenti su **due server API** che condividono la stessa cartella, lock stale, quota, tampering e risposte CORS. Non equiparare questa admission POSIX a DB transazionale o fencing multi-host; #2 rimane aperta.
+
+
+## Identità Docker e riconciliazione conservativa (#21)
+
+- Nominare i container usando UUID job **completo** e step allowlisted, e label `softwarefactory.runner=job`, `softwarefactory.job-id`, `softwarefactory.step`; mai esporre sorgenti, JWT, API key o segreti.
+- `node src/runner/orphans.mjs --job=<uuid>` è per l'operatore sul **worker** e di default non elimina niente. Cleanup solo con `--apply --confirm-job=<uuid>`, report e journal validi, stato `failed/incomplete`, assenza di claim e `docker inspect` che confermi ID completo, nome e tre label **anche immediatamente prima** della rimozione.
+- Non aggiungere endpoint Docker sulla API esposta e non usare `docker prune` o match per prefissi. Lo strumento non recupera lock orfani, non muta il ledger e non ritenta il job: serve ancora una riconciliazione umana di worker e daemon.
+- La CLI rifiuta socket rootful; la Factory CI inietta un adapter Docker sul runner effimero per dimostrare la rimozione selettiva senza toccare container estranei. Non confondere con attestazione di un servizio su VM rootless reale.

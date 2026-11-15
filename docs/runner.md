@@ -236,3 +236,21 @@ Il client può inviare l'header opzionale `Idempotency-Key: <UUID v4>` al POST. 
 L'idempotenza dura **finché la directory job è conservata** (retention predefinita 24 ore): la chiave vive nel report, non in una tabella separata permanente. Il worker acquisisce lo stesso lock durante la pulizia delle directory scadute, così la scansione e la cancellazione non si sovrappongono all'admission. Una richiesta HTTP interrotta dopo la registrazione del journal può lasciare un job accettato: il retry con UUID identico lo ritrova. Nel caso raro di crash *fra* creazione e persistenza finale, la directory e il lock richiedono riconciliazione, non vengono ripuliti automaticamente.
 
 **Limiti operativi:** il filesystem deve garantire `mkdir` atomico (POSIX locale o soluzione equivalente verificata); non è un lock distribuito tra dischi separati, non offre quote per tenant/IP, e non sostituisce la VM Docker rootless dedicata. Il protocollo rimane sperimentale (#2).
+
+
+## Ispezione e cleanup controllato dei container orfani (#21)
+
+Ogni `docker run` del worker riceve il nome `sf-<UUID completo>-<step>` e label `softwarefactory.runner=job`, `softwarefactory.job-id=<UUID>`, `softwarefactory.step=<step>`. L'UUID completo evita collisioni tra job che condividono le prime otto cifre. La API pubblica **non** possiede il socket Docker né un endpoint di rimozione; lo strumento seguente va invocato esclusivamente sul worker/host rootless dedicato.
+
+```sh
+# Default: dry-run, solo report e container associati al job
+node src/runner/orphans.mjs --job=<uuid-del-job>
+# Solo dopo aver verificato che il worker NON sta eseguendo questo job
+node src/runner/orphans.mjs --job=<uuid-del-job> --apply --confirm-job=<stesso-uuid>
+```
+
+La CLI parla soltanto con `DOCKER_HOST=unix:///run/docker.sock` oppure un socket rootless `unix:///run/user/<uid>/docker.sock`, e rifiuta il socket rootful di default. Legge e verifica `report.json` e il journal con hash-chain, controlla l'assenza di `.claim`, accetta soltanto report terminali `failed` o `incomplete` e interroga Docker per le **label esatte** dell'ID job completo. Prima di ogni `docker rm -f` reinspeziona ID completo, nome, step, label e stato/claim: un mismatch fallisce in modo conservativo. Non fa `prune`, non tocca container non etichettati o di altri job, non modifica evidenze, non ritenta codice.
+
+**Procedura in caso di crash:** se esiste `.claim`, fermare e verificare il worker ed eventuali processi ancora vivi; non sottrarre una claim per il solo TTL. Dopo aver verificato che non esistano processi proprietari attivi, riconciliare/rimuovere manualmente la claim; il poller potrà segnare `running → failed` sotto journal verificato. Solo quando il report è terminale e la claim è assente l'operatore può rieseguire il comando di ricognizione e valutare `--apply`. In caso di journal corrotto o Docker non raggiungibile non vengono eseguite rimozioni. Non usare questo procedimento in automatico come recovery unattended.
+
+La CI effimera verifica con Docker reale che il dry-run non elimina niente, che un container correttamente etichettato viene rimosso solo su conferma e che un container estraneo rimane disponibile. I test unitari coprono spoofing di label/nome, stati non terminali e lock; **non** certificano l'isolamento di una VM rootless distribuita.
