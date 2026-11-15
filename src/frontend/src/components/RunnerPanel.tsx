@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wrench } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
+import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
 import { readSecret } from "../infrastructure/store";
 import {
   fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
@@ -34,6 +35,15 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   // Preserve an in-flight receipt UUID for manual retry after a lost response.
   // A confirmed submission clears this; a deliberate new run gets a new UUID.
   const pendingSubmission = useRef<{ signature: string; idempotencyKey: string } | null>(null);
+  const latestProject = useRef(project);
+  latestProject.current = project;
+  const pendingRepair = project.development?.pending;
+  const isRepair = (pendingRepair?.repairCount ?? 0) > 0;
+  const retestPlan = (() => {
+    if (!isRepair) return null;
+    try { return planRepairRetest(project, steps); }
+    catch { return null; }
+  })();
   const evidence = project.development?.lastRunnerEvidence;
   const jobId = evidence?.id || project.development?.lastRunnerJobId || "";
   const endpoint = settings.runnerEndpoint || "";
@@ -72,30 +82,48 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   const submit = async () => {
     if (busy || requesting || repairing) return;
     if (!endpoint || !secret) { onError("Configura URL e API key del runner nelle Impostazioni."); return; }
-    if (!steps.length) { onError("Seleziona almeno un tipo di test."); return; }
+    if (isRepair && !retestPlan) {
+      onError("Dopo un repair è obbligatoria una nuova review positiva e la provenienza dei test falliti."); return;
+    }
+    const selectedSteps = retestPlan?.steps ?? steps;
+    if (!selectedSteps.length) { onError("Seleziona almeno un tipo di test."); return; }
     const pending = project.development?.pending;
-    const label = (project.config.name + (pending ? " · proposal: " + pending.summary : " · approved workspace")).slice(0, 160);
-    if (!window.confirm("Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.")) return;
+    const label = retestPlan?.label ??
+      (project.config.name + (pending ? " · proposal: " + pending.summary : " · approved workspace")).slice(0, 160);
+    const consent = retestPlan
+      ? "Re-test supervisionato " + retestPlan.attempt + "/2: inviare al runner il NUOVO codice riparato? " +
+        "Verranno rieseguiti tutti i controlli falliti e le build richieste (" + selectedSteps.join(", ") +
+        "). La review non equivale a un test e nessuna patch sarà applicata automaticamente."
+      : "Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.";
+    if (!window.confirm(consent)) return;
     setRequesting(true);
     try {
       const files = runnerSourceFiles(project, pending !== undefined);
-      const checksum = await runnerRequestDigest(label, files, steps);
+      const checksum = await runnerRequestDigest(label, files, selectedSteps);
       const signature = runnerEndpoint(endpoint) + ":" + checksum;
       const idempotencyKey = pendingSubmission.current?.signature === signature
         ? pendingSubmission.current.idempotencyKey : crypto.randomUUID();
       pendingSubmission.current = { signature, idempotencyKey };
-      const receipt = await submitRunnerJob(endpoint, secret, label, files, steps, undefined, idempotencyKey);
-      if (receipt.digest !== checksum || !/^[a-f0-9-]{36}$/.test(receipt.id) || receipt.state !== "queued")
-        throw new Error("Digest del runner diverso dallo snapshot locale. Job non considerato verificabile.");
+      const receipt = await submitRunnerJob(endpoint, secret, label, files, selectedSteps,
+        undefined, idempotencyKey);
+      verifyRepairRetestReceipt(receipt, checksum);
+      // A response to an outdated submission must never be bound to a newer patch.
+      if (latestProject.current.updatedAt !== project.updatedAt ||
+          (latestProject.current.development?.pending?.id ?? null) !== (pending?.id ?? null) ||
+          (latestProject.current.development?.revision ?? 0) !== (project.development?.revision ?? 0))
+        throw new Error("Workspace modificato durante l'invio: receipt non associata.");
       const binding: RunnerJobEvidence = {
         id: receipt.id, digest: checksum, endpoint: runnerEndpoint(endpoint), label: label.trim(),
-        steps: [...steps], submittedAt: new Date().toISOString(),
+        steps: [...selectedSteps], submittedAt: new Date().toISOString(),
         proposalId: pending?.id || null, revision: project.development?.revision ?? 0,
       };
       setReport(null); setVerification(null);
       onRunnerBound(binding);
       pendingSubmission.current = null;
-      onNotice("Job inviato: " + receipt.id + ". L'esito sarà valido solo per questo snapshot dei sorgenti.");
+      onNotice(retestPlan
+        ? "Nuovo re-test per repair " + retestPlan.attempt + "/2 inviato: " + receipt.id +
+          ". Attendi i risultati e controlla il diff; nessuna approvazione automatica."
+        : "Job inviato: " + receipt.id + ". L'esito sarà valido solo per questo snapshot dei sorgenti.");
     } catch(e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setRequesting(false); }
   };
@@ -119,13 +147,22 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     <div className="panel-title"><div><div className="eyebrow">REMOTE EXECUTION / TEST RUNNER</div><h3>Test e compilazione reali</h3></div><Cloud size={20} className="muted" /></div>
     <p className="helper">L'esito è associato all'impronta SHA-256 del codice inviato. Se la patch o il progetto cambiano, il risultato diventa automaticamente <strong>obsoleto</strong>.</p>
     {!endpoint && <div className="code-agent-warning"><ShieldAlert size={17}/> Configura URL e API key in Settings → Remote runner.</div>}
+    {isRepair && <div className={retestPlan ? "runner-verification" : "code-agent-warning"}>
+      <ShieldAlert size={17}/>
+      <span>{retestPlan
+        ? "Repair " + retestPlan.attempt + "/2 · job fallito " + retestPlan.failedJobId.slice(0, 8) +
+          " · re-test obbligatorio: " + retestPlan.steps.join(", ") +
+          ". Gli step falliti e le build necessarie non possono essere esclusi."
+        : "Repair in attesa di review positiva o evidenze valide. Nessun test o codice verrà applicato automaticamente."}</span>
+    </div>}
     <div className="runner-checks">{AVAILABLE.map(({ step, label }) =>
       <label className="checkline" key={step}><input type="checkbox" checked={steps.includes(step)} disabled={requesting || repairing}
         onChange={e => setSteps(current => e.target.checked ? [...current, step] : current.filter(x => x !== step))}/>{label}</label>)}</div>
     <div className="panel-footer"><span>Le patch non ancora approvate vengono incluse solo nel test. Nessun push o applicazione automatica.</span>
-      <button className="secondary" disabled={busy || requesting || repairing || !endpoint || !secret || !steps.length}
+      <button className="secondary" disabled={busy || requesting || repairing || !endpoint || !secret ||
+          (isRepair ? !retestPlan : !steps.length)}
         onClick={() => void submit()}>{requesting ? <RefreshCw size={16} className="spinning"/> : <Play size={16}/>}
-        {requesting ? "Invio..." : "Avvia test sul runner"}</button></div>
+        {requesting ? "Invio..." : retestPlan ? "Conferma e riesegui test repair" : "Avvia test sul runner"}</button></div>
     {jobId && <div className="runner-report">
       <div className="runner-report-title"><strong><Activity size={16}/> Job {jobId.slice(0, 8)}</strong>
         {displayedReport && <span className={"runner-state " + kind}>{kind === "awaiting" ? displayedReport.state.toUpperCase() : kind.toUpperCase()}</span>}</div>
