@@ -193,3 +193,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `GET /v1/jobs/:id` e `/evidence` sono autenticati e verificano tutta la catena: manomissione/assenza → 409 `evidence_invalid` (mai `passed`). Job legacy senza journal non sono migrati implicitamente. Anche worker/poller e recovery devono verificare prima di eseguire o scrivere.
 - Redigere stdout/stderr/command/reason **prima** della persistenza e mai inserire input sorgente o secret nella catena. Dopo crash fra journal e report non troncare il journal automaticamente: fail closed + riconciliazione operatore.
 - Un hash-chain locale non è WORM, firma digitale, prova di isolamento rootless né attestazione server: #2 resta aperta.
+
+
+## Admission e retry sicuri del runner (#20)
+
+- Serializzare **prima di contare** i job e creare input/report/journal con `mkdir /data/jobs/.admission` condiviso. Non fare controlli quota in memoria né liberare automaticamente lock orfani basandosi su TTL/mtime.
+- `RUNNER_MAX_QUEUED` default 4, massimo 100 directory job conservate; considerare errori di report come problemi fail-closed, non quote libere. Coda/retention devono coordinarsi con lo stesso lock.
+- `Idempotency-Key` è un UUID v4 opzionale: salvare **solo hash SHA-256** nel report/journal, riutilizzare receipt per key+digest uguali (anche a quota piena), 409 per stessa key con digest diverso, 422 formato non valido; la durata è quella di retention. Il client React conserva la key per retry manuale su invio dall'esito sconosciuto, ma crea una chiave nuova dopo conferma.
+- Testare richieste concorrenti su **due server API** che condividono la stessa cartella, lock stale, quota, tampering e risposte CORS. Non equiparare questa admission POSIX a DB transazionale o fencing multi-host; #2 rimane aperta.

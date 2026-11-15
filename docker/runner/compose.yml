@@ -15,6 +15,7 @@ services:
       RUNNER_API_KEY: "${RUNNER_API_KEY:?Set a strong random RUNNER_API_KEY}"
       RUNNER_ALLOWED_ORIGINS: "${RUNNER_ALLOWED_ORIGINS:?Set explicit https origins}"
       RUNNER_DATA_DIR: /data
+      RUNNER_MAX_QUEUED: "${RUNNER_MAX_QUEUED:-4}"
       RUNNER_PORT: 8787
     ports:
       - "127.0.0.1:8787:8787"

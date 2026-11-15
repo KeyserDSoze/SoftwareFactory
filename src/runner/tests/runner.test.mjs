@@ -4,11 +4,13 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate, scrub, atomicWrite } from "../common.mjs";
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
+import { withAdmissionLock } from "../admission.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
 const origin = "http://localhost:5173";
@@ -61,6 +63,7 @@ test("API denies unauthenticated calls and cross-origin requests", async () => {
   const opts = await request("/v1/jobs", { method: "OPTIONS" });
   assert.equal(opts.status, 204);
   assert.equal(opts.headers.get("access-control-allow-origin"), origin);
+  assert.match(opts.headers.get("access-control-allow-headers") || "", /Idempotency-Key/);
   assert.equal((await request("/v1/capabilities")).status, 200);
 });
 test("API accepts a bounded immutable snapshot and returns only status", async () => {
@@ -114,6 +117,142 @@ test("API rejects tampered report, edited journal, missing journal and unauthent
   } finally {
     await writeFile(reportPath, report);
     await writeFile(journalPath, journal);
+  }
+});
+
+
+test("two API instances serialize quota admission and replay the same idempotent receipt", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-admission-data-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-admission-work-"));
+  const first = createRunnerServer({ apiKey: key, allowedOrigins: [origin], dataDir,
+    maxQueued: 1, maxRetained: 2 });
+  const second = createRunnerServer({ apiKey: key, allowedOrigins: [origin], dataDir,
+    maxQueued: 1, maxRetained: 2 });
+  try {
+    for (const server of [first, second]) {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+    }
+    const urls = [first, second].map(server => "http://127.0.0.1:" + server.address().port);
+    const send = (index, requestKey, payload = job()) => fetch(urls[index] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(payload),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json", "Idempotency-Key": requestKey },
+    });
+    const retryKey = randomUUID();
+    const simultaneous = await Promise.all(Array.from({ length: 6 },
+      (_, i) => send(i % 2, retryKey)));
+    assert.ok(simultaneous.every(x => x.status === 202), "all concurrent identical retries must succeed");
+    const receipts = await Promise.all(simultaneous.map(response => response.json()));
+    assert.equal(new Set(receipts.map(r => r.id)).size, 1);
+    const id = receipts[0].id;
+    assert.equal((await readdir(path.join(dataDir, "jobs"))).filter(x => !x.startsWith(".")).length, 1);
+    assert.equal((await verifyJobEvidence(dataDir, id)).report.idempotencyKeyHash.length, 64);
+
+    const full = await send(0, randomUUID());
+    assert.equal(full.status, 429, "new UUID cannot bypass maxQueued=1");
+    assert.equal((await full.json()).error, "queue_full");
+    const changed = await send(1, retryKey, { ...job(), label: "Different snapshot" });
+    assert.equal(changed.status, 409, "same UUID cannot be reused for another payload");
+    assert.equal((await changed.json()).error, "idempotency_conflict");
+    const invalid = await send(1, "bad-key");
+    assert.equal(invalid.status, 422);
+    assert.equal((await invalid.json()).error, "invalid_idempotency_key");
+
+    const completed = await executeJob(id, { dataDir, workspaceRoot: work,
+      executeStep: async plan => ({
+        step: "dotnet-build", state: "passed", exitCode: 0,
+        durationMs: 1, image: plan.image, stdout: "", stderr: "",
+      }),
+    });
+    assert.equal(completed.state, "passed");
+    const replayFinished = await send(1, retryKey);
+    assert.equal(replayFinished.status, 202);
+    assert.equal((await replayFinished.json()).id, id, "completed job still reuses its receipt");
+
+    const newKey = randomUUID();
+    const next = await send(0, newKey);
+    assert.equal(next.status, 202);
+    const nextId = (await next.json()).id;
+    assert.notEqual(nextId, id);
+    assert.equal((await send(1, randomUUID())).status, 429, "queued job consumes all active slots");
+    await executeJob(nextId, { dataDir, workspaceRoot: work,
+      executeStep: async plan => ({
+        step: "dotnet-build", state: "passed", exitCode: 0,
+        durationMs: 1, image: plan.image, stdout: "", stderr: "",
+      }),
+    });
+    assert.equal((await send(0, randomUUID())).status, 429,
+      "retained completed jobs still count towards the disk cap");
+    await withAdmissionLock(dataDir, async () => {
+      await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
+    });
+    const afterRetention = await send(1, retryKey);
+    assert.equal(afterRetention.status, 202);
+    assert.notEqual((await afterRetention.json()).id, id,
+      "same key is no longer retained once its job was deleted");
+  } finally {
+    await Promise.all([first, second].map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("two independent API instances never exceed maxQueued under distinct simultaneous requests", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-transactional-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir, maxQueued: 1, maxRetained: 100,
+  }));
+  try {
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const endpoints = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const responses = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+      fetch(endpoints[i % 2] + "/v1/jobs", {
+        method: "POST", body: JSON.stringify(job()),
+        headers: { Origin: origin, Authorization: "Bearer " + key,
+          "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+      })));
+    assert.equal(responses.filter(r => r.status === 202).length, 1,
+      "only one of eight concurrent requests may claim the capacity");
+    assert.equal(responses.filter(r => r.status === 429).length, 7);
+    assert.equal((await readdir(path.join(dataDir, "jobs"))).filter(x => !x.startsWith(".")).length, 1);
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("stale admission lock and corrupt persisted job fail closed without disk quota bypass", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-admission-locked-"));
+  const s = createRunnerServer({ apiKey: key, allowedOrigins: [origin], dataDir,
+    maxQueued: 2, admissionWaitMs: 100 });
+  try {
+    s.listen(0, "127.0.0.1"); await once(s, "listening");
+    const endpoint = "http://127.0.0.1:" + s.address().port + "/v1/jobs";
+    const submit = () => fetch(endpoint, {
+      method: "POST", body: JSON.stringify(job()),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+    });
+    const jobsRoot = path.join(dataDir, "jobs");
+    await mkdir(jobsRoot, { recursive: true });
+    await mkdir(path.join(jobsRoot, ".admission"));
+    const busy = await submit();
+    assert.equal(busy.status, 503);
+    assert.equal(busy.headers.get("retry-after"), "2");
+    assert.equal((await busy.json()).error, "admission_busy");
+    assert.ok((await readdir(jobsRoot)).includes(".admission"), "lock is never stolen by TTL");
+    await rm(path.join(jobsRoot, ".admission"), { recursive: true });
+    const corruptDir = jobDirectory(dataDir, randomUUID());
+    await mkdir(corruptDir);
+    const corrupt = await submit();
+    assert.equal(corrupt.status, 503);
+    assert.equal((await corrupt.json()).error, "admission_integrity");
+    await withAdmissionLock(dataDir, async () => rm(corruptDir, { recursive: true }));
+    assert.equal((await submit()).status, 202, "admission recovers after manual reconciliation");
+  } finally {
+    await new Promise(resolve => s.close(resolve));
+    await rm(dataDir, { recursive: true, force: true });
   }
 });
 

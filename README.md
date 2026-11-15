@@ -113,3 +113,8 @@ Il worker crea una claim esclusiva sul volume condiviso **prima** di leggere il 
 ## Evidenze dei test del runner con hash-chain (#19)
 
 Ogni job remoto produce un registro append-only `evidence.jsonl`: accettazione, avvio, preparazione, step e risultato finale, con SHA-256 concatenati e snapshot dei report. `GET /v1/jobs/{id}` e `GET /v1/jobs/{id}/evidence` (API key Bearer) validano la catena, il suo `head` e il report. Una manomissione, un journal mancante o troncato dà **409 `evidence_invalid`**, non `passed`. Il runner salva output e comandi redatti; la CI include regressioni di manomissione e smoke Docker reale. **Non è un'attestazione crittografica esterna:** con controllo completo del disco si possono rigenerare catena e report; firme e ancoraggio off-host restano nella #2.
+
+
+## Coda runner: admission atomica e retry idempotenti (#20)
+
+Le richieste `POST /v1/jobs` vengono serializzate da una claim condivisa prima del controllo quota (**4 job attivi** di default, configurabili con `RUNNER_MAX_QUEUED`, massimo 100 directory conservate). Due API sullo stesso filesystem non possono accettare contemporaneamente oltre quota. Il client invia `Idempotency-Key` UUID v4: una richiesta ripetuta con lo stesso payload riceve lo stesso job ID anche dopo il completamento; il server conserva soltanto il fingerprint SHA-256 della chiave. Un payload differente con la stessa chiave riceve 409, chiavi non valide 422. Il browser riutilizza la chiave quando ritenta un invio non confermato, senza duplicare un test già accettato. Il lock è fail-closed su crash (503 finché non riconciliato). L'idempotenza dura fino alla retention del job, non è una coda transazionale multi-host né un sistema multi-tenant; la #2 resta aperta.

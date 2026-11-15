@@ -194,3 +194,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Journal JSONL privato per job, con eventi accettazione, avvio, preparazione, step, conclusione/recovery e SHA-256 concatenati.
 - `report.evidence` lega report, conteggio e head; endpoint di export autenticato e letture fail-closed HTTP 409 su alterazioni/troncamenti.
 - Fsync dei record prima del report, output redatti e test di manomissione oltre a smoke Docker effettivo. Restano #2: attestazione off-host, fencing distribuito, quote/idempotenza transazionali, rootless VM e fix loop supervisionato.
+
+
+## v0.2 — Admission atomica e idempotenza runner (#20)
+
+- `mkdir .admission` serializza quota/creazione di job tra istanze API sulla stessa directory; default quattro job in coda/esecuzione, massimo 100 directory incluse le esecuzioni passate non ancora scadute.
+- HTTP `Idempotency-Key` UUID v4 opzionale con hash nel journal, replay stesso digest/job ID, conflitto 409, formato 422, lock occupato 503 con Retry-After e fail-closed su report corrotti.
+- Frontend conserva la chiave sino ad accettazione confermata e la riusa dopo errore di rete; nuove esecuzioni confermate usano UUID diverso. Retention prende lo stesso lock. Test concorrenti su due API con filesystem comune.
+- Restano #2: isolamento runner su VM rootless reale, fencing multi-host, rate limit per client/IP, audit off-host, recovery container orfani e orchestration repair supervisionata.
