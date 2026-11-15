@@ -59,7 +59,8 @@ async function runnerRequest<T>(baseUrl: string, key: string, endpoint: string, 
   let response: Response;
   try { response = await fetch(base + endpoint, {
     ...init, mode: "cors", redirect: "error", cache: "no-store",
-    headers: { Authorization: "Bearer " + key, ...(init.body ? { "Content-Type": "application/json" } : {}) },
+    headers: { Authorization: "Bearer " + key, ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers || {}) },
   }); } catch { throw new Error("Runner non raggiungibile: verifica URL, tunnel, CORS e connessione."); }
   if (!response.ok) {
     let detail = "";
@@ -68,8 +69,11 @@ async function runnerRequest<T>(baseUrl: string, key: string, endpoint: string, 
   }
   return response.json() as Promise<T>;
 }
-export async function submitRunnerJob(baseUrl: string, key: string, label: string, files: Record<string, string>, steps: RunnerStep[], signal?: AbortSignal) {
+export async function submitRunnerJob(baseUrl: string, key: string, label: string,
+  files: Record<string, string>, steps: RunnerStep[], signal?: AbortSignal,
+  idempotencyKey: string = crypto.randomUUID()) {
   return runnerRequest<RunnerJobReceipt>(baseUrl, key, "/v1/jobs", { method: "POST", signal,
+    headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ label, files, steps }) });
 }
 export async function fetchRunnerJob(baseUrl: string, key: string, id: string, signal?: AbortSignal) {

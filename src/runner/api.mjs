@@ -1,34 +1,20 @@
 import { createServer as httpServer } from "node:http";
-import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALLOWED_STEPS, MAX_REQUEST_BYTES, atomicWrite, authenticate, jobDirectory, jobId, readReport, validateRequest } from "./common.mjs";
-import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
+import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
+import { verifyJobEvidence } from "./evidence.mjs";
+import { admitRunnerJob } from "./admission.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
   allowedOrigins = (process.env.RUNNER_ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean),
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
-  maxQueued = 4,
+  maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
+  maxRetained = 100,
+  admissionWaitMs = 1500,
 } = {}) {
   if (typeof apiKey !== "string" || apiKey.length < 32) throw new Error("RUNNER_API_KEY must contain at least 32 characters");
   if (!allowedOrigins.length || allowedOrigins.some(origin => !/^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/localhost(?::\d+)?$|^http:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin))) {
     throw new Error("Set explicit RUNNER_ALLOWED_ORIGINS (HTTPS or localhost), no wildcard");
-  }
-  async function activeJobs() {
-    let ids = [];
-    try { ids = await readdir(path.join(dataDir, "jobs")); }
-    catch (e) { if (e.code !== "ENOENT") throw e; }
-    // Fail closed after 100 retained jobs; worker expires finished reports after 24h.
-    // Prevent an authenticated but abusive client from exhausting VM disk indefinitely.
-    if (ids.length >= 100) return Number.POSITIVE_INFINITY;
-    let active = 0;
-    for (const id of ids.slice(-100)) {
-      try { if (["queued","running"].includes((await readReport(dataDir, id)).state)) active++; }
-      catch { /* ignore unreadable directories */ }
-    }
-    return active;
   }
   return httpServer(async (req, res) => {
     const origin = req.headers.origin;
@@ -41,7 +27,7 @@ export function createRunnerServer({
     if (allowed) {
       headers["Access-Control-Allow-Origin"] = origin;
       headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-      headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+      headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Idempotency-Key";
       headers["Access-Control-Max-Age"] = "600";
     }
     const send = (status, data) => { res.writeHead(status, headers); res.end(JSON.stringify(data)); };
@@ -77,26 +63,32 @@ export function createRunnerServer({
           if (length > MAX_REQUEST_BYTES) { send(413, { error: "too_large" }); return; }
           chunks.push(chunk);
         }
-        if (await activeJobs() >= maxQueued) { send(429, { error: "queue_full" }); return; }
         let parsed;
         try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
         catch { send(400, { error: "invalid_json" }); return; }
         let checked;
         try { checked = validateRequest(parsed); }
         catch(e) { send(422, { error: "invalid_request", detail: e.message }); return; }
-        const id = jobId(), dir = jobDirectory(dataDir, id);
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        await writeFile(path.join(dir, "input.json"), JSON.stringify(checked.request), { flag: "wx", mode: 0o600 });
-        const report = { id, schemaVersion: 1, label: checked.request.label, digest: checked.digest,
-          state: "queued", acceptedAt: new Date().toISOString(), startedAt: null, finishedAt: null,
-          fileCount: checked.fileCount, bytes: checked.bytes, steps: checked.request.steps,
-          results: [], summary: "In attesa del worker" };
-        await atomicWrite(path.join(dir, "report.json"), report);
-        await recordJobEvidence(dataDir, id, report, "accepted");
-        send(202, { id, digest: checked.digest, state: report.state });
-      } catch(e) {
-        send(500, { error: "internal_error" });
-      }
+        try {
+          const receipt = await admitRunnerJob({
+            dataDir, checked, idempotencyKey: req.headers["idempotency-key"],
+            maxQueued, maxRetained, waitMs: admissionWaitMs,
+          });
+          send(202, receipt);
+        } catch (error) {
+          if (error.code === "INVALID_IDEMPOTENCY_KEY")
+            send(422, { error: "invalid_idempotency_key" });
+          else if (error.code === "IDEMPOTENCY_CONFLICT")
+            send(409, { error: "idempotency_conflict" });
+          else if (error.code === "QUEUE_FULL")
+            send(429, { error: "queue_full" });
+          else if (error.code === "ADMISSION_BUSY" || error.code === "ADMISSION_INTEGRITY") {
+            res.writeHead(503, { ...headers, "Retry-After": "2" });
+            res.end(JSON.stringify({ error: error.code === "ADMISSION_BUSY" ?
+              "admission_busy" : "admission_integrity" }));
+          } else send(500, { error: "internal_error" });
+        }
+      } catch { send(500, { error: "internal_error" }); }
       return;
     }
     send(404, { error: "not_found" });

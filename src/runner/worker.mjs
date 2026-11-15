@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from "./common.mjs";
 import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep } from "./docker.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
+import { withAdmissionLock } from "./admission.mjs";
 
 /** Redact results before either report.json or the evidence journal sees them. */
 function safeStepResult(value) {
@@ -163,7 +164,21 @@ export async function runWorker({
         const claimed = await isClaimed(dataDir, id);
         if (!claimed && ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
-          await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
+          // Admission and retention share one lock; an idempotent retry can
+          // never race deletion of the very job whose receipt it needs.
+          try {
+            await withAdmissionLock(dataDir, async () => {
+              if (await isClaimed(dataDir, id)) return;
+              const { report: latest } = await verifyJobEvidence(dataDir, id);
+              if (["passed", "failed", "incomplete"].includes(latest.state) &&
+                  Number.isFinite(Date.parse(latest.finishedAt)) &&
+                  Date.parse(latest.finishedAt) < expireBefore)
+                await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
+            }, 250);
+          } catch (error) {
+            if (error.code !== "ADMISSION_BUSY" && error.code !== "ENOENT")
+              console.error("Runner retention skipped a job with invalid state");
+          }
           continue;
         }
         // Claimed queued jobs must not starve ready jobs.

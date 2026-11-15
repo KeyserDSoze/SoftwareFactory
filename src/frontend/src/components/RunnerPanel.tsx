@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wrench } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
@@ -31,6 +31,9 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   const [verification, setVerification] = useState<RunnerVerification | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [repairing, setRepairing] = useState(false);
+  // Preserve an in-flight receipt UUID for manual retry after a lost response.
+  // A confirmed submission clears this; a deliberate new run gets a new UUID.
+  const pendingSubmission = useRef<{ signature: string; idempotencyKey: string } | null>(null);
   const evidence = project.development?.lastRunnerEvidence;
   const jobId = evidence?.id || project.development?.lastRunnerJobId || "";
   const endpoint = settings.runnerEndpoint || "";
@@ -77,7 +80,11 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     try {
       const files = runnerSourceFiles(project, pending !== undefined);
       const checksum = await runnerRequestDigest(label, files, steps);
-      const receipt = await submitRunnerJob(endpoint, secret, label, files, steps);
+      const signature = runnerEndpoint(endpoint) + ":" + checksum;
+      const idempotencyKey = pendingSubmission.current?.signature === signature
+        ? pendingSubmission.current.idempotencyKey : crypto.randomUUID();
+      pendingSubmission.current = { signature, idempotencyKey };
+      const receipt = await submitRunnerJob(endpoint, secret, label, files, steps, undefined, idempotencyKey);
       if (receipt.digest !== checksum || !/^[a-f0-9-]{36}$/.test(receipt.id) || receipt.state !== "queued")
         throw new Error("Digest del runner diverso dallo snapshot locale. Job non considerato verificabile.");
       const binding: RunnerJobEvidence = {
@@ -87,6 +94,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
       };
       setReport(null); setVerification(null);
       onRunnerBound(binding);
+      pendingSubmission.current = null;
       onNotice("Job inviato: " + receipt.id + ". L'esito sarà valido solo per questo snapshot dei sorgenti.");
     } catch(e) { onError(e instanceof Error ? e.message : String(e)); }
     finally { setRequesting(false); }
