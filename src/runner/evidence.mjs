@@ -45,7 +45,7 @@ export function verifyEvidenceExport(bundle) {
         bundle.report.evidence.count !== bundle.entries.length ||
         bundle.report.evidence.head !== previousHash ||
         !isDeepStrictEqual(snapshot(bundle.report),
-          bundle.entries[bundle.entries.length - 1].report)
+          bundle.entries[bundle.entries.length - 1].report))
       throw invalid();
     return { report: bundle.report, entries: bundle.entries, head: previousHash };
   } catch (error) {
