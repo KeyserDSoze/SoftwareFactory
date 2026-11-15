@@ -14,10 +14,14 @@ const apiKey = "runner-integration-key-abcdefghijklmnopqrstuvwxyz";
 const editorKey = "editor-key-abcdefghijklmnopqrstuvwxyz1234567890";
 const reviewerKey = "reviewer-key-abcdefghijklmnopqrstuvwxyz1234567890";
 const approverKey = "approver-key-abcdefghijklmnopqrstuvwxyz1234567890";
+const supervisorKey = "supervisor-key-abcdefghijklmnopqrstuvwxyz1234567890";
+const backupProposerKey = "backup-proposer-key-abcdefghijklmnopqrstuvwxyz1234567890";
 const repairOperators = JSON.stringify([
   { id: "editor", key: editorKey, roles: ["propose"] },
   { id: "reviewer", key: reviewerKey, roles: ["review"] },
   { id: "approver", key: approverKey, roles: ["approve"] },
+  { id: "supervisor", key: supervisorKey, roles: ["propose","review","approve"] },
+  { id: "backup", key: backupProposerKey, roles: ["propose"] },
 ]);
 const origin = "http://localhost:5173";
 const proposalId = "00000000-0000-4000-a000-000000000025";
@@ -221,6 +225,96 @@ test("transient ledger snapshot files are retried but permanent corruption alway
     assert.equal(replay.body.error, "repair_integrity");
     assert.equal((await f.call(0, pathFor(id))).status, 200,
       "the existing valid session remains readable and was not deleted");
+  } finally { await f.close(); }
+});
+
+test("server enforces three distinct actor IDs even when one credential has all role scopes", async () => {
+  const f = await fixture();
+  try {
+    const root = await f.submit();
+    await f.complete(root, "failed");
+    const started = await f.call(0, "/v1/repair-sessions", begin(root.id));
+    assert.equal(started.status, 201);
+    const id = started.body.id;
+    const changed = await f.submit({ ...code,
+      [backend]: "namespace Demo; public record Invoice(int StrictActor);" });
+    const patchByOtherProposer = await f.call(1, next(id), patch(changed.digest), {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(patchByOtherProposer.status, 409);
+    assert.equal(patchByOtherProposer.body.error, "repair_actor_conflict");
+    assert.equal((await f.call(0, next(id), patch(changed.digest))).status, 200);
+    // Reviewer is independent; this credential also has propose+approve scopes.
+    const independent = await f.call(1, next(id), reviewed, {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(independent.status, 200);
+    assert.equal(independent.body.state, "awaiting_retest");
+    await f.complete(changed, "passed");
+    const retestByDifferentProposer = await f.call(0, next(id), {
+      action: "retest", consent: true, jobId: changed.id,
+    }, { Authorization: "Bearer " + backupProposerKey });
+    assert.equal(retestByDifferentProposer.status, 409);
+    assert.equal(retestByDifferentProposer.body.error, "repair_actor_conflict");
+    assert.equal((await f.call(1, next(id), {
+      action: "retest", consent: true, jobId: changed.id,
+    })).body.state, "awaiting_approval");
+    const reviewerApprovesOwnReview = await f.call(0, next(id), approval(id), {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(reviewerApprovesOwnReview.status, 409);
+    assert.equal(reviewerApprovesOwnReview.body.error, "repair_actor_conflict");
+    assert.equal((await f.call(1, next(id), approval(id), {
+      Authorization: "Bearer " + approverKey,
+    })).status, 200);
+    const final = await f.call(0, pathFor(id));
+    assert.equal(final.status, 200);
+    assert.equal(final.body.state, "recorded_approval");
+    assert.deepEqual(final.body.audit.map(e => e.actorId),
+      ["editor", "editor", "supervisor", "editor", "approver"]);
+  } finally { await f.close(); }
+});
+
+test("multi-role proposer cannot review own patch, even on retry after a second failure", async () => {
+  const f = await fixture();
+  try {
+    const failed = await f.submit({ ...code, [backend]: "record A" });
+    await f.complete(failed, "failed");
+    const created = await f.call(0, "/v1/repair-sessions", begin(failed.id), {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.id;
+    const patchReceipt = await f.submit({ ...code, [backend]: "record B" });
+    const patchWithWrongActor = await f.call(0, next(id), patch(patchReceipt.digest), {
+      Authorization: "Bearer " + editorKey,
+    });
+    assert.equal(patchWithWrongActor.status, 409);
+    assert.equal(patchWithWrongActor.body.error, "repair_actor_conflict");
+    const patchOk = await f.call(0, next(id), patch(patchReceipt.digest), {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(patchOk.status, 200);
+    const selfReview = await f.call(0, next(id), reviewed, {
+      Authorization: "Bearer " + supervisorKey,
+    });
+    assert.equal(selfReview.status, 409);
+    assert.equal(selfReview.body.error, "repair_actor_conflict");
+    assert.equal((await f.call(1, pathFor(id))).body.state, "awaiting_review");
+    const otherReviewer = await f.call(0, next(id), reviewed);
+    assert.equal(otherReviewer.status, 200);
+    await f.complete(patchReceipt, "failed");
+    assert.equal((await f.call(1, next(id), {
+      action: "retest", consent: true, jobId: patchReceipt.id,
+    }, { Authorization: "Bearer " + supervisorKey })).body.state, "retest_failed");
+    const newReceipt = await f.submit({ ...code, [backend]: "record C" });
+    assert.equal((await f.call(0, next(id), patch(newReceipt.digest), {
+      Authorization: "Bearer " + supervisorKey,
+    })).body.state, "awaiting_review");
+    assert.equal((await f.call(0, next(id), reviewed, {
+      Authorization: "Bearer " + supervisorKey,
+    })).status, 409);
+    assert.equal((await f.call(1, pathFor(id))).body.attempts.length, 2);
   } finally { await f.close(); }
 });
 
