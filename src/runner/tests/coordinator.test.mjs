@@ -195,6 +195,35 @@ test("global runner key cannot mutate repair sessions; operator roles deny cross
   } finally { await f.close(); }
 });
 
+test("transient ledger snapshot files are retried but permanent corruption always blocks every replay", async () => {
+  const f = await fixture();
+  try {
+    const failed = await f.submit();
+    await f.complete(failed, "failed");
+    const root = path.join(f.dataDir, "repair-sessions");
+    await mkdir(root, { recursive: true });
+    const temporary = path.join(root, "unfinished-write.tmp");
+    await writeFile(temporary, "temporary");
+    const cleanup = new Promise(resolve => setTimeout(async () => {
+      await rm(temporary, { force: true });
+      resolve();
+    }, 15));
+    const admitted = await f.call(0, "/v1/repair-sessions", begin(failed.id));
+    await cleanup;
+    assert.equal(admitted.status, 201,
+      "bounded rescan must recover after a temporary entry disappears");
+    const id = admitted.body.id;
+    const corrupt = path.join(root, "broken-entry.tmp");
+    await writeFile(corrupt, "malformed persistent data");
+    const replay = await f.call(1, "/v1/repair-sessions", begin(failed.id));
+    assert.equal(replay.status, 409,
+      "a matching session cannot mask an unrelated corrupt sibling");
+    assert.equal(replay.body.error, "repair_integrity");
+    assert.equal((await f.call(0, pathFor(id))).status, 200,
+      "the existing valid session remains readable and was not deleted");
+  } finally { await f.close(); }
+});
+
 test("retest failed permits attempt 2 but never a third, cannot mismatch steps/digest/paths", async () => {
   const f = await fixture();
   try {
