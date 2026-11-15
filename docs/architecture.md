@@ -198,3 +198,8 @@ La admission del coordinatore conserva il lock globale POSIX, ma un retry di `be
 ### Controllo delle transizioni fra attori distinti sul runner (#29)
 
 Il journal di repair usa la firma logica `actorId` della credenziale operatore per imporre a server-side gli invarianti: proponente del primo evento uguale per tutti i `patch/retest_*`, revisore diverso per tentativo, approvatore diverso da entrambi. L'invariante viene calcolato sia prima dell'atomicWrite sia dopo aver ricostruito la hash-chain da disco: una mutazione che cambia attore dopo la revisione fallisce chiusa con 409. Le sessioni legacy prive di actor restano leggibili ma non possono aggiungere nuove dichiarazioni con un ID retroattivo. La SPA adotta un workflow a tre click, con cambi espliciti di chiave in sessionStorage e senza invio di sorgenti prima del terzo consenso. Le prove restano dichiarazioni di **credenziali**, non identità umane o firme indipendenti. Non è un sistema di IAM federato o multi-tenant.
+
+
+### Evento started con timestamp atomico logico (#30)
+
+L'hash-chain del registro repair richiede che l'istante di creazione della sessione coincida esattamente con l'istante del primo evento. L'implementazione usa lo **stesso valore ISO** per entrambi, evitando falsi conflitti alla transizione di millisecondo, mentre gli eventi successivi ricevono un timestamp autonomo. La verifica non allenta alcun vincolo e non tenta di correggere history persistite.

@@ -273,3 +273,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Policy ricontrollata sia sulla proiezione in scrittura sia sul replay della hash-chain, compresi retry, secondi tentativi e sessioni legacy (leggibili ma read-only). Nessun auto-commit, auto-job o bypass via token con più ruoli.
 - SPA: checkpoint patch, review e invio test in **azioni distinte** con feedback, cambio chiavi via Settings, retry dopo risposta persa, sincronizzazione manuale esito se necessario. Suite Node multi-API + Vitest e fullstack CI.
 - Restano #2: OIDC/WebAuthn con persona verificata, MFA/firme per approvazione, revoca/rekey/rotazione e multi-tenant, vero daemon Docker rootless/Cloudflare Tunnel, attestation off-host indipendente.
+
+
+## v0.2 — Coerenza dei timestamp di creazione delle sessioni (#30)
+
+- Fix falsi 409 `repair_integrity` al cambio di millisecondo: primo evento con timestamp condiviso con `createdAt`, nessuna modifica alle evidenze/privilegi.
+- Regressione deterministica con clock di test che attraversa il confine .999/.000 e verifica JSON/hash-chain dall'altra istanza API. Non confondere questo difetto con la scansione del filesystem (#28).

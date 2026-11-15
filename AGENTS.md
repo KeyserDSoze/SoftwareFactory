@@ -274,3 +274,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `prepareRepairRetest` deve compiere **massimo una transizione per consenso/click**. Al primo click proponente registra `patch`, al secondo un diverso reviewer registra `review`, al terzo si possono inviare i file al runner con la execution key (restano step obbligatori e Idempotency-Key). Dopo i test il proponente sincronizza il risultato, infine terzo operator ID approva. Le chiavi restano soltanto in sessionStorage; una risposta perduta si riprende da GET senza duplicare checkpoint.
 - Test di regressione: root e patch con proponente diverso rifiutati, review e approvazione self-service rifiutate anche per credenziali multi-scope, replay di journal manomesso rifiutato, storico legacy preservato, network retry senza doppia mutazione.
 - Non chiamare questa policy verifica di tre persone: una persona può possedere più token. Non è OIDC, WebAuthn, MFA, firma off-host o autorizzazione multi-tenant. La #2 resta aperta.
+
+
+## Bug della doppia lettura clock all'avvio repair (#30)
+
+- Il primo evento `started` del coordinatore deve avere **esattamente** il medesimo ISO timestamp di `record.createdAt`, usato anche nella hash-chain. Generare un solo istante e passarlo esplicitamente al checkpoint; due chiamate distinte a `new Date()` possono cadere in millisecondi diversi e produrre falsi `409 repair_integrity` non risolvibili da un retry di lettura del filesystem.
+- Mantenere il test con clock controllato che attraversa il confine tra .999Z e .000Z: una sola acquisizione timestamp e prova che il primo evento mantiene la stessa ora. Gli eventi successivi devono conservare timestamp indipendenti, integrità e verifiche inalterate.
