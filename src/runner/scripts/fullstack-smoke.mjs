@@ -169,6 +169,7 @@ try {
   await access(path.join(webRoot, "dist/index.html"));
   await docker(["run", "-d", "--name", cspName, "--network", network,
     "--network-alias", "secure-web", "--read-only", "--cap-drop=ALL",
+    "--cap-add=NET_BIND_SERVICE", // Only capability needed to listen on Nginx port 80
     "--security-opt=no-new-privileges", "--memory=160m", "--cpus=0.5", "--pids-limit=64",
     "--tmpfs=/var/cache/nginx:rw,nosuid,nodev,size=16m",
     "--tmpfs=/var/run:rw,nosuid,nodev,size=4m",
@@ -177,15 +178,27 @@ try {
     "nginx:1.27-alpine"]);
   startedCsp = true;
   let cspReady = false;
+  let cspProbeFailure = "";
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       await docker(["exec", webName, "node", "-e",
-        'fetch("http://secure-web/auth/callback",{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok&&r.headers.get("content-security-policy")?0:1)).catch(()=>process.exit(1))'
+        'fetch("http://secure-web/auth/callback",{signal:AbortSignal.timeout(2000)}).then(r=>{if(r.ok&&r.headers.get("content-security-policy"))return process.exit(0);console.error("NGINX_PROBE_STATUS",r.status,"csp",Boolean(r.headers.get("content-security-policy")));process.exit(1)}).catch(e=>{console.error("NGINX_PROBE_ERROR",e.cause?.code||e.name);process.exit(1)})'
       ], { timeout: 6000 });
       cspReady = true; break;
-    } catch { await sleep(400); }
+    } catch (error) {
+      cspProbeFailure = String(error.stderr || error.message).slice(-800);
+      await sleep(400);
+    }
   }
-  if (!cspReady) throw Error("Real Nginx CSP readiness timed out");
+  if (!cspReady) {
+    const cspState = await docker(["inspect", "--format", "{{.State.Status}} exit={{.State.ExitCode}}", cspName])
+      .catch(error => String(error.message).slice(-200));
+    const nginxLocal = await docker(["exec", cspName, "wget", "-q", "-O", "/dev/null",
+      "http://127.0.0.1/auth/callback"])
+      .then(() => "ok", error => String(error.stderr || error.message).slice(-400));
+    throw Error("Nginx CSP readiness timed out: state=" + cspState + ", localhost=" + nginxLocal
+      + ", remote=" + cspProbeFailure);
+  }
 
   const editorToken = await mint("owner-a", "editor");
   const readerToken = await mint("owner-a", "reader");
