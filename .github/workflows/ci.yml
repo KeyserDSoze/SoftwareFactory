@@ -41,6 +41,10 @@ jobs:
         run: docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml config --quiet
       - name: Preflight resolved runner Compose topology (no VM or tunnel)
         run: node src/runner/preflight.mjs compose --env-file=docker/runner/.env.example
+      - name: Validate opt-in private operator registry Compose override
+        run: |
+          docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml -f docker/runner/compose.repair-operators.yml config --quiet
+          node src/runner/preflight.mjs compose --operator-registry --env-file=docker/runner/.env.example
       - name: Build remote runner API container
         run: docker build -f docker/runner/Dockerfile.api -t softwarefactory-runner-api:ci .
       - name: Build remote runner worker container

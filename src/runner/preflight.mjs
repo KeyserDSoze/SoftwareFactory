@@ -24,7 +24,7 @@ const mountsFor = svc => {
   for (const volume of svc.volumes) {
     if (volume?.type !== "bind" || typeof volume.source !== "string" ||
         !path.isAbsolute(volume.source) || typeof volume.target !== "string" ||
-        !path.isAbsolute(volume.target) || volume.read_only === true)
+        !path.isAbsolute(volume.target))
       fail("Runner service has unsafe bind mounts");
   }
   return svc.volumes;
@@ -49,18 +49,33 @@ export function inspectComposeConfig(config) {
   safeService("runner-api", api);
   safeService("runner-worker", worker);
   const apiMounts = mountsFor(api), workerMounts = mountsFor(worker);
-  if (apiMounts.length !== 1 || apiMounts[0].target !== "/data" ||
+  const apiData = apiMounts.find(v => v.target === "/data");
+  const registry = apiMounts.find(v => v.target === "/run/secrets/runner-operators");
+  const apiRegistryEnv = api.environment?.RUNNER_REPAIR_OPERATORS_FILE;
+  if (!apiData || apiData.read_only === true ||
+      apiMounts.length !== (registry ? 2 : 1) ||
       apiMounts.some(isSocketMount))
     fail("runner-api: unexpected mounts or Docker socket");
+  if (registry) {
+    if (registry.read_only !== true || registry.source === apiData.source ||
+        ["/", "/etc", "/tmp", "/run", "/var", "/root"].includes(registry.source) ||
+        apiRegistryEnv !== "/run/secrets/runner-operators/operators.json" ||
+        api.environment?.RUNNER_REPAIR_OPERATORS_JSON)
+      fail("runner-api: unsafe operator registry mount or configuration");
+  } else if (apiRegistryEnv) {
+    fail("runner-api: operator file configured without private directory mount");
+  }
   const workspace = worker.environment?.RUNNER_HOST_WORK_DIR;
   if (workerMounts.length !== 3 ||
-      !workerMounts.some(v => v.target === "/data" && v.source === apiMounts[0].source) ||
+      !workerMounts.some(v => v.target === "/data" && v.source === apiData.source) ||
       !workerMounts.some(v => v.target === "/run/docker.sock" &&
         /^\/run\/user\/1000\/docker\.sock$/.test(v.source)) ||
       typeof workspace !== "string" || !path.isAbsolute(workspace) ||
       ["/", "/etc", "/run", "/var", "/var/run", "/tmp"].includes(workspace) ||
       !workerMounts.some(v => v.target === workspace && v.source === workspace) ||
-      workerMounts.filter(isSocketMount).length !== 1)
+      workerMounts.filter(isSocketMount).length !== 1 ||
+      workerMounts.some(v => v.read_only === true ||
+        (registry && v.source === registry.source)))
     fail("runner-worker: expected isolated rootless Docker socket and shared data/work mounts");
   if (worker.environment?.DOCKER_HOST !== "unix:///run/docker.sock")
     fail("runner-worker: DOCKER_HOST must point to mounted private socket");
@@ -224,12 +239,13 @@ export async function readPrivateEnv(filePath, stat = lstat, read = readFile) {
   return env;
 }
 
-async function executeCompose(envFile) {
+async function executeCompose(envFile, operatorRegistry = false) {
   let json;
   try {
     const { stdout } = await execFile("docker", [
       "compose", "--env-file", envFile,
       "-f", path.join(root, "docker/runner/compose.yml"),
+      ...(operatorRegistry ? ["-f", path.join(root, "docker/runner/compose.repair-operators.yml")] : []),
       "--profile", "tunnel", "config", "--format", "json",
     ], { cwd: root, timeout: 15000, maxBuffer: 2000000,
       env: { PATH: process.env.PATH, HOME: process.env.HOME },
@@ -242,18 +258,22 @@ async function executeCompose(envFile) {
 export async function main(argv = process.argv.slice(2)) {
   const [mode, ...options] = argv;
   if (!["compose", "host", "endpoint"].includes(mode) ||
-      options.some(x => !/^--(?:env-file|url|origin)=[^\r\n]+$/.test(x)) ||
+      options.some(x => x !== "--operator-registry" &&
+        !/^--(?:env-file|url|origin)=[^\r\n]+$/.test(x)) ||
       new Set(options.map(x => x.split("=")[0])).size !== options.length)
-    fail("Usage: preflight.mjs compose|host|endpoint [--env-file=PATH] [--url=HTTPS_ORIGIN --origin=HTTPS_ORIGIN]");
+    fail("Usage: preflight.mjs compose|host|endpoint [--env-file=PATH] [--operator-registry] [--url=HTTPS_ORIGIN --origin=HTTPS_ORIGIN]");
   const flags = Object.fromEntries(options.map(x => {
-    const i = x.indexOf("="); return [x.slice(2, i), x.slice(i + 1)];
+    const i = x.indexOf("=");
+    return i === -1 ? [x.slice(2), true] : [x.slice(2, i), x.slice(i + 1)];
   }));
   if (mode !== "endpoint" && (flags.url || flags.origin) ||
-      mode === "endpoint" && (!flags.url || !flags.origin))
+      mode === "endpoint" && (!flags.url || !flags.origin) ||
+      mode !== "compose" && flags["operator-registry"])
     fail("Invalid flags for preflight mode");
   let result;
   if (mode === "compose") result = await executeCompose(
-    path.resolve(root, flags["env-file"] || "docker/runner/.env.example"));
+    path.resolve(root, flags["env-file"] || "docker/runner/.env.example"),
+    flags["operator-registry"] === true);
   else {
     const env = flags["env-file"] ? await readPrivateEnv(path.resolve(flags["env-file"])) : process.env;
     result = mode === "host" ? await inspectHost({ env }) :

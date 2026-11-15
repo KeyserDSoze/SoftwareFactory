@@ -196,3 +196,35 @@ test("private env reading rejects symlinks, world-readable secrets and duplicate
     await assert.rejects(readPrivateEnv(file), /unsupported syntax/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("optional directory-mounted private registry is API-only, read-only and required by file mode", () => {
+  const secure = composeConfig();
+  secure.services["runner-api"].volumes.push({
+    type: "bind", source: "/srv/softwarefactory/repair-operators",
+    target: "/run/secrets/runner-operators", read_only: true,
+  });
+  secure.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_FILE =
+    "/run/secrets/runner-operators/operators.json";
+  secure.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON = "";
+  assert.equal(inspectComposeConfig(secure).status, "passed");
+
+  const mutations = [
+    c => { c.services["runner-api"].volumes[1].read_only = false; },
+    c => { c.services["runner-api"].volumes[1].source = apiEnv.RUNNER_DATA_DIR; },
+    c => { c.services["runner-api"].volumes[1].source = "/etc"; },
+    c => { c.services["runner-api"].volumes[1].target = "/run/secrets/something"; },
+    c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_FILE =
+      "/data/operators.json"; },
+    c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON =
+      '[{"id":"unacceptable","key":"fake","roles":["approve"]}]'; },
+    c => { c.services["runner-api"].volumes.pop(); },
+    c => { c.services["runner-worker"].volumes.push(
+      structuredClone(c.services["runner-api"].volumes[1])); },
+  ];
+  for (const mutate of mutations) {
+    const c = structuredClone(secure);
+    mutate(c);
+    assert.throws(() => inspectComposeConfig(c),
+      /runner-api|runner-worker|unsafe|mount/i);
+  }
+});

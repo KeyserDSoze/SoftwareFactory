@@ -1,0 +1,13 @@
+# Opt-in: use alongside compose.yml. Bind-mount the DIRECTORY, not the file:
+# Docker file bind mounts pin an inode and won't observe atomic host renames.
+# Only the API can read the registry. The worker still gets no secret mount.
+services:
+  runner-api:
+    environment:
+      RUNNER_REPAIR_OPERATORS_JSON: ""
+      RUNNER_REPAIR_OPERATORS_FILE: /run/secrets/runner-operators/operators.json
+    volumes:
+      - type: bind
+        source: "${RUNNER_REPAIR_OPERATORS_DIR:?Set absolute private operator registry directory}"
+        target: /run/secrets/runner-operators
+        read_only: true
