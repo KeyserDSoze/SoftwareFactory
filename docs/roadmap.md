@@ -242,3 +242,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Stati persistenti con 2 tentativi massimi; patch con digest e path in allowlist, review dichiarata da operatore, re-test con job reale + stesso digest e step obbligatori, registrazione manuale di approvazione senza apply/push.
 - Eventi SHA-256 chained, JSON aggiornato atomicamente sotto volume comune, lock POSIX di admission, 100 sessioni conservate, input body max 4KiB; due API condividono la stessa storia. Test concorrenti e anti-tamper.
 - Resta #2: collegare la UI e l'AI al nuovo registro, coordinatore unattended con policy di approvazione verificabile, RBAC/multi-tenant, real rootless VM/Tunnel, ancoraggio off-host e fencing distribuito.
+
+
+## v0.2 — Sync Code Agent e repair ledger remoto (#26)
+
+- Binding non segreto della sessione persistente salvato nel pending Code Agent, creato/ripreso su consenso dopo prova fresca di fallimento; riuso stessa root/sessione nei due tentativi massimi.
+- Al consenso per re-test, registrazione idempotente di patch digest, review dichiarata e step obbligatori in API prima del job; polling di report verificati sincronizza il checkpoint di retest. Fallback di recupero sul successivo retry/approvazione se la risposta era incerta.
+- Gate di approvazione ulteriormente ristretto: verifica preventivamente apply locale, report passed sul digest giusto e nuovo checkpoint remoto `recorded_approval` prima di applicare la patch; mai autopush o autoapprovazione.
+- Test Vitest con mock HTTP su retry/mismatch e CI invariata con Node runner, Docker reale e Chromium. Restano #2: account e consenso attestato per operatore, coordinatore autonomo policy-based, VM rootless/Cloudflare collaudati, ancoraggio esterno.
