@@ -179,3 +179,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Schede riceventi eliminano utente OIDC, dati CRUD e sessione locale senza redirect provider e senza echo-loop; listener chiuso allo smontaggio React.
 - Factory CI fullstack: **15 test Chromium**, due test nuovi con due pagine dello stesso browser context, login PKCE separato, logout reale e 401 ASP.NET Core reale propagati, reload senza credenziali.
 - Limiti: solo schede attive stesso origin/browser, non revoca server dei JWT e nessun coordinamento cross-device. IdP esterno HTTPS e BFF/HttpOnly restano in #9.
+
+
+## v0.2 — Acquisizione atomica dei job del runner (#18)
+
+- Claim `.claim` tramite `mkdir` condiviso: due worker non lanciano simultaneamente lo stesso job.
+- Polling e retention rispettano lock; i job claimed non bloccano la coda e non vengono marcati prematuramente falliti.
+- Recovery fail-closed di crash con intervento operativo: nessun timeout per rubare lock, nessuna riesecuzione o `passed` artificiale.
+- Rimanenti #2: fencing multi-host, coda/quote transazionali, audit append-only, cleanup dei container orfani, fix loop e VM rootless reale.

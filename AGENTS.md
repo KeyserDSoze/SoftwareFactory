@@ -173,3 +173,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - Il test Factory fullstack usa due tab Chromium simultanee in una bridge Docker privata; il piano Playwright del runner pubblico rimane `1024m` / `128 pids` / `256m shm`. **Solo** il coordinatore `fullstack-smoke.mjs` sostituisce esplicitamente le tre risorse con `2048m` / `256 pids` / `512m shm`, mantenendo `--read-only`, drop caps, no-new-privileges, rete interna e zero host port.
 - Un eventuale `browserContext.newPage: Target crashed` è un crash browser da indagare, non un test di logout passato. Non nascondere l'errore con retry automatici e non chiudere la issue senza 15 test verdi.
+
+
+## Claim atomiche del runner (#18)
+
+- Acquisire `jobs/<id>/.claim` con `mkdir` atomico **prima di leggere `queued`**; solo il proprietario rimuove la claim. Un secondo worker su `EEXIST` non esegue né modifica report.
+- Il polling deve ignorare `queued` claimed senza affamare la coda, preservare i `running` claimed e non eliminare i claimed per retention. Nessun TTL per rubare i lock: una build Docker può ancora essere viva.
+- Su crash: operatore verifica i container e il worker, poi eventualmente rimuove la claim; `running` senza claim diventa `failed`, non rieseguito. Non equiparare la claim filesystem a fencing multi-host/HA o multi-tenancy.

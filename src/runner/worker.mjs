@@ -1,10 +1,27 @@
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from "./common.mjs";
 import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep } from "./docker.mjs";
 
-export async function executeJob(id, {
+/** Atomic exclusive job claim on the shared POSIX filesystem. Do not expire by age. */
+async function isClaimed(dataDir, id) {
+  try { await lstat(path.join(jobDirectory(dataDir, id), ".claim")); return true; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
+export async function executeJob(id, options = {}) {
+  const dataDir = options.dataDir ?? process.env.RUNNER_DATA_DIR ?? "/data";
+  const claim = path.join(jobDirectory(dataDir, id), ".claim");
+  try { await mkdir(claim, { mode: 0o700 }); }
+  catch (error) {
+    if (error.code === "EEXIST") return readReport(dataDir, id);
+    throw error;
+  }
+  try { return await executeClaimedJob(id, options); }
+  finally { await rm(claim, { recursive: true, force: true }); }
+}
+
+async function executeClaimedJob(id, {
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   workspaceRoot = process.env.RUNNER_HOST_WORK_DIR || "/srv/softwarefactory/workspaces",
   executeStep = runDockerStep,
@@ -85,7 +102,7 @@ export async function executeJob(id, {
 export async function runWorker({
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   workspaceRoot = process.env.RUNNER_HOST_WORK_DIR || "/srv/softwarefactory/workspaces",
-  pollMs = 1500, stop = () => false,
+  pollMs = 1500, stop = () => false, executeQueuedJob = executeJob,
 } = {}) {
   console.log("Runner worker is polling jobs; Docker socket must be rootless and host-isolated");
   while (!stop()) {
@@ -98,23 +115,26 @@ export async function runWorker({
     for (const id of entries) {
       try {
         const report = await readReport(dataDir, id);
-        if (["passed", "failed", "incomplete"].includes(report.state) &&
+        const claimed = await isClaimed(dataDir, id);
+        if (!claimed && ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
           await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
           continue;
         }
-        if (report.state === "queued") queued.push({ id, acceptedAt: report.acceptedAt });
-        if (report.state === "running") {
+        // Claimed queued jobs must not starve ready jobs.
+        if (report.state === "queued" && !claimed) queued.push({ id, acceptedAt: report.acceptedAt });
+        if (report.state === "running" && !claimed) {
+          // Do not clobber a running job owned by another worker.
           await atomicWrite(path.join(jobDirectory(dataDir, id), "report.json"), {
             ...report, state: "failed", finishedAt: new Date().toISOString(),
-            summary: "Worker was interrupted; inspect and clean up orphaned Docker containers",
+            summary: "Worker interrupted without claim; inspect orphaned Docker containers",
           });
         }
       } catch { /* malformed entry not executable */ }
     }
     queued.sort((a, b) => a.acceptedAt.localeCompare(b.acceptedAt));
     if (queued.length) {
-      try { await executeJob(queued[0].id, { dataDir, workspaceRoot }); }
+      try { await executeQueuedJob(queued[0].id, { dataDir, workspaceRoot }); }
       catch(e) {
         console.error("Failed to handle job " + queued[0].id + ": " + scrub(e.message));
         try {

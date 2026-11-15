@@ -140,3 +140,8 @@ La Factory genera un modulo `oidc.ts` con `broadcastOidcLogout` e `subscribeOidc
 
 
 **Collaudo cross-tab nella CI:** due tab Chromium richiedono più memoria e shared memory del singolo browser; il solo coordinatore Factory per la rete privata incrementa i limiti del suo container Playwright, lasciando invariato `planStep` del runner pubblico e senza modificare la superficie di rete/capability. I crash del browser sono fallimenti della suite, non vengono falsamente conteggiati come successi.
+
+
+### Claim esclusiva sul volume runner (#18)
+
+`executeJob` acquisisce via `mkdir` non ricorsivo una `.claim` per job prima di verificare `queued`; soltanto il proprietario avvia Docker e scrive report. La claim si libera in `finally`. L'API resta senza socket; worker multipli sullo stesso filesystem non devono duplicare job o falsificare transizioni di stato. Il polling ignora job claimed e la retention li preserva. Dopo crash la claim residua blocca il job finché l'operatore riconcilia processi/container e la rimuove; un `running` privo di claim passa a `failed`. Questa è una sicurezza conservativa, non un lease con fencing distribuito.

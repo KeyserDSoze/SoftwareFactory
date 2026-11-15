@@ -204,3 +204,10 @@ Per un deploy pubblico occorrono login OIDC/JWKS, gestione segreti e rotazione c
 La CI Factory avvia oltre ad API, PostgreSQL e Chromium anche `oidc-ci-provider.mjs`, un **provider fittizio non deployabile** con discovery, JWKS e RSA 2048 effimeri. Il browser Chromium è sul loopback `127.0.0.1:4173` del proprio container per consentire Web Crypto/PKCE in un secure context, mentre i servizi di backend comunicano sulla rete Docker `--internal`. Il secondo smoke `oidc-protocol-smoke.mjs`, montato read-only nel container web solo in CI, esercita code grant S256, token refresh monouso, revoca per replay, logout e cambio delle JWK. Nessuna chiave privata raggiunge frontend/runner remoto.
 
 Questo collaudo di protocollo non equivale ad un audit OIDC di produzione, a un provider vero o a una rotazione JWKS completa in ambiente server; i casi reali vanno validati con un IdP scelto dall'operatore e una VM dedicata.
+
+
+### Acquisizione esclusiva dei job (issue #18)
+
+Prima di leggere `queued`, `executeJob` crea atomicamente `/data/jobs/<uuid>/.claim` con `mkdir` **senza `recursive`**. Il solo proprietario esegue Docker, scrive i report e rimuove la claim in `finally`; un secondo worker che riceve `EEXIST` legge il report, senza eseguire step. Il polling ignora `queued` claimed per non bloccare altri job, non sovrascrive `running` claimed e non elimina directory claimed durante la retention.
+
+**Recovery dopo crash:** una claim residua NON scade per mtime o timeout, perché non dimostra che i container siano terminati. L'operatore deve verificare che il worker sia fermo, ispezionare e fermare eventuali container orfani e **solo allora** rimuovere la directory `.claim` del job. Un report `running` senza claim diventa `failed` al polling successivo, mai `passed` e mai ri-eseguito automaticamente. I test Node simulano concorrenza e recovery, lo smoke Docker reale verifica il cleanup; mancano fencing distribuito, multi-tenant e HA, quindi la #2 resta aperta.

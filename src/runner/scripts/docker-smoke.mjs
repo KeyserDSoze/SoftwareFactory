@@ -34,6 +34,7 @@ async function submit(files, steps) {
   assert.equal(report.digest, checked.digest);
   assert.deepEqual((await readReport(dataDir, id)).results, report.results);
   assert.equal((await readdir(work)).length, 0, "No build workspace should survive the job");
+  assert.ok(!(await readdir(dir)).includes(".claim"), "Real Docker job must release its exclusive claim");
   return report;
 }
 try {

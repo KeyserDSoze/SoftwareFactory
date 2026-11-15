@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate, scrub, atomicWrite } from "../common.mjs";
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
-import { executeJob } from "../worker.mjs";
+import { executeJob, runWorker } from "../worker.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
 const origin = "http://localhost:5173";
@@ -129,6 +129,89 @@ test("worker writes real step receipts and skips missing tests without false suc
     assert.equal((await readReport(dataDir,id)).state,"incomplete");
     assert.equal((await readdir(work)).length, 0);
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(work, { recursive: true, force: true }); }
+});
+
+
+test("atomic claim guarantees one execution even with two worker instances", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-lock-data-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-lock-work-"));
+  const id = "00000000-0000-4000-a000-000000000018";
+  let release = () => {};
+  try {
+    const dir = jobDirectory(dataDir, id);
+    const checked = validateRequest(job(["dotnet-build"]));
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "input.json"), JSON.stringify(checked.request));
+    await atomicWrite(path.join(dir, "report.json"), {
+      id, digest: checked.digest, label: "atomic", state: "queued",
+      acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps,
+    });
+    let notify;
+    const started = new Promise(resolve => { notify = resolve; });
+    const hold = new Promise(resolve => { release = resolve; });
+    let calls = 0;
+    const executeStep = async plan => {
+      calls++; notify(); await hold;
+      return { step: "dotnet-build", state: "passed", exitCode: 0,
+        durationMs: 2, image: plan.image, stdout: "ok", stderr: "" };
+    };
+    const first = executeJob(id, { dataDir, workspaceRoot: work, executeStep });
+    await started;
+    assert.equal((await readReport(dataDir, id)).state, "running");
+    assert.ok((await readdir(dir)).includes(".claim"));
+    const second = await executeJob(id, { dataDir, workspaceRoot: work, executeStep });
+    assert.equal(second.state, "running");
+    assert.equal(calls, 1);
+    await runWorker({ dataDir, workspaceRoot: work, pollMs: 1,
+      stop: (() => { let n = 0; return () => n++ > 0; })(),
+      executeQueuedJob: () => { throw Error("claimed job cannot be selected"); } });
+    assert.equal((await readReport(dataDir, id)).state, "running");
+    release();
+    assert.equal((await first).state, "passed");
+    assert.equal(calls, 1);
+    assert.ok(!(await readdir(dir)).includes(".claim"), "claim released on completion");
+    assert.equal((await executeJob(id, { dataDir, workspaceRoot: work, executeStep })).state, "passed");
+    assert.equal(calls, 1);
+  } finally {
+    release();
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("orphan claim blocks execution, does not starve queue, and never becomes passed", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-orphan-data-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-orphan-work-"));
+  const orphan = "00000000-0000-4000-a000-000000000019";
+  const next = "00000000-0000-4000-a000-000000000020";
+  try {
+    for (const [id, state] of [[orphan, "running"], [next, "queued"]]) {
+      const dir = jobDirectory(dataDir, id);
+      const checked = validateRequest(job(["dotnet-build"]));
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "input.json"), JSON.stringify(checked.request));
+      await atomicWrite(path.join(dir, "report.json"), { id, digest: checked.digest,
+        state, label: "orphan", acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps });
+    }
+    await mkdir(path.join(jobDirectory(dataDir, orphan), ".claim"));
+    let processed = [];
+    await runWorker({ dataDir, workspaceRoot: work, pollMs: 1,
+      stop: (() => { let n = 0; return () => n++ > 0; })(),
+      executeQueuedJob: async id => { processed.push(id); } });
+    assert.deepEqual(processed, [next], "orphan must not block an available queued job");
+    assert.equal((await readReport(dataDir, orphan)).state, "running");
+    assert.equal((await executeJob(orphan, { dataDir, workspaceRoot: work,
+      executeStep: () => { throw Error("must not execute orphan"); } })).state, "running");
+    await rm(path.join(jobDirectory(dataDir, orphan), ".claim"), { recursive: true });
+    await runWorker({ dataDir, workspaceRoot: work, pollMs: 1,
+      stop: (() => { let n = 0; return () => n++ > 0; })(),
+      executeQueuedJob: async () => {} });
+    assert.equal((await readReport(dataDir, orphan)).state, "failed",
+      "manual removal of orphan claim allows failure recovery, never automatic retry");
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
+  }
 });
 
 test("npm preparation permits only registry semver dependencies and never runs lifecycle scripts", () => {
