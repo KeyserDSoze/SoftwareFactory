@@ -2,7 +2,7 @@ import { createServer as httpServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
-import { verifyJobEvidence } from "./evidence.mjs";
+import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 
 export function createRunnerServer({
@@ -43,8 +43,7 @@ export function createRunnerServer({
         const id = req.url.split("/")[3];
         const verified = await verifyJobEvidence(dataDir, id);
         send(200, req.url.endsWith("/evidence")
-          ? { version: 1, id, count: verified.entries.length, head: verified.head,
-              entries: verified.entries }
+          ? portableEvidenceBundle(verified)
           : verified.report);
       } catch(e) {
         if (e.code === "EVIDENCE_INVALID") send(409, { error: "evidence_invalid" });

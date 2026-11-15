@@ -12,39 +12,69 @@ const snapshot = value => { const copy = { ...value }; delete copy.evidence; ret
 const invalid = () => Object.assign(new Error("Runner evidence integrity check failed"), { code: "EVIDENCE_INVALID" });
 const journalPath = (dataDir, id) => path.join(jobDirectory(dataDir, id), "evidence.jsonl");
 
-/** A missing report remains 404; missing/corrupt journal for an existing report is 409. */
+/** Pure verification for export: no filesystem and no trust in claimed result. */
+export function verifyEvidenceExport(bundle) {
+  try {
+    if (!bundle || Array.isArray(bundle) || typeof bundle !== "object" ||
+        Object.keys(bundle).join(",") !== "version,id,count,head,report,entries" ||
+        bundle.version !== 1 || typeof bundle.id !== "string" ||
+        !/^[a-f0-9]{8}-[a-f0-9-]{27}$/.test(bundle.id) ||
+        !HEX.test(bundle.head) || !Number.isSafeInteger(bundle.count) ||
+        !bundle.report || Array.isArray(bundle.report) ||
+        bundle.report.id !== bundle.id || !HEX.test(bundle.report.digest) ||
+        !Array.isArray(bundle.entries) || bundle.entries.length !== bundle.count ||
+        bundle.entries.length < 1 || bundle.entries.length > 48 ||
+        Buffer.byteLength(JSON.stringify(bundle)) > 4_000_000) throw invalid();
+    let previousHash = ZERO;
+    for (const [i, entry] of bundle.entries.entries()) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+          Object.keys(entry).join(",") !== "version,sequence,previousHash,kind,at,report,hash")
+        throw invalid();
+      const { hash, ...record } = entry;
+      if (record.version !== 1 || record.sequence !== i + 1 ||
+          record.previousHash !== previousHash || !KINDS.has(record.kind) ||
+          typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at)) ||
+          !record.report || Array.isArray(record.report) ||
+          record.report.id !== bundle.id || record.report.digest !== bundle.report.digest ||
+          !HEX.test(hash) || sha(record) !== hash) throw invalid();
+      previousHash = hash;
+    }
+    if (bundle.entries[0].kind !== "accepted" ||
+        bundle.head !== previousHash || bundle.report.evidence?.version !== 1 ||
+        bundle.report.evidence.count !== bundle.entries.length ||
+        bundle.report.evidence.head !== previousHash ||
+        JSON.stringify(snapshot(bundle.report)) !==
+          JSON.stringify(bundle.entries[bundle.entries.length - 1].report))
+      throw invalid();
+    return { report: bundle.report, entries: bundle.entries, head: previousHash };
+  } catch (error) {
+    if (error.code === "EVIDENCE_INVALID") throw error;
+    throw invalid();
+  }
+}
+export function portableEvidenceBundle(verified) {
+  const { report, entries, head } = verified;
+  const bundle = { version: 1, id: report.id, count: entries.length,
+    head, report, entries };
+  verifyEvidenceExport(bundle);
+  return bundle;
+}
+
+/** Existing report without a journal is invalid; missing report remains 404. */
 export async function verifyJobEvidence(dataDir, id) {
   const report = await readReport(dataDir, id);
   try {
     const content = await readFile(journalPath(dataDir, id), "utf8");
     if (!content.endsWith("\n") || Buffer.byteLength(content) > 4_000_000) throw invalid();
     const lines = content.slice(0, -1).split("\n");
-    if (!lines.length || lines.length > 48) throw invalid();
-    let previousHash = ZERO;
-    const entries = [];
-    for (const line of lines) {
-      const item = JSON.parse(line);
-      if (!item || Array.isArray(item)) throw invalid();
-      const { hash, ...record } = item;
-      if (Object.keys(record).join(",") !== "version,sequence,previousHash,kind,at,report" ||
-          item.version !== 1 || item.sequence !== entries.length + 1 ||
-          item.previousHash !== previousHash || !KINDS.has(item.kind) ||
-          !Number.isFinite(Date.parse(item.at)) || !item.report ||
-          item.report.id !== id || item.report.digest !== report.digest ||
-          typeof hash !== "string" || !HEX.test(hash) || sha(record) !== hash)
-        throw invalid();
-      previousHash = hash;
-      entries.push(item);
-    }
-    if (entries[0].kind !== "accepted" ||
-        report.evidence?.version !== 1 || report.evidence?.count !== entries.length ||
-        report.evidence?.head !== previousHash ||
-        JSON.stringify(snapshot(report)) !== JSON.stringify(entries.at(-1).report))
-      throw invalid();
-    return { report, entries, head: previousHash };
+    return verifyEvidenceExport({
+      version: 1, id, count: lines.length,
+      head: report.evidence?.head, report,
+      entries: lines.map(line => JSON.parse(line)),
+    });
   } catch (error) {
-    if (error.code === "ENOENT" || error.code === "EVIDENCE_INVALID" || error instanceof SyntaxError)
-      throw invalid();
+    if (error.code === "ENOENT" || error.code === "EVIDENCE_INVALID" ||
+        error instanceof SyntaxError) throw invalid();
     throw error;
   }
 }
