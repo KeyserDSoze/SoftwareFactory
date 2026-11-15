@@ -5,6 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, readFile } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import { atomicWrite, ALLOWED_STEPS } from "./common.mjs";
 import { withAdmissionLock } from "./admission.mjs";
@@ -190,17 +191,35 @@ export async function beginRepairSession(dataDir, input, actorId) {
   return locked(dataDir, async () => {
     const root = baseDirectory(dataDir);
     await mkdir(root, { recursive: true, mode: 0o700 });
-    const entries = await readdir(root, { withFileTypes: true });
-    if (entries.length > MAX_SESSIONS) throw issue("REPAIR_CAPACITY");
-    for (const entry of entries) {
-      if (!entry.isFile() || !/^[-a-f0-9]{36}\.json$/.test(entry.name))
-        throw issue("REPAIR_INTEGRITY");
-      const existing = await readSession(dataDir, entry.name.slice(0, -5));
-      if (existing.rootJobId === input.failedJobId) {
-        if (existing.proposalId !== input.proposalId ||
-            !isDeepStrictEqual(existing.paths, input.paths))
-          throw issue("REPAIR_CONFLICT");
-        return overview(existing); // retry-safe, also after a completed checkpoint
+    let entries;
+    // On shared volumes, an atomic snapshot writer may briefly expose a
+    // temporary entry to a directory scan. Retry only a bounded integrity
+    // read; no record is accepted unless the entire rescan verifies.
+    // Persistent corruption must still fail closed after three attempts.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        entries = await readdir(root, { withFileTypes: true });
+        if (entries.length > MAX_SESSIONS) throw issue("REPAIR_CAPACITY");
+        for (const entry of entries) {
+          if (!entry.isFile() || !/^[-a-f0-9]{36}\.json$/.test(entry.name))
+            throw issue("REPAIR_INTEGRITY");
+          let existing;
+          try { existing = await readSession(dataDir, entry.name.slice(0, -5)); }
+          catch (error) {
+            if (error.code === "ENOENT") throw issue("REPAIR_INTEGRITY");
+            throw error;
+          }
+          if (existing.rootJobId === input.failedJobId) {
+            if (existing.proposalId !== input.proposalId ||
+                !isDeepStrictEqual(existing.paths, input.paths))
+              throw issue("REPAIR_CONFLICT");
+            return overview(existing); // retry-safe, also after a completed checkpoint
+          }
+        }
+        break;
+      } catch (error) {
+        if (error.code !== "REPAIR_INTEGRITY" || attempt === 2) throw error;
+        await sleep(30);
       }
     }
     if (entries.length === MAX_SESSIONS) throw issue("REPAIR_CAPACITY");
