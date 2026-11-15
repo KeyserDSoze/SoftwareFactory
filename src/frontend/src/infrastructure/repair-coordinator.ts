@@ -137,8 +137,10 @@ export async function beginOrResumeRepair(
   return binding;
 }
 
-/** Establish the exact test snapshot to be submitted. If a network response was
- * lost, GET the remote state and reuse the existing valid checkpoint, not another patch.
+/** Advance at most ONE human-authorized transition per invocation. A distinct
+ * credential must perform the independent review. Never bundle patch and
+ * review into a single browser action, even for a multi-scope operator token.
+ * A lost HTTP response can be reconciled through the next GET without replay.
  */
 export async function prepareRepairRetest(
   baseUrl: string, key: string, patch: FeatureProposal,
@@ -155,6 +157,8 @@ export async function prepareRepairRetest(
     if (session.attempts.length !== count - 1) return invalid();
     session = await checkpoint(baseUrl, key, binding, paths,
       { action: "patch", digest, paths }, signal);
+    if (session.state !== "awaiting_review") return invalid();
+    return session; // Separate explicit reviewer action, no test submission.
   }
   if (!["awaiting_review","awaiting_retest"].includes(session.state) ||
       session.attempts.length !== count ||
@@ -162,6 +166,8 @@ export async function prepareRepairRetest(
   if (session.state === "awaiting_review") {
     session = await checkpoint(baseUrl, key, binding, paths,
       { action: "review", verdict: "pass" }, signal);
+    if (session.state !== "awaiting_retest") return invalid();
+    return session; // Separate submit action after reviewer credential switch.
   }
   if (session.state !== "awaiting_retest" ||
       session.attempts[count - 1].verdict !== "pass") return invalid();

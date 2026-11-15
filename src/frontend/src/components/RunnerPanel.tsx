@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wre
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
 import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
-import { prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
+import { getRepairCheckpoint, prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 import {
   fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
@@ -41,6 +41,8 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   const syncInFlight = useRef<string | null>(null);
   const syncedOutcome = useRef<string | null>(null);
   const [checkpointState, setCheckpointState] = useState<"idle" | "syncing" | "saved" | "error">("idle");
+  const [syncRetry, setSyncRetry] = useState(0);
+  const repairOperatorKey = readSecret("runner.operator.key");
   const pendingRepair = project.development?.pending;
   const isRepair = (pendingRepair?.repairCount ?? 0) > 0;
   const retestPlan = (() => {
@@ -106,7 +108,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
       })
       .catch(() => { if (!disposed) setVerification({ kind: "invalid", detail: "Impossibile verificare il report." }); });
     return () => { disposed = true; };
-  }, [project, evidence, report, jobId, endpoint]);
+  }, [project, evidence, report, jobId, endpoint, repairOperatorKey, syncRetry]);
 
   const submit = async () => {
     if (busy || requesting || repairing) return;
@@ -132,10 +134,21 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
       if (retestPlan && pending) {
         // The remote coordinator must acknowledge both the exact patch digest and
         // the operator-declared review before we send the fixed source snapshot.
-        await prepareRepairRetest(endpoint, operatorRepairKey(), pending, checksum, selectedSteps);
+        const before = await getRepairCheckpoint(endpoint, operatorRepairKey(),
+          pending.repairSession!, repairPaths(pending));
+        const checkpoint = await prepareRepairRetest(
+          endpoint, operatorRepairKey(), pending, checksum, selectedSteps);
         if (latestProject.current.updatedAt !== project.updatedAt ||
             latestProject.current.development?.pending?.id !== pending.id)
           throw new Error("Workspace modificato prima del re-test: invio annullato.");
+        if (checkpoint.state === "awaiting_review") {
+          onNotice("Patch registrata sul runner. Cambia nelle Impostazioni la chiave operatore con quella del REVISORE indipendente, poi premi nuovamente il pulsante per registrare la review. Nessun test è stato avviato.");
+          return;
+        }
+        if (before.state === "awaiting_review" && checkpoint.state === "awaiting_retest") {
+          onNotice("Review indipendente registrata. Ora cambia la credenziale operatore con quella del PROPONENTE e premi nuovamente per inviare i test. Nessun test è stato avviato.");
+          return;
+        }
       }
       const signature = runnerEndpoint(endpoint) + ":" + checksum;
       const idempotencyKey = pendingSubmission.current?.signature === signature
@@ -203,6 +216,11 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         checkpointState === "error" ? " · sincronizzazione fallita: approvazione bloccata" :
         " · l'esito verificato sarà registrato dopo i test"}
     </p>}
+    {isRepair && checkpointState === "error" && displayedReport?.state !== "incomplete" && <div className="panel-footer">
+      <span>Se il re-test è terminato, reinserisci la chiave del proponente (scope propose) e riprova il checkpoint. Non è un nuovo test.</span>
+      <button className="secondary" disabled={requesting || repairing || busy}
+        onClick={() => setSyncRetry(x => x + 1)}>Riprova sincronizzazione</button>
+    </div>}
     <div className="runner-checks">{AVAILABLE.map(({ step, label }) =>
       <label className="checkline" key={step}><input type="checkbox" checked={steps.includes(step)} disabled={requesting || repairing}
         onChange={e => setSteps(current => e.target.checked ? [...current, step] : current.filter(x => x !== step))}/>{label}</label>)}</div>

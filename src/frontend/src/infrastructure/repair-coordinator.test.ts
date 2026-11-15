@@ -108,8 +108,11 @@ describe("SPA durable supervised repair coordinator", () => {
     const fixed = proposal(fixedProposalId, 1);
     const steps = ["dotnet-build","dotnet-test","web-build"] as const;
     const first = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
-    expect(first.state).toBe("awaiting_retest");
+    expect(first.state).toBe("awaiting_review");
     expect(first.attempts[0].digest).toBe(fixedDigest);
+    expect(remote.calls.map(c => c.data?.action).filter(Boolean)).toEqual(["patch"]);
+    const reviewed = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
+    expect(reviewed.state).toBe("awaiting_retest");
     expect(remote.calls.map(c => c.data?.action).filter(Boolean)).toEqual(["patch", "review"]);
     const repeated = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
     expect(repeated.state).toBe("awaiting_retest");
@@ -121,6 +124,8 @@ describe("SPA durable supervised repair coordinator", () => {
   it("requires server retest evidence, records explicit approval and replays uncertain completion", async () => {
     const remote = backendMock();
     const fixed = proposal(fixedProposalId, 1);
+    await prepareRepairRetest(endpoint, key, fixed, fixedDigest,
+      ["dotnet-build", "dotnet-test", "web-build"]);
     await prepareRepairRetest(endpoint, key, fixed, fixedDigest,
       ["dotnet-build", "dotnet-test", "web-build"]);
     const synced = await syncRepairRetest(endpoint, key, binding, repairPaths(fixed),
@@ -142,6 +147,8 @@ describe("SPA durable supervised repair coordinator", () => {
     await expect(prepareRepairRetest(endpoint, key, fixed, fixedDigest,
       ["dotnet-test", "web-build"])).rejects.toThrow(/Checkpoint remoto/);
     expect(remote.calls.every(c => !c.data?.action)).toBe(true);
+    await prepareRepairRetest(endpoint, key, fixed, fixedDigest,
+      ["dotnet-build","dotnet-test","web-build"]);
     await prepareRepairRetest(endpoint, key, fixed, fixedDigest,
       ["dotnet-build","dotnet-test","web-build"]);
     await expect(prepareRepairRetest(endpoint, key, fixed, "c".repeat(64),
