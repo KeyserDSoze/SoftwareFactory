@@ -265,3 +265,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Regole di recupero conservativo su filesystem condiviso: scansioni bounded per record transitori, verifica di **tutti** i sibling prima di un 201, file persistenti difformi causano 409 e non sono cancellati o riparati automaticamente.
 - Test reali di avvii concorrenti su due istanze API e fixture temporaneo vs corrotto; CI fullstack richiesta sullo stesso SHA di main.
 - Restano in #2 fencing cross-host e prove su filesystem/VM dedicati con daemon Docker rootless reale e Cloudflare Tunnel.
+
+
+## v0.2 — Policy di indipendenza dei checkpoint repair (#29)
+
+- Server-side separation of duties per **ID del Bearer**: solo il proponente iniziale può registrare patch/retest; review e approvazione richiedono ID distinti dal proponente e l'approvatore deve essere distinto anche dal revisore.
+- Policy ricontrollata sia sulla proiezione in scrittura sia sul replay della hash-chain, compresi retry, secondi tentativi e sessioni legacy (leggibili ma read-only). Nessun auto-commit, auto-job o bypass via token con più ruoli.
+- SPA: checkpoint patch, review e invio test in **azioni distinte** con feedback, cambio chiavi via Settings, retry dopo risposta persa, sincronizzazione manuale esito se necessario. Suite Node multi-API + Vitest e fullstack CI.
+- Restano #2: OIDC/WebAuthn con persona verificata, MFA/firme per approvazione, revoca/rekey/rotazione e multi-tenant, vero daemon Docker rootless/Cloudflare Tunnel, attestation off-host indipendente.

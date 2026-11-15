@@ -193,3 +193,8 @@ Le API Docker execution mantengono la API key legacy ma il coordinatore `/v1/rep
 ### Scansione idempotente e integrità durante il repair concurrent start (#28)
 
 La admission del coordinatore conserva il lock globale POSIX, ma un retry di `beginRepairSession` **non può** ignorare i record vicini per aver già trovato un rootJobId corrispondente. Vengono verificati tutti gli snapshot, incluso il checksum della chain, prima della restituzione dell'ID. Una ricognizione anomala può essere ripetuta solo due volte a distanza breve, per distinguere una voce temporanea dalla corruzione persistente. Il sistema fallisce con 409 per un volume incoerente, senza recuperi automatici o cancellazione di evidenze. Non equivale a fencing su host multipli.
+
+
+### Controllo delle transizioni fra attori distinti sul runner (#29)
+
+Il journal di repair usa la firma logica `actorId` della credenziale operatore per imporre a server-side gli invarianti: proponente del primo evento uguale per tutti i `patch/retest_*`, revisore diverso per tentativo, approvatore diverso da entrambi. L'invariante viene calcolato sia prima dell'atomicWrite sia dopo aver ricostruito la hash-chain da disco: una mutazione che cambia attore dopo la revisione fallisce chiusa con 409. Le sessioni legacy prive di actor restano leggibili ma non possono aggiungere nuove dichiarazioni con un ID retroattivo. La SPA adotta un workflow a tre click, con cambi espliciti di chiave in sessionStorage e senza invio di sorgenti prima del terzo consenso. Le prove restano dichiarazioni di **credenziali**, non identità umane o firme indipendenti. Non è un sistema di IAM federato o multi-tenant.
