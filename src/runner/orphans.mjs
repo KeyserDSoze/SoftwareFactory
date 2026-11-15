@@ -10,7 +10,8 @@ import { verifyJobEvidence } from "./evidence.mjs";
 const execFile = promisify(execFileCallback);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/;
-const STEPS = new Set(["dotnet-build", "dotnet-test", "web-build", "web-test", "playwright", "npm-prepare"]);
+// "fullstack" is a CI-only integration fixture; API request validation still forbids it.
+const STEPS = new Set(["dotnet-build", "dotnet-test", "web-build", "web-test", "playwright", "npm-prepare", "fullstack"]);
 const RUNNER_LABEL = "softwarefactory.runner";
 const JOB_LABEL = "softwarefactory.job-id";
 const STEP_LABEL = "softwarefactory.step";
