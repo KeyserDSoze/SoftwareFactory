@@ -149,7 +149,12 @@ describe("application scaffold", () => {
     const oidc = files["src/frontend/web/src/oidc.ts"];
     const ui = files["src/frontend/web/src/WorkItems.tsx"];
     expect(auth).toContain('Auth:Mode"] ?? "oidc"');
-    expect(auth).toContain('mode == "legacy" && builder.Environment.IsProduction()');
+    expect(auth).toContain('mode == "legacy" && !builder.Environment.IsDevelopment()');
+    expect(auth).toContain("private static bool HasValidSubject");
+    expect(auth).toContain("subjects.Length == 1");
+    expect(auth).toContain("!string.IsNullOrWhiteSpace(subjects[0].Value)");
+    expect(auth).toContain("subjects[0].Value.Length <= 255");
+    expect(auth).toContain("RequireAssertion(context => HasValidSubject(context.User))");
     expect(auth).toContain("options.Authority = issuer");
     expect(auth).toContain("options.RefreshOnIssuerKeyNotFound = true");
     expect(auth).toContain("SecurityAlgorithms.RsaSha256");
@@ -158,6 +163,8 @@ describe("application scaffold", () => {
     expect(oidc).toContain('response_type: "code"');
     expect(oidc).toContain("WebStorageStateStore");
     expect(oidc).toContain("extraQueryParams");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_EMPTY_SUB_TOKEN");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_MISSING_SUB_TOKEN");
     expect(ui).toContain("signinRedirect()");
     expect(oidc).toContain("signinRedirectCallback()");
     expect(oidc).toContain("signoutRedirectCallback()");

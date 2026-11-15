@@ -54,6 +54,8 @@ jobs:
       - name: Build generated ASP.NET Core application
         run: dotnet build src/backend/applications/Api/Api.csproj -c Release
         working-directory: src/frontend/generated-fixture
+      - name: Verify generated API rejects unsafe auth modes and HTTP issuers
+        run: node src/runner/scripts/auth-startup-smoke.mjs src/frontend/generated-fixture
       - name: Build generated React application
         run: npm install --no-audit --no-fund && npm run build
         working-directory: src/frontend/generated-fixture/src/frontend/web

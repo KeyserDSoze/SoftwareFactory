@@ -107,3 +107,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - In #9, Playwright deve usare localhost per il web server dentro il container browser; NON introdurre `--unsafely-treat-insecure-origin-as-secure`, `--disable-web-security` o HTTP esterno come secure context artificiale.
 - Il provider OIDC temporaneo e il test protocollare appartengono soltanto alla CI Docker con rete `--internal`: testare PKCE S256 errato, codici e refresh monouso, firma JWKS e rollover `kid`, senza loggare token o chiavi.
+
+## Hardening claim e ambienti (issue #10)
+
+- Non consentire mai Auth:Mode=legacy in Staging, Production o ambienti custom: solo Development. OIDC HTTP solo in Development.
+- Accesso ai dati solo con esattamente un `sub` firmato, non vuoto e lungo al massimo 255 caratteri: verificare 403 su claim vuoto/assente con JWT RS256 nel fullstack reale.
+- La Factory CI esegue il processo .NET generato in ambienti non-Development e verifica il fallimento di avvio; questo è un gate distinto dai test statici Vitest.

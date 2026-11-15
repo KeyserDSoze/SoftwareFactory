@@ -100,3 +100,7 @@ React importa `oidc-client-ts` e usa un client pubblico Authorization Code + PKC
 ### Validazioni OIDC nella Factory CI
 
 La suite browser mantiene la rete Docker privata ma avvia Vite su localhost all'interno del container Chromium: `crypto.subtle` funziona senza flag di sicurezza per origini HTTP. In parallelo, una suite Node dal container web verifica sul provider temporaneo code grant con S256, codice monouso, controllo firma con JWK pubblica, rotazione dei refresh token senza replay e pubblicazione del nuovo `kid`. I risultati restano distinti dalla disponibilità e qualità di un IdP esterno.
+
+### Gate hardening JWT e identità (issue #10)
+
+Le API PostgreSQL generate permettono `Auth:Mode=legacy` esclusivamente in Development, fallendo prima dell'avvio negli ambienti Staging, Production e custom. Le policy `items.read` e `items.write` richiedono esattamente un claim `sub` non vuoto e non oltre 255 caratteri, prima che venga usato come owner del record. Factory CI controlla sia gli avvii vietati .NET sia il rifiuto reale (`403`) di JWT RS256 con `sub` assente o vuoto. Questo non sostituisce revoca, validazione di un IdP esterno o sessioni BFF (issue #9).

@@ -147,6 +147,8 @@ try {
   const badAudienceToken = await mint("owner-a", "editor", "wrong-audience");
   const expiredToken = await mint("owner-a", "editor", "expired");
   const missingRoleToken = await mint("owner-a", "none");
+  const emptySubjectToken = await mint("owner-a", "editor", "empty-sub");
+  const missingSubjectToken = await mint("owner-a", "editor", "missing-sub");
   const basePlan = planStep("playwright", files, root, {
     RUNNER_CONTAINER_UID: uid + ":" + gid,
     RUNNER_PLAYWRIGHT_IMAGE: "mcr.microsoft.com/playwright:v" + PLAYWRIGHT_VERSION + "-noble",
@@ -166,6 +168,8 @@ try {
     "--env=E2E_BAD_AUD_TOKEN=" + badAudienceToken,
     "--env=E2E_EXPIRED_TOKEN=" + expiredToken,
     "--env=E2E_MISSING_ROLE_TOKEN=" + missingRoleToken,
+    "--env=E2E_EMPTY_SUB_TOKEN=" + emptySubjectToken,
+    "--env=E2E_MISSING_SUB_TOKEN=" + missingSubjectToken,
     "--env=E2E_API_ORIGIN=http://api:8080",
     "--env=E2E_WEB_ORIGIN=http://127.0.0.1:4173",
     "--env=VITE_API_URL=http://api:8080",

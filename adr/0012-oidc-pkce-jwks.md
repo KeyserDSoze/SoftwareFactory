@@ -26,3 +26,7 @@ La fixture OIDC automatizza il login soltanto per test e non è un Identity Prov
 La Factory CI impiega due livelli indipendenti: (a) sei test Chromium che esercitano il redirect OIDC completo con code+PKCE e logout, RS256 sul backend e proprietà dei record PostgreSQL; (b) `oidc-protocol-smoke.mjs` eseguito nella rete Docker privata che verifica la firma JWK, l'assenza di materiale privato in JWKS, il rifiuto dei verifier PKCE errati, la non riutilizzabilità del codice, la rotazione monouso del refresh token, il logout e il cambio `kid` dopo il rollover della chiave temporanea.
 
 Il rollover prova la pubblicazione della nuova chiave JWKS, **non** certifica il refresh automatico delle chiavi di un servizio ASP.NET Core/IdP reale sotto carico. I test di produzione con IdP commerciale/open-source, sicurezza sessione e revoca distribuita restano da completare prima del rilascio.
+
+## Integrazione di sicurezza — issue #10 (15 novembre 2026)
+
+La modalità simmetrica demo è ammessa **solo in Development**, mai in Staging/Production/ambienti personalizzati. L'identificatore di soggetto che controlla `owner_id` deve comparire una sola volta, essere non vuoto e lungo massimo 255 caratteri: le policy negano l'accesso a claim `sub` assenti, vuoti o multipli. Il controllo viene verificato con JWT RS256 firmati in CI dal provider temporaneo e PostgreSQL reale; il processo .NET generato è anche avviato intenzionalmente in ambienti vietati per provarne il rifiuto. Non equivale a certificazione IdP esterno o sicurezza di produzione.

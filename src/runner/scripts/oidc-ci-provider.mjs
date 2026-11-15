@@ -177,10 +177,13 @@ const server = http.createServer(async (req, res) => {
       const subject = url.searchParams.get("sub") || "";
       const role = url.searchParams.get("role") || "";
       const type = url.searchParams.get("type") || "";
-      if (!/^[A-Za-z0-9_-]{1,80}$/.test(subject) || !["reader","editor","none"].includes(role))
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(subject) || !["reader","editor","none"].includes(role)
+        || !["", "wrong-audience", "expired", "empty-sub", "missing-sub"].includes(type))
         return fail(res, 400, "invalid_user");
       const extra = type === "wrong-audience" ? { aud: "not-the-api" } :
-        type === "expired" ? { exp: Math.floor(Date.now()/1000)-120 } : {};
+        type === "expired" ? { exp: Math.floor(Date.now()/1000)-120 } :
+        type === "empty-sub" ? { sub: "" } :
+        type === "missing-sub" ? { sub: undefined } : {};
       return json(res, 200, { access_token: accessToken(subject, role, extra) });
     }
   }

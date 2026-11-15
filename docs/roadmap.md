@@ -124,3 +124,4 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Test protocollare separato su rete privata: RSA/JWK pubblica, codice monouso, PKCE invalido, refresh token rotante con replay negato, logout e rotazione `kid`
 - Frontend browser su loopback per usare Web Crypto in un contesto attendibile, senza disabilitare sicurezza Chromium
 - Da verificare ancora prima della produzione: issuer terzi, TLS di rete, refresh/logout e revoca federata effettivi e key rotation ASP.NET Core contro provider reale
+- Hardening di #10: JWT HMAC legacy fail-closed fuori da Development, vincolo `sub` unico/non vuoto, test negativi 403 sul backend reale e gate di startup .NET in CI.
