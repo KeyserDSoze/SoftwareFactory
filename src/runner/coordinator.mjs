@@ -12,6 +12,7 @@ import { verifyJobEvidence } from "./evidence.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const DIGEST = /^[a-f0-9]{64}$/;
+const ACTOR = /^[a-z][a-z0-9_-]{1,31}$/;
 const ZERO = "0".repeat(64);
 const MAX_SESSIONS = 100;
 const issue = code => Object.assign(new Error(code), { code });
@@ -65,10 +66,11 @@ function sessionFile(dataDir, id) {
   if (!UUID.test(id)) throw issue("REPAIR_INVALID");
   return path.join(baseDirectory(dataDir), id + ".json");
 }
-function checkpoint(record, kind, data) {
+function checkpoint(record, kind, data, actorId) {
+  if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   const previousHash = record.head;
   const event = { sequence: record.events.length + 1, previousHash,
-    kind, at: new Date().toISOString(), data };
+    kind, at: new Date().toISOString(), actorId, data };
   const hash = digest(event);
   return { ...record, head: hash, events: [...record.events, { ...event, hash }] };
 }
@@ -94,7 +96,11 @@ export function verifyRepairSession(record) {
     if (!isDeepStrictEqual(mandatory, record.requiredSteps)) throw issue("REPAIR_INTEGRITY");
     let head = ZERO, state = "", attempts = [];
     for (const [i, event] of record.events.entries()) {
-      if (!exact(event, ["sequence","previousHash","kind","at","data","hash"]) ||
+      // Legacy checkpoints from #25 have no actorId and remain readable;
+      // every newly written event is bound to a non-secret operator ID.
+      if (!(exact(event, ["sequence","previousHash","kind","at","data","hash"]) ||
+            exact(event, ["sequence","previousHash","kind","at","actorId","data","hash"])) ||
+          (event.actorId !== undefined && !ACTOR.test(event.actorId)) ||
           event.sequence !== i + 1 || event.previousHash !== head ||
           !DIGEST.test(event.hash) ||
           !Number.isFinite(Date.parse(event.at)) ||
@@ -166,6 +172,8 @@ const overview = r => ({
   proposalId: r.proposalId, paths: r.paths, requiredSteps: r.requiredSteps,
   state: r.state, attempts: r.attempts, checkpointCount: r.events.length,
   checkpointHead: r.head, createdAt: r.createdAt,
+  audit: r.events.map(e => ({ sequence: e.sequence, kind: e.kind,
+    actorId: e.actorId ?? null })),
 });
 export async function getRepairSession(dataDir, id) {
   return overview(await readSession(dataDir, id));
@@ -173,7 +181,8 @@ export async function getRepairSession(dataDir, id) {
 async function locked(dataDir, action) {
   return withAdmissionLock(dataDir, action, 1500);
 }
-export async function beginRepairSession(dataDir, input) {
+export async function beginRepairSession(dataDir, input, actorId) {
+  if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   if (!exact(input, ["failedJobId","proposalId","paths","consent"]) ||
       input.consent !== true || !UUID.test(input.failedJobId) ||
       !UUID.test(input.proposalId) || !allowedPaths(input.paths))
@@ -208,13 +217,14 @@ export async function beginRepairSession(dataDir, input) {
     const next = checkpoint(start, "started", {
       rootJobId: report.id, rootDigest: report.digest,
       proposalId: input.proposalId, paths: input.paths, rootSteps: report.steps,
-    });
+    }, actorId);
     verifyRepairSession(next);
     await atomicWrite(sessionFile(dataDir, id), next);
     return overview(next);
   });
 }
-export async function advanceRepairSession(dataDir, id, input) {
+export async function advanceRepairSession(dataDir, id, input, actorId) {
+  if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   if (!UUID.test(id) || !input || typeof input !== "object" ||
       Array.isArray(input) || input.consent !== true ||
       typeof input.action !== "string")
@@ -269,7 +279,7 @@ export async function advanceRepairSession(dataDir, id, input) {
         throw issue("REPAIR_EVIDENCE");
       kind = "record_approval"; data = { sessionId: id };
     } else throw issue("REPAIR_INVALID");
-    const next = checkpoint(current, kind, data);
+    const next = checkpoint(current, kind, data, actorId);
     // Replay the event sequence to derive all state and attempt projections.
     const projected = projectEvents(next);
     verifyRepairSession(projected);
