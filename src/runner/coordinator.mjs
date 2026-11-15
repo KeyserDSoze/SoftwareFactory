@@ -167,10 +167,11 @@ export function verifyRepairSession(record) {
 function enforceActorSeparation(events, failureCode) {
   const proposer = events[0]?.actorId;
   if (proposer === undefined) {
-    if (events.some(event => event.actorId !== undefined))
-      throw issue("REPAIR_INTEGRITY"); // Mixed attributed/unattributed history.
+    // Never assign a new identity to the author of a pre-#27 session.
     if (failureCode !== "REPAIR_INTEGRITY")
       throw issue("REPAIR_LEGACY_READONLY");
+    if (events.some(event => event.actorId !== undefined))
+      throw issue("REPAIR_INTEGRITY"); // Mixed attributed/unattributed history.
     return; // Read-only legacy history from before #27.
   }
   if (!ACTOR.test(proposer)) throw issue(failureCode);
