@@ -234,3 +234,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Provenienza `repairTrail` con ID, hash e step del fallimento. Nuova review avversaria, re-test deterministico con tutti gli step precedenti più build obbligatorie; nuovo consenso esplicito per invio dello snapshot riparato.
 - Receipt UUID/digest verificata, rete/idempotenza del runner già operativa; approvazione solo manuale dopo report `passed` corrente su tutti gli step richiesti, zero push o apply automatico.
 - Rimane aperta la #2 per coordinatore background 24/7, fix loop autonomo server-side con policy/approvazioni, deployment rootless/Cloudflare reale, fencing e attestazione indipendente automatizzata.
+
+
+## v0.2 — Coordinatore checkpoint server-side per repair (#25)
+
+- API Bearer autenticata per creare/leggere/avanzare una sessione di repair associata a un report `failed` verificato, senza invocare AI o creare job Docker.
+- Stati persistenti con 2 tentativi massimi; patch con digest e path in allowlist, review dichiarata da operatore, re-test con job reale + stesso digest e step obbligatori, registrazione manuale di approvazione senza apply/push.
+- Eventi SHA-256 chained, JSON aggiornato atomicamente sotto volume comune, lock POSIX di admission, 100 sessioni conservate, input body max 4KiB; due API condividono la stessa storia. Test concorrenti e anti-tamper.
+- Resta #2: collegare la UI e l'AI al nuovo registro, coordinatore unattended con policy di approvazione verificabile, RBAC/multi-tenant, real rootless VM/Tunnel, ancoraggio off-host e fencing distribuito.

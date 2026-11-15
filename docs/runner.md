@@ -328,3 +328,35 @@ Il Code Agent ora collega i fallimenti reali ai successivi re-test senza far par
 Una patch riparata non viene applicata. Il Code Agent esegue una **nuova review indipendente** e, solo quando passa, il pannello runner mostra `Conferma e riesegui test repair`. Il piano contiene l'intero set degli step del job fallito più le build pertinenti ai file riparati (`dotnet-build`, `web-build`, `playwright`) e gli eventuali step aggiuntivi selezionati; togliere il segno dalle checkbox **non** rimuove i controlli obbligatori. Ogni nuova trasmissione richiede un consenso esplicito con elenco degli step. La submission è idempotente per stessa origin/digest; la receipt deve essere `queued`, UUID v4 e avere esattamente il digest inviato. Un cambio di progetto durante il POST rifiuta il binding. Il polling continua a leggere la API: nessun test viene marcato `passed` per sola review o accettazione del job.
 
 Dopo una riuscita autentica, l'utente controlla ancora i diff e conferma manualmente `Approva e applica`: l'azione ricarica il report e verifica lo snapshot attuale **e** tutti gli step richiesti. Se il secondo repair fallisce ancora, la stessa proposta non può essere riparata una terza volta: occorre scartarla o avviare una nuova feature consapevolmente. Non c'è auto-push, auto-deploy, esecuzione AI nel browser o ripristino automatico dei crash. Non descrivere il flusso come un agente che opera 24/7 né come prova della VM rootless reale. Rimangono aperti in #2 worker orchestrator autonomo, multi-host fencing e deployment reale.
+
+
+## Registro persistente per repair supervisionati (#25)
+
+L'API offre un **coordinatore di checkpoint**, separato dal worker Docker e dal Code Agent AI. È utile a conservare il percorso di un tentativo fra riavvii del browser e fra istanze API, con politica di transizione e verifiche reali sui job. **Non genera patch, non fa polling o invii automatici, non invoca un provider AI, non concede permessi su GitHub e non applica codice.** Lo stato `recorded_approval` registra soltanto la dichiarazione dell'operatore: non rappresenta un'approvazione autonoma nella SPA.
+
+Tutte le richieste richiedono la consueta API key Bearer e Origin esplicitamente consentito. Il corpo è JSON al massimo **4096 byte**; ogni scrittura necessita di `consent: true`. Esempi di payload (non inserire la chiave nell'URL, nei log o nel codice generato):
+
+```http
+POST /v1/repair-sessions
+Content-Type: application/json
+Authorization: Bearer <session-api-key>
+
+{"failedJobId":"<job-uuid>","proposalId":"<proposal-uuid>","paths":["src/backend/domain/Invoice.cs"],"consent":true}
+```
+
+Restituisce 201 e un `id` di sessione persistente, `state: "awaiting_patch"`, `requiredSteps`, `attempts`, `checkpointHead`. Richieste duplicate con stessi job/proposta/path ritrovano lo stesso ID, anche dopo riavvio. Si parte solo da un job `failed` con journal valido e uno step effettivamente fallito, **non** da setup `incomplete` né da job `queued/running/passed`. I path devono essere ordinati lessicograficamente, unici (1–8) e ammessi per il Code Agent, non package, script di deployment o segreti.
+
+Il client propone `POST /v1/repair-sessions/{id}/checkpoints` con uno di questi corpi, **solo dopo** l'azione umana o del modello già eseguita sotto il suo controllo:
+
+```json
+{"action":"patch","consent":true,"digest":"<nuovo-sha256-canonico-64hex>","paths":["src/backend/domain/Invoice.cs"]}
+{"action":"review","consent":true,"verdict":"pass"}
+{"action":"retest","consent":true,"jobId":"<nuovo-job-uuid>"}
+{"action":"record_approval","consent":true,"confirmSessionId":"<id-sessione>"}
+```
+
+Gli stati persistiti sono `awaiting_patch → awaiting_review → awaiting_retest → awaiting_approval → recorded_approval`. Una review con `changes_required` passa a `review_blocked`; un re-test realmente `failed` passa a `retest_failed`, consentendo un altro digest, **fino a 2**. Il re-test è registrabile soltanto con un *altro* job eseguito dal runner, report + journal verificato, `digest` uguale a quello della patch e **tutti gli step falliti del primo job più le build obbligatorie dei path**; `passed` significa ogni comando effettivamente riuscito (`exitCode=0`, `timedOut=false`, duration valida). Incompleti, setup falliti o report falsi rifiutati. Prima dell'ultima registrazione l'API verifica di nuovo le evidenze del re-test.
+
+`GET /v1/repair-sessions/{id}` restituisce il solo snapshot di checkpoint: UUID, digest, stati, step e hash dell'ultimo evento; **mai file di codice, prompt AI, output/log, token o secret**. Ogni evento ha contatore, prevHash e SHA-256, il file viene aggiornato atomicamente sotto `/data/repair-sessions` con lo stesso lock `/data/jobs/.admission` usato dalla coda. Le due istanze API sullo stesso filesystem vedono un unico storico. **Maks 100** sessioni conservate, max 12 eventi per sessione, senza garbage collection automatica: la saturazione restituisce 429, corruzione/lock causa 409/503 *fail-closed* e richiede revisione operatore. I checkpoint non aggiungono credenziali né capacità di esecuzione al processo API.
+
+**Confini di fiducia:** la review registrata è una dichiarazione del client e non una prova indipendente; chi conosce la API key può effettuare le stesse transizioni. L'hash locale rileva modifiche non coerenti ma non un amministratore che riscrive tutta la storia, per cui restano necessarie firme esterne e conservazione off-host (#23). Il coordinatore **non è ancora chiamato automaticamente dalla UI** (le API sono disponibili per futuri client/integrazioni amministrative). Non è un'automazione 24/7, un'applicazione della patch o un controller multi-tenant. La #2 resta aperta per provisioning reale, RBAC/quote per tenant, rate limit, attestazione/approvazione indipendenti e coordinamento automatico.
