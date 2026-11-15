@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, atomicWrite, authenticate, jobDirectory, jobId, readReport, validateRequest } from "./common.mjs";
+import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -50,11 +51,19 @@ export function createRunnerServer({
     if (req.method === "GET" && req.url === "/v1/capabilities") {
       send(200, { protocol: 1, steps: ALLOWED_STEPS, execution: "remote-docker", networkDefault: "none" }); return;
     }
-    if (req.method === "GET" && /^\/v1\/jobs\/[a-f0-9-]{36}$/.test(req.url || "")) {
+    if (req.method === "GET" && /^\/v1\/jobs\/[a-f0-9-]{36}(?:\/evidence)?$/.test(req.url || "")) {
       try {
-        const report = await readReport(dataDir, req.url.split("/")[3]);
-        send(200, report);
-      } catch(e) { if(e.code === "ENOENT") send(404, { error: "not_found" }); else send(500, { error: "read_failure" }); }
+        const id = req.url.split("/")[3];
+        const verified = await verifyJobEvidence(dataDir, id);
+        send(200, req.url.endsWith("/evidence")
+          ? { version: 1, id, count: verified.entries.length, head: verified.head,
+              entries: verified.entries }
+          : verified.report);
+      } catch(e) {
+        if (e.code === "EVIDENCE_INVALID") send(409, { error: "evidence_invalid" });
+        else if (e.code === "ENOENT") send(404, { error: "not_found" });
+        else send(500, { error: "read_failure" });
+      }
       return;
     }
     if (req.method === "POST" && req.url === "/v1/jobs") {
@@ -83,6 +92,7 @@ export function createRunnerServer({
           fileCount: checked.fileCount, bytes: checked.bytes, steps: checked.request.steps,
           results: [], summary: "In attesa del worker" };
         await atomicWrite(path.join(dir, "report.json"), report);
+        await recordJobEvidence(dataDir, id, report, "accepted");
         send(202, { id, digest: checked.digest, state: report.state });
       } catch(e) {
         send(500, { error: "internal_error" });

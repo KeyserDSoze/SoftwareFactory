@@ -3,7 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from "./common.mjs";
 import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep } from "./docker.mjs";
+import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 
+/** Redact results before either report.json or the evidence journal sees them. */
+function safeStepResult(value) {
+  const copy = { ...value };
+  for (const field of ["stdout", "stderr", "command", "reason"]) {
+    if (typeof copy[field] === "string") copy[field] = scrub(copy[field]);
+  }
+  return copy;
+}
 /** Atomic exclusive job claim on the shared POSIX filesystem. Do not expire by age. */
 async function isClaimed(dataDir, id) {
   try { await lstat(path.join(jobDirectory(dataDir, id), ".claim")); return true; }
@@ -19,12 +28,28 @@ export async function recoverUnclaimedJob(dataDir, id) {
   try { await mkdir(claim, { mode: 0o700 }); }
   catch (error) { if (error.code === "EEXIST") return false; throw error; }
   try {
-    const latest = await readReport(dataDir, id);
+    const { report: latest } = await verifyJobEvidence(dataDir, id);
     if (latest.state !== "running") return false;
-    await atomicWrite(path.join(dir, "report.json"), {
+    await recordJobEvidence(dataDir, id, {
       ...latest, state: "failed", finishedAt: new Date().toISOString(),
       summary: "Worker interrupted without claim; inspect orphaned Docker containers",
-    });
+    }, "recovered");
+    return true;
+  } finally { await rm(claim, { recursive: true, force: true }); }
+}
+
+/** Serialize pre-execution failure, rather than writing an unaudited failed report. */
+async function rejectQueuedJob(dataDir, id) {
+  const claim = path.join(jobDirectory(dataDir, id), ".claim");
+  try { await mkdir(claim, { mode: 0o700 }); }
+  catch (error) { if (error.code === "EEXIST") return false; throw error; }
+  try {
+    const { report } = await verifyJobEvidence(dataDir, id);
+    if (report.state !== "queued") return false;
+    await recordJobEvidence(dataDir, id, {
+      ...report, state: "failed", finishedAt: new Date().toISOString(),
+      summary: "Worker rejected job; inspect input and runner configuration",
+    }, "rejected");
     return true;
   } finally { await rm(claim, { recursive: true, force: true }); }
 }
@@ -34,7 +59,7 @@ export async function executeJob(id, options = {}) {
   const claim = path.join(jobDirectory(dataDir, id), ".claim");
   try { await mkdir(claim, { mode: 0o700 }); }
   catch (error) {
-    if (error.code === "EEXIST") return readReport(dataDir, id);
+    if (error.code === "EEXIST") return (await verifyJobEvidence(dataDir, id)).report;
     throw error;
   }
   try { return await executeClaimedJob(id, options); }
@@ -51,7 +76,7 @@ async function executeClaimedJob(id, {
 } = {}) {
   const dir = jobDirectory(dataDir, id);
   const reportFile = path.join(dir, "report.json");
-  let report = await readReport(dataDir, id);
+  let report = (await verifyJobEvidence(dataDir, id)).report;
   if (report.state !== "queued") return report;
   const input = JSON.parse(await readFile(path.join(dir, "input.json"), "utf8"));
   const { request, digest } = validateRequest(input);
@@ -60,7 +85,7 @@ async function executeClaimedJob(id, {
   if (!path.isAbsolute(workspaceRoot) || destination === path.resolve(workspaceRoot))
     throw new Error("Invalid worker workspace root");
   report = { ...report, state: "running", startedAt: new Date().toISOString(), summary: "Worker started", preparation: null };
-  await atomicWrite(reportFile, report);
+  await recordJobEvidence(dataDir, id, report, "started");
   try {
     await mkdir(destination, { mode: 0o700, recursive: true });
     for (const [name, content] of Object.entries(request.files)) {
@@ -73,7 +98,7 @@ async function executeClaimedJob(id, {
     for (const step of request.steps) {
       const plan = createStepPlan(step, request.files, destination, environment);
       if (plan.skip) {
-        report.results.push({ step, state: "skipped", reason: plan.skip });
+        report.results.push(safeStepResult({ step, state: "skipped", reason: plan.skip }));
       } else if (step === "web-build" || step === "web-test" || step === "playwright") {
         if (!prepared) {
           prepared = true;
@@ -81,25 +106,25 @@ async function executeClaimedJob(id, {
           const setupResult = setupPlan.skip
             ? { step: "npm-prepare", state: "skipped", reason: setupPlan.skip }
             : await executeStep(setupPlan, id, "npm-prepare");
-          report.preparation = setupResult;
-          await atomicWrite(reportFile, report);
+          report.preparation = safeStepResult(setupResult);
+          await recordJobEvidence(dataDir, id, report, "preparation");
           if (setupResult.state !== "passed") {
             blocked = "Node dependency setup failed (not a code test). " +
-              (setupResult.reason || setupResult.stderr || "Inspect runner configuration").slice(0, 450);
+              (report.preparation.reason || report.preparation.stderr || "Inspect runner configuration").slice(0, 450);
           }
         }
         if (blocked) report.results.push({ step, state: "skipped", reason: blocked });
         else {
           const result = await executeStep(plan, id, step);
-          report.results.push(isInfrastructureFailure(result) ?
-            { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result);
+          report.results.push(safeStepResult(isInfrastructureFailure(result) ?
+            { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result));
         }
       } else {
         const result = await executeStep(plan, id, step);
-        report.results.push(isInfrastructureFailure(result) ?
-          { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result);
+        report.results.push(safeStepResult(isInfrastructureFailure(result) ?
+          { ...result, state: "skipped", reason: "Runner infrastructure failure; no code test was verified" } : result));
       }
-      await atomicWrite(reportFile, report);
+      await recordJobEvidence(dataDir, id, report, "step");
       if (report.results[report.results.length - 1].state === "failed") break;
     }
     const failed = report.results.some(r => r.state === "failed");
@@ -113,8 +138,8 @@ async function executeClaimedJob(id, {
     report.summary = "Worker error: " + scrub(error instanceof Error ? error.message : String(error));
   } finally {
     report.finishedAt = new Date().toISOString();
-    await atomicWrite(reportFile, report);
-    await rm(destination, { recursive: true, force: true }).catch(() => {});
+    try { await recordJobEvidence(dataDir, id, report, "finished"); }
+    finally { await rm(destination, { recursive: true, force: true }).catch(() => {}); }
   }
   return report;
 }
@@ -134,7 +159,7 @@ export async function runWorker({
     const expireBefore = Date.now() - retentionHours * 60 * 60 * 1000;
     for (const id of entries) {
       try {
-        const report = await readReport(dataDir, id);
+        const { report } = await verifyJobEvidence(dataDir, id);
         const claimed = await isClaimed(dataDir, id);
         if (!claimed && ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
@@ -155,13 +180,8 @@ export async function runWorker({
       try { await executeQueuedJob(queued[0].id, { dataDir, workspaceRoot }); }
       catch(e) {
         console.error("Failed to handle job " + queued[0].id + ": " + scrub(e.message));
-        try {
-          const dir = jobDirectory(dataDir, queued[0].id);
-          const report = await readReport(dataDir, queued[0].id);
-          await atomicWrite(path.join(dir, "report.json"), {
-            ...report, state: "failed", finishedAt: new Date().toISOString(), summary: "Worker rejected job",
-          });
-        } catch { /* cannot persist report */ }
+        try { await rejectQueuedJob(dataDir, queued[0].id); }
+        catch { /* corrupt or incomplete ledger is never repaired silently */ }
       }
     } else await new Promise(resolve => setTimeout(resolve, pollMs));
   }
