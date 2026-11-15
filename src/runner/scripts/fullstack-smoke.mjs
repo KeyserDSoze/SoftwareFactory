@@ -223,6 +223,18 @@ try {
   });
   if (basePlan.skip) throw Error("Playwright plan skipped: " + basePlan.skip);
   const args = [...basePlan.args];
+  // The private Factory integration launches two concurrent Chromium tabs to
+  // verify BroadcastChannel propagation. Increase ONLY this CI fixture's
+  // resources, not the public rootless runner's default execution limits.
+  for (const [original, ciOverride] of [
+    ["--memory=1024m", "--memory=2048m"],
+    ["--pids-limit=128", "--pids-limit=256"],
+    ["--shm-size=256m", "--shm-size=512m"],
+  ]) {
+    const index = args.indexOf(original);
+    assert.ok(index >= 0, "Expected default Playwright sandbox resource flag " + original);
+    args[index] = ciOverride;
+  }
   const networkFlag = args.indexOf("--network");
   assert.ok(networkFlag >= 0 && args[networkFlag + 1] === "none");
   args[networkFlag + 1] = network;

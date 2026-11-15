@@ -137,3 +137,6 @@ La Factory genera un modulo `oidc.ts` con `broadcastOidcLogout` e `subscribeOidc
 
 
 **Correzione della pubblicazione locale:** un modulo OIDC mantiene un solo oggetto `BroadcastChannel` per documento e lo condivide per emettere e ricevere. La specifica non consegna un messaggio ai listener sull'oggetto mittente, mentre oggetti diversi creati nello stesso documento si notificano reciprocamente: separare i due avrebbe trasformato un 401 della scheda in una falsa disconnessione remota. I listener sono contati e il canale chiuso all'ultima disiscrizione; prove Chromium pregresse verificano che l'errore 401 locale resti visibile.
+
+
+**Collaudo cross-tab nella CI:** due tab Chromium richiedono più memoria e shared memory del singolo browser; il solo coordinatore Factory per la rete privata incrementa i limiti del suo container Playwright, lasciando invariato `planStep` del runner pubblico e senza modificare la superficie di rete/capability. I crash del browser sono fallimenti della suite, non vengono falsamente conteggiati come successi.

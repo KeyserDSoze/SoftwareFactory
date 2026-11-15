@@ -167,3 +167,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - Il mittente e il listener React della **stessa pagina** devono usare lo stesso oggetto `BroadcastChannel`; istanze distinte sul medesimo documento ricevono i messaggi reciproci, sovrascrivendo per errore il messaggio locale 401.
 - La subscription è ref-counted: `close()` solo quando non restano listener, senza reinviare l'evento ricevuto. Mantenere i test 401 precedenti **oltre** alle prove multi-tab della #17.
+
+
+### Limiti risorse Chromium CI cross-tab (#17)
+
+- Il test Factory fullstack usa due tab Chromium simultanee in una bridge Docker privata; il piano Playwright del runner pubblico rimane `1024m` / `128 pids` / `256m shm`. **Solo** il coordinatore `fullstack-smoke.mjs` sostituisce esplicitamente le tre risorse con `2048m` / `256 pids` / `512m shm`, mantenendo `--read-only`, drop caps, no-new-privileges, rete interna e zero host port.
+- Un eventuale `browserContext.newPage: Target crashed` è un crash browser da indagare, non un test di logout passato. Non nascondere l'errore con retry automatici e non chiudere la issue senza 15 test verdi.
