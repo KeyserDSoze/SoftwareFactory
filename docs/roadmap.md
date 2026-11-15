@@ -279,3 +279,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Fix falsi 409 `repair_integrity` al cambio di millisecondo: primo evento con timestamp condiviso con `createdAt`, nessuna modifica alle evidenze/privilegi.
 - Regressione deterministica con clock di test che attraversa il confine .999/.000 e verifica JSON/hash-chain dall'altra istanza API. Non confondere questo difetto con la scansione del filesystem (#28).
+
+
+## v0.2 — Revoca e rotazione chiavi del coordinatore, file privato condiviso (#31)
+
+- Aggiunta configurazione opt-in `RUNNER_REPAIR_OPERATORS_FILE`, riletta ad ogni richiesta API repair, con apertura no-follow, inode singolo, lettura e permessi limitati, schema dei ruoli verificato. Esclusione reciproca con JSON inline statico; errore file indisponibile => 503 fail-closed, job API indipendenti.
+- Rotazione delle chiavi a **ID costante** e revoca con eliminazione dal JSON, rilevate da entrambe le istanze API senza riavvio; test di mount ostile, symlink/hardlink, dir, permessi, JSON corrotto, accesso vecchi token e integrità audit.
+- Compose override opzionale con mount **directory** read-only soltanto API e preflight/CI per configurazione finale, mai socket Docker/segretistica nel worker. Non è una gestione centralizzata di account umani o MFA.
+- Rimane #2: identità OIDC/SSO, second-person verification reale, revoca delle richieste già avviate e dei JWT/app, RBAC multi-tenant, osservabilità, attestazioni esterne e VM rootless Cloudflare reali.

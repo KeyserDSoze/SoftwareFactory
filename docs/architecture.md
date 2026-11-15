@@ -203,3 +203,8 @@ Il journal di repair usa la firma logica `actorId` della credenziale operatore p
 ### Evento started con timestamp atomico logico (#30)
 
 L'hash-chain del registro repair richiede che l'istante di creazione della sessione coincida esattamente con l'istante del primo evento. L'implementazione usa lo **stesso valore ISO** per entrambi, evitando falsi conflitti alla transizione di millisecondo, mentre gli eventi successivi ricevono un timestamp autonomo. La verifica non allenta alcun vincolo e non tenta di correggere history persistite.
+
+
+### Registro degli operatori riletto per richiesta, fuori dal worker (#31)
+
+`operator-auth.mjs` può leggere il JSON di operatori a ogni chiamata repair da un percorso file assoluto montato **soltanto nel container API**. `O_NOFOLLOW`/fstat e una lettura bounded verificano file privato senza hardlink, schema, credenziali e scope senza loggare segreti. Ogni richiesta carica il registry più recente e invalida dal Bearer vecchio dopo rotazione o revoca; un errore nel file risponde 503 e non influenza le API build/test. Il ledger conserva ID immutabili, preservando la separazione per actor della #29. L'override Compose separato monta la **directory** host read-only, non il singolo file (che pinna l'inode e non osserva `rename`); il preflight garantisce nessun mount verso il worker. Il JSON inline legacy resta statico all'avvio. Le richieste già in-flight non sono retroattivamente cancellabili, e non esiste ancora un IdP/tenant registry esterno.
