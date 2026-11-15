@@ -257,3 +257,34 @@ La CI effimera verifica con Docker reale che il dry-run non elimina niente, che 
 
 
 **Verifica della modalità rootless:** il percorso Unix della socket, da solo, non dimostra che il Docker daemon sia rootless (una socket rootful potrebbe essere montata sotto `/run/docker.sock`). Prima di consultare o modificare container la CLI esegue `docker info --format '{{json .SecurityOptions}}'` e richiede esattamente `name=rootless`; in caso di risposta inattesa, daemon non rootless o accesso negato si interrompe senza fare cleanup. La CI usa deliberatamente un adapter al daemon Docker effimero del runner GitHub per testare la selezione degli oggetti, e non certifica un daemon rootless in una VM reale.
+
+
+## Preflight riproducibile per VM rootless, Compose e HTTPS (#22)
+
+La CLI `src/runner/preflight.mjs` è **soltanto in lettura** e ha tre modalità indipendenti. Nessuna modalità invia sorgenti, crea job, cancella container, modifica file di report o configura il tunnel. Gli output sono solo esiti booleani/categorie e non contengono API key, token Cloudflare, `.env`, configurazione completa Docker o contenuti HTTP.
+
+```sh
+# Repository root, prima del deployment: usa soltanto il file placeholder (CI)
+node src/runner/preflight.mjs compose --env-file=docker/runner/.env.example
+
+# Sulla VM, prima di avviare la stack: creare la .env reale mode 0600 e le
+# directory dati e workspace proprie dell'utente rootless uid 1000, mode 0700.
+chmod 600 docker/runner/.env
+chmod 700 /srv/softwarefactory/runner-data /srv/softwarefactory/workspaces
+# Invocare la verifica come utente dedicato uid 1000, non con sudo/root.
+node src/runner/preflight.mjs host --env-file=docker/runner/.env
+node src/runner/preflight.mjs compose --env-file=docker/runner/.env
+
+# Solo quando hostname HTTPS, tunnel e Access sono già configurati; il token
+# Bearer viene letto dal file 0600 o dalla variabile RUNNER_API_KEY, MAI da argv.
+node src/runner/preflight.mjs endpoint --env-file=docker/runner/.env \\
+  --url=https://runner.example.org --origin=https://factory.example.org
+```
+
+**Compose** usa `docker compose config --format json` con il file scelto, ma **non** stampa il JSON risolto: potrebbe contenere credenziali. Controlla uid non privilegiato, rootfs read-only, cap-drop, no-new-privileges, mount del socket soltanto sul worker, condivisione dei dati/workspace, nessuna rete host, porta API esclusivamente su `127.0.0.1:8787` e nessuna porta host worker/cloudflared. La CI esegue questa fase con il file `.env.example`, come controllo di configurazione **non** come prova del daemon.
+
+**Host** richiede esecuzione come uid 1000, chiave reale non-placeholder, origin espliciti, directory `RUNNER_DATA_DIR` e `RUNNER_HOST_WORK_DIR` separate e private (proprietario 1000 e mode 0700), socket rootless `/run/user/1000/docker.sock` Unix con proprietario 1000 e senza permessi per gli altri utenti. Interroga inoltre il daemon attraverso **quel socket esplicito** e verifica `name=rootless` nelle SecurityOptions di `docker info`. Se qualunque controllo fallisce, interrompe il deployment e non prova a ripararlo autonomamente. Il controllo non certifica l'assenza di escalation nel kernel, né supporta attualmente UID diversi da 1000 (la Compose usa uid 1000 esplicito).
+
+**Endpoint** richiede due origin HTTPS senza credenziali nella URL, disabilita i redirect, verifica `GET /healthz`, il rifiuto 401 di `GET /v1/capabilities` senza Bearer, la riuscita autenticata e `networkDefault=none`, quindi il preflight CORS `OPTIONS /v1/jobs` con Authorization e Idempotency-Key. Non invia mai POST o sorgenti. Se Cloudflare Access blocca la verifica automatica prima della API, il controllo **fallisce**; occorre verificare l'integrazione reale dell'utente/Access con la Factory, senza inserire service token nel JavaScript.
+
+**Limiti:** l'esecuzione della CLI su una VM reale con tunnel effettivo richiede server, credenziali e hostname forniti e mantenuti dall'operatore. La CI Hosted GitHub controlla sintassi/Compose e simula in Node le condizioni pericolose, ma **non prova** rootless Docker su una VM dedicata o Cloudflare Zero Trust/Access. La issue #2 resta aperta per il collaudo operativo effettivo, evidenze off-host e hardening distribuito.

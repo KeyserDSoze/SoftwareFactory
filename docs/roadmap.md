@@ -210,3 +210,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Strumento amministrativo solo lato worker: dry-run, `--apply --confirm-job` esplicito, report/journal verificati, claim assente, stato failed/incomplete e nuova verifica nome/label prima di `docker rm -f`.
 - Test di sicurezza per spoofing e lock più smoke Docker reale con container non appartenente al job mantenuto intatto.
 - Rimangono in #2: riconciliazione unattended con fencing cross-host, attestazione esterna, VM rootless reale, quote tenant e orchestrazione repair supervisionata.
+
+
+## v0.2 — Preflight VM rootless, topology Compose e HTTPS (#22)
+
+- Nuova CLI read-only: ispeziona Compose risolto senza stamparne i segreti, verifica soltanto il worker con socket, UID e cap/drop, API su loopback, no privilegi extra.
+- Modalità host: verifica filesystem privato e Socket Unix uid 1000 e `docker info` con `name=rootless`; modalità endpoint HTTPS: 401 senza token, capabilities Bearer, CORS preflight e redirect non seguiti, nessun job creato.
+- Test di regressione su configurazioni rootful/public port/volumi insicuri, permessi, redirect e Origin wildcard; CI esegue Compose preflight con il solo env placeholder.
+- Resta nella #2 la verifica **reale** su VM e Cloudflare Tunnel/Access, l'attestazione off-host, fencing cross-host e repair loop.

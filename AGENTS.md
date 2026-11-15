@@ -212,3 +212,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 
 - La CLI di ricognizione orfani non può fidarsi del solo percorso `DOCKER_HOST`: verifica `docker info SecurityOptions` e richiede `name=rootless` esatto prima delle operazioni. Gli adapter Docker iniettati nei test su runner GitHub **non** dimostrano rootless: non presentare tale smoke come collaudo production.
+
+
+## Readiness runner rootless e TLS (#22)
+
+- La CLI `src/runner/preflight.mjs` in modalità `compose` non deve mai stampare `docker compose config` (contiene API key e token tunnel); verificare topology/permissions sul JSON risolto e stampare solo esiti non sensibili. `host` valida socket, owner, directory mode 0700 e `docker info SecurityOptions` rootless sotto uid 1000. `endpoint` usa HTTPS, non segue redirect, non invia POST/codice e verifica Bearer/CORS Idempotency-Key.
+- La GitHub Actions CI usa solo `.env.example` e test finti per host/HTTPS. **Non** dichiarare deployment Cloudflare/VM reale né rootless production verificati senza prove da una VM dedicata; non inserire Bearer/Access service token in URL, command line, repository o log.

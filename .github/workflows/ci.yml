@@ -39,6 +39,8 @@ jobs:
           timeout 240s node src/runner/scripts/docker-smoke.mjs
       - name: Check runner Docker Compose configuration
         run: docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml config --quiet
+      - name: Preflight resolved runner Compose topology (no VM or tunnel)
+        run: node src/runner/preflight.mjs compose --env-file=docker/runner/.env.example
       - name: Build remote runner API container
         run: docker build -f docker/runner/Dockerfile.api -t softwarefactory-runner-api:ci .
       - name: Build remote runner worker container

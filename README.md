@@ -123,3 +123,8 @@ Le richieste `POST /v1/jobs` vengono serializzate da una claim condivisa prima d
 ## Sicurezza dei container orfani del runner (#21)
 
 I container di compilazione e test usano ora nomi `sf-<UUID completo>-<step>` e tre label Docker statiche per runner, ID job e step, **mai segreti o sorgenti**. Un comando operator-only sul worker, `node src/runner/orphans.mjs --job=<UUID>`, verifica il registro di evidenze e mostra i container del job in **dry-run**. Solo `--apply --confirm-job=<stesso-UUID>` consente di rimuovere container con nome e label corrispondenti, appartenenti a job `failed/incomplete` senza claim; è vietato per job `queued/running/passed`. Non fa prune, non modifica report, non riavvia test. Serve un socket Docker rootless e una verifica umana dei worker/lock residui. Dettagli nella [guida runner](docs/runner.md).
+
+
+## Preflight VM rootless / Docker Compose / endpoint TLS (#22)
+
+Il nuovo controllo non distruttivo `node src/runner/preflight.mjs compose|host|endpoint` valida rispettivamente l'isolamento dichiarato nel Compose, i permessi della VM e l'identità **rootless** del daemon, e i controlli HTTPS/Bearer/CORS di un runner raggiungibile. Non stampa configurazioni o segreti e non crea job. La CI verifica il Compose risolto con credenziali placeholder e simula controlli host/TLS; il vero collaudo della VM rootless e del Cloudflare Tunnel **non è stato ancora effettuato** e rimane nella #2. Consulta [docs/runner.md](docs/runner.md) per comandi e prerequisiti.

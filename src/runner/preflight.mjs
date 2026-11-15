@@ -52,10 +52,14 @@ export function inspectComposeConfig(config) {
   if (apiMounts.length !== 1 || apiMounts[0].target !== "/data" ||
       apiMounts.some(isSocketMount))
     fail("runner-api: unexpected mounts or Docker socket");
+  const workspace = worker.environment?.RUNNER_HOST_WORK_DIR;
   if (workerMounts.length !== 3 ||
       !workerMounts.some(v => v.target === "/data" && v.source === apiMounts[0].source) ||
       !workerMounts.some(v => v.target === "/run/docker.sock" &&
         /^\/run\/user\/1000\/docker\.sock$/.test(v.source)) ||
+      typeof workspace !== "string" || !path.isAbsolute(workspace) ||
+      ["/", "/etc", "/run", "/var", "/var/run", "/tmp"].includes(workspace) ||
+      !workerMounts.some(v => v.target === workspace && v.source === workspace) ||
       workerMounts.filter(isSocketMount).length !== 1)
     fail("runner-worker: expected isolated rootless Docker socket and shared data/work mounts");
   if (worker.environment?.DOCKER_HOST !== "unix:///run/docker.sock")
