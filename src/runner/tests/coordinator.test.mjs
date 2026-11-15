@@ -11,6 +11,14 @@ import { recordJobEvidence } from "../evidence.mjs";
 import { getRepairSession, verifyRepairSession } from "../coordinator.mjs";
 
 const apiKey = "runner-integration-key-abcdefghijklmnopqrstuvwxyz";
+const editorKey = "editor-key-abcdefghijklmnopqrstuvwxyz1234567890";
+const reviewerKey = "reviewer-key-abcdefghijklmnopqrstuvwxyz1234567890";
+const approverKey = "approver-key-abcdefghijklmnopqrstuvwxyz1234567890";
+const repairOperators = JSON.stringify([
+  { id: "editor", key: editorKey, roles: ["propose"] },
+  { id: "reviewer", key: reviewerKey, roles: ["review"] },
+  { id: "approver", key: approverKey, roles: ["approve"] },
+]);
 const origin = "http://localhost:5173";
 const proposalId = "00000000-0000-4000-a000-000000000025";
 const otherProposal = "00000000-0000-4000-a000-000000000026";
@@ -23,14 +31,18 @@ const code = {
 async function fixture(maxQueued = 4) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "sf-coordinator-"));
   const servers = [0, 1].map(() => createRunnerServer({
-    apiKey, allowedOrigins: [origin], dataDir, maxQueued,
+    apiKey, allowedOrigins: [origin], dataDir, maxQueued, repairOperators,
   }));
   for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
   const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
   const call = async (index, endpoint, body = undefined, extra = {}) => {
+    const repair = endpoint.startsWith("/v1/repair-sessions");
+    const roleKey = !repair ? apiKey :
+      body?.action === "review" ? reviewerKey :
+      body?.action === "record_approval" ? approverKey : editorKey;
     const response = await fetch(urls[index] + endpoint, {
       method: body === undefined ? "GET" : "POST",
-      headers: { Origin: origin, Authorization: "Bearer " + apiKey,
+      headers: { Origin: origin, Authorization: "Bearer " + roleKey,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...extra },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -88,6 +100,7 @@ test("two API processes persist a retry-safe repair session, enforce review/rete
     const report = await f.call(1, pathFor(id));
     assert.equal(report.status, 200);
     assert.equal(report.body.checkpointCount, 1);
+    assert.deepEqual(report.body.audit, [{ sequence: 1, kind: "started", actorId: "editor" }]);
     assert.equal(Object.hasOwn(report.body, "files"), false);
     assert.equal(JSON.stringify(report.body).includes("runner-integration-key"), false);
     const wrongStart = await f.call(0, "/v1/repair-sessions",
@@ -124,10 +137,53 @@ test("two API processes persist a retry-safe repair session, enforce review/rete
     assert.equal(approved.status, 200);
     assert.equal(approved.body.state, "recorded_approval");
     assert.equal(approved.body.checkpointCount, 5);
+    assert.deepEqual(approved.body.audit.map(a => a.actorId),
+      ["editor", "editor", "reviewer", "editor", "approver"]);
+    assert.ok(!JSON.stringify(approved.body).includes(editorKey));
+    assert.ok(!JSON.stringify(approved.body).includes(reviewerKey));
+    assert.ok(!JSON.stringify(approved.body).includes(approverKey));
     assert.equal((await f.call(0, next(id), approval(id))).status, 409);
     assert.equal((await f.call(1, pathFor(id))).body.state, "recorded_approval");
     assert.deepEqual((await readReport(f.dataDir, failed.id)).state, "failed");
     assert.deepEqual((await readReport(f.dataDir, newJob.id)).state, "passed");
+  } finally { await f.close(); }
+});
+
+test("global runner key cannot mutate repair sessions; operator roles deny cross-scope writes", async () => {
+  const f = await fixture();
+  try {
+    const failed = await f.submit();
+    await f.complete(failed, "failed");
+    const start = "/v1/repair-sessions";
+    const noOperator = await f.call(0, start, begin(failed.id), {
+      Authorization: "Bearer " + apiKey,
+    });
+    assert.equal(noOperator.status, 401, "global runner credential must not be an operator");
+    const forbiddenStart = await f.call(0, start, begin(failed.id), {
+      Authorization: "Bearer " + reviewerKey,
+    });
+    assert.equal(forbiddenStart.status, 403);
+    const made = await f.call(0, start, begin(failed.id));
+    assert.equal(made.status, 201);
+    const id = made.body.id;
+    assert.equal((await f.call(0, pathFor(id), undefined, {
+      Authorization: "Bearer " + apiKey,
+    })).status, 401);
+    assert.equal((await f.call(0, pathFor(id))).status, 200);
+    const patched = await f.call(0, next(id), patch("e".repeat(64)), {
+      Authorization: "Bearer " + approverKey,
+    });
+    assert.equal(patched.status, 403);
+    assert.equal((await f.call(0, next(id), patch("e".repeat(64)))).status, 200);
+    const reviewDenied = await f.call(0, next(id), reviewed, {
+      Authorization: "Bearer " + editorKey,
+    });
+    assert.equal(reviewDenied.status, 403);
+    assert.equal((await f.call(0, next(id), reviewed)).status, 200);
+    assert.equal((await f.call(0, next(id), approval(id), {
+      Authorization: "Bearer " + reviewerKey,
+    })).status, 403);
+    assert.equal((await f.call(0, pathFor(id))).body.state, "awaiting_retest");
   } finally { await f.close(); }
 });
 
