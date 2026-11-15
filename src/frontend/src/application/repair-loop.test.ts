@@ -118,6 +118,7 @@ describe("supervised repair/retest policy", () => {
   it("refuses a changed failure binding and does not record unverifiable repair", () => {
     const project = createProject();
     project.config.name = "Binding test";
+    project.config.description = "Verify that a changed runner report binding cannot trigger repair";
     const p = validateProposal(response([dotnet], 0), project, "Implement binding");
     const staged = setPending(project, p);
     const evidence: RunnerJobEvidence = {
