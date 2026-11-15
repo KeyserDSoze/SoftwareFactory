@@ -9,6 +9,26 @@ async function isClaimed(dataDir, id) {
   try { await lstat(path.join(jobDirectory(dataDir, id), ".claim")); return true; }
   catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
+/** Serialize crash recovery against completion and any new job claim.
+ * Re-read the report while holding the recovery claim: a stale scanner must
+ * not overwrite a just-completed result as failed.
+ */
+export async function recoverUnclaimedJob(dataDir, id) {
+  const dir = jobDirectory(dataDir, id);
+  const claim = path.join(dir, ".claim");
+  try { await mkdir(claim, { mode: 0o700 }); }
+  catch (error) { if (error.code === "EEXIST") return false; throw error; }
+  try {
+    const latest = await readReport(dataDir, id);
+    if (latest.state !== "running") return false;
+    await atomicWrite(path.join(dir, "report.json"), {
+      ...latest, state: "failed", finishedAt: new Date().toISOString(),
+      summary: "Worker interrupted without claim; inspect orphaned Docker containers",
+    });
+    return true;
+  } finally { await rm(claim, { recursive: true, force: true }); }
+}
+
 export async function executeJob(id, options = {}) {
   const dataDir = options.dataDir ?? process.env.RUNNER_DATA_DIR ?? "/data";
   const claim = path.join(jobDirectory(dataDir, id), ".claim");
@@ -124,11 +144,9 @@ export async function runWorker({
         // Claimed queued jobs must not starve ready jobs.
         if (report.state === "queued" && !claimed) queued.push({ id, acceptedAt: report.acceptedAt });
         if (report.state === "running" && !claimed) {
-          // Do not clobber a running job owned by another worker.
-          await atomicWrite(path.join(jobDirectory(dataDir, id), "report.json"), {
-            ...report, state: "failed", finishedAt: new Date().toISOString(),
-            summary: "Worker interrupted without claim; inspect orphaned Docker containers",
-          });
+          // The report may have completed between the first read and lock check.
+          // Reacquire an exclusive claim and re-read under it before failing.
+          await recoverUnclaimedJob(dataDir, id);
         }
       } catch { /* malformed entry not executable */ }
     }

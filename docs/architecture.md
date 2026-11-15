@@ -145,3 +145,6 @@ La Factory genera un modulo `oidc.ts` con `broadcastOidcLogout` e `subscribeOidc
 ### Claim esclusiva sul volume runner (#18)
 
 `executeJob` acquisisce via `mkdir` non ricorsivo una `.claim` per job prima di verificare `queued`; soltanto il proprietario avvia Docker e scrive report. La claim si libera in `finally`. L'API resta senza socket; worker multipli sullo stesso filesystem non devono duplicare job o falsificare transizioni di stato. Il polling ignora job claimed e la retention li preserva. Dopo crash la claim residua blocca il job finché l'operatore riconcilia processi/container e la rimuove; un `running` privo di claim passa a `failed`. Questa è una sicurezza conservativa, non un lease con fencing distribuito.
+
+
+La recovery di `running` privo di claim è serializzata da una nuova `mkdir(.claim)` e da una **seconda lettura del report mentre la claim è detenuta**: questa evita che un poller con stato obsoleto sovrascriva come `failed` il `passed` appena scritto dal worker che ha terminato e rilasciato il lock. Il recupero viene saltato se un altro processo ha già acquisito la claim.

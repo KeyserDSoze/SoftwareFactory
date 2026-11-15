@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate, scrub, atomicWrite } from "../common.mjs";
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
-import { executeJob, runWorker } from "../worker.mjs";
+import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
 const origin = "http://localhost:5173";
@@ -208,6 +208,14 @@ test("orphan claim blocks execution, does not starve queue, and never becomes pa
       executeQueuedJob: async () => {} });
     assert.equal((await readReport(dataDir, orphan)).state, "failed",
       "manual removal of orphan claim allows failure recovery, never automatic retry");
+    const ended = await readReport(dataDir, orphan);
+    await atomicWrite(path.join(jobDirectory(dataDir, orphan), "report.json"), {
+      ...ended, state: "passed", summary: "Completed by owning worker", finishedAt: new Date().toISOString(),
+    });
+    assert.equal(await recoverUnclaimedJob(dataDir, orphan), false,
+      "recovery scanner must not overwrite a job that finished after its first read");
+    assert.equal((await readReport(dataDir, orphan)).state, "passed");
+    assert.ok(!(await readdir(jobDirectory(dataDir, orphan))).includes(".claim"));
   } finally {
     await rm(dataDir, { recursive: true, force: true });
     await rm(work, { recursive: true, force: true });

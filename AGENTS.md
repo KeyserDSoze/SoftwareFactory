@@ -180,3 +180,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Acquisire `jobs/<id>/.claim` con `mkdir` atomico **prima di leggere `queued`**; solo il proprietario rimuove la claim. Un secondo worker su `EEXIST` non esegue né modifica report.
 - Il polling deve ignorare `queued` claimed senza affamare la coda, preservare i `running` claimed e non eliminare i claimed per retention. Nessun TTL per rubare i lock: una build Docker può ancora essere viva.
 - Su crash: operatore verifica i container e il worker, poi eventualmente rimuove la claim; `running` senza claim diventa `failed`, non rieseguito. Non equiparare la claim filesystem a fencing multi-host/HA o multi-tenancy.
+
+
+### Race fra conclusione e recovery (#18)
+
+- Un poller che legge `running` e poi non trova una claim non deve scrivere `failed` sul vecchio snapshot: deve **acquisire una claim atomica e rileggere** il report. Se lo stato ora è concluso, non modificarlo. Mai falsificare o sovrascrivere un `passed` reale a causa di una scansione tardiva.
