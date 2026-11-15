@@ -2,7 +2,7 @@
  * A signature binds an exported journal to an operator-controlled key; it cannot
  * prove that a Docker run happened or that the signer inspected real hardware.
  */
-import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
+import { KeyObject, createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,8 +26,9 @@ function canonical(value) {
   throw invalid();
 }
 function ed25519Public(value) {
-  const publicKey = createPublicKey(value);
-  if (publicKey.asymmetricKeyType !== "ed25519") throw invalid();
+  const publicKey = value instanceof KeyObject && value.type === "public"
+    ? value : createPublicKey(value);
+  if (publicKey.type !== "public" || publicKey.asymmetricKeyType !== "ed25519") throw invalid();
   return publicKey;
 }
 export function publicKeyFingerprint(value) {
@@ -42,8 +43,9 @@ export function evidenceStatement(bundle) {
 }
 export function signEvidenceBundle(bundle, privateKeySource) {
   const statement = evidenceStatement(bundle);
-  const privateKey = createPrivateKey(privateKeySource);
-  if (privateKey.asymmetricKeyType !== "ed25519") throw invalid();
+  const privateKey = privateKeySource instanceof KeyObject && privateKeySource.type === "private"
+    ? privateKeySource : createPrivateKey(privateKeySource);
+  if (privateKey.type !== "private" || privateKey.asymmetricKeyType !== "ed25519") throw invalid();
   const publicKey = ed25519Public(privateKey);
   return { version: 1, algorithm: "Ed25519", statement,
     signerKeySha256: publicKeyFingerprint(publicKey),
