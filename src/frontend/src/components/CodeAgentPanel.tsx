@@ -167,6 +167,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     const isRepair = (patch.repairCount ?? 0) > 0;
     if (isRepair) onBusy(true, "Verifica esiti runner post-repair");
     try {
+      let locallyApproved: FactoryProject | null = null;
       if (isRepair) {
         const evidence = originalProject.development?.lastRunnerEvidence;
         if (!evidence || evidence.proposalId !== patch.id)
@@ -183,13 +184,16 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         if (projectRef.current.updatedAt !== originalProject.updatedAt)
           throw new Error("Il progetto è cambiato durante la verifica: riprova.");
         if (!patch.repairSession) throw new Error("Checkpoint di repair remoto assente: approvazione bloccata.");
+        // Validate all local apply conditions before recording a remote approval.
+        // A remote declaration must never mask a locally conflicting patch.
+        locallyApproved = approvePending(originalProject, { verifiedRepair: true });
         const session = await recordVerifiedRepairApproval(endpoint, key,
           patch.repairSession, repairPaths(patch), evidence.id, evidence.digest);
         if (session.state !== "recorded_approval" ||
             projectRef.current.updatedAt !== originalProject.updatedAt)
           throw new Error("Checkpoint o progetto modificato: nessuna patch applicata.");
       }
-      update(approvePending(projectRef.current, { verifiedRepair: isRepair }));
+      update(locallyApproved ?? approvePending(projectRef.current, { verifiedRepair: false }));
       setRequest("");
       onNotice(isRepair
         ? "Patch riparata, ri-verificata e approvata localmente. Controlla il diff e pubblica manualmente."
