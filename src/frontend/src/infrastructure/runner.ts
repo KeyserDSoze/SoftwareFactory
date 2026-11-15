@@ -53,7 +53,7 @@ export function runnerSourceFiles(project: FactoryProject, includePending: boole
   if (!Object.keys(filtered).length) throw new Error("Non ci sono file sorgente da verificare.");
   return filtered;
 }
-async function runnerRequest<T>(baseUrl: string, key: string, endpoint: string, init: RequestInit = {}): Promise<T> {
+export async function runnerRequest<T>(baseUrl: string, key: string, endpoint: string, init: RequestInit = {}): Promise<T> {
   if (key.length < 32) throw new Error("Configura l'API key del runner (almeno 32 caratteri).");
   const base = runnerEndpoint(baseUrl);
   let response: Response;

@@ -21,6 +21,14 @@ export type FeatureProposal = {
   previousProposalId?: string;
   /** Server-verified failed jobs that caused each bounded repair; no log or token storage. */
   repairTrail?: RepairAttempt[];
+  /** Non-secret link to the operator-declared remote repair ledger. */
+  repairSession?: RepairSessionBinding;
+};
+export type RepairSessionBinding = {
+  id: string;
+  rootJobId: string;
+  rootProposalId: string;
+  endpoint: string;
 };
 export type RepairAttempt = {
   attempt: number;
@@ -260,6 +268,7 @@ export function replacePendingWithRepair(
     development: {
       ...dev,
       pending: { ...next, repairCount: previousCount + 1, previousProposalId: old.id,
+        ...(old.repairSession ? { repairSession: old.repairSession } : {}),
         repairTrail: [
           ...(old.repairTrail || []),
           ...(evidence ? [{ attempt: previousCount + 1, failedJobId: evidence.id,
