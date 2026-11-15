@@ -4,7 +4,18 @@
 import type { RepairSessionBinding, RunnerJobEvidence, FeatureProposal } from "../domain/development";
 import type { RunnerStep } from "./runner";
 import { runnerEndpoint, runnerRequest } from "./runner";
+import { readSecret } from "./store";
 
+/** Only an explicit operator secret can authorize repair checkpoints.
+ * Never reuse the Docker job key, including during manual retries.
+ */
+export function operatorRepairKey(): string {
+  const key = readSecret("runner.operator.key");
+  const jobKey = readSecret("runner.key");
+  if (!/^[!-~]{32,256}$/.test(key) || key === jobKey)
+    throw new Error("Configura una credenziale operatore repair diversa dalla chiave dei job.");
+  return key;
+}
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const HASH = /^[a-f0-9]{64}$/;
 type State = "awaiting_patch" | "awaiting_review" | "awaiting_retest" |

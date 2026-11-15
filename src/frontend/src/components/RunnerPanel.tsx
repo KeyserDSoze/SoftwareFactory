@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wre
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
 import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
-import { prepareRepairRetest, repairPaths, syncRepairRetest } from "../infrastructure/repair-coordinator";
+import { prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 import {
   fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
@@ -91,7 +91,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         syncInFlight.current = signature;
         setCheckpointState("syncing");
         try {
-          await syncRepairRetest(endpoint, readSecret("runner.operator.key"), binding, repairPaths(pending),
+          await syncRepairRetest(endpoint, operatorRepairKey(), binding, repairPaths(pending),
             evidence.id, evidence.digest, verified.kind);
           if (!disposed) { syncedOutcome.current = signature; setCheckpointState("saved"); }
         } catch (error) {
@@ -132,7 +132,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
       if (retestPlan && pending) {
         // The remote coordinator must acknowledge both the exact patch digest and
         // the operator-declared review before we send the fixed source snapshot.
-        await prepareRepairRetest(endpoint, readSecret("runner.operator.key"), pending, checksum, selectedSteps);
+        await prepareRepairRetest(endpoint, operatorRepairKey(), pending, checksum, selectedSteps);
         if (latestProject.current.updatedAt !== project.updatedAt ||
             latestProject.current.development?.pending?.id !== pending.id)
           throw new Error("Workspace modificato prima del re-test: invio annullato.");

@@ -10,7 +10,7 @@ import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
 import type { RunnerReport } from "../infrastructure/runner";
 import { fetchRunnerJob, verifyCurrentRunnerReport } from "../infrastructure/runner";
-import { beginOrResumeRepair, recordVerifiedRepairApproval, repairPaths } from "../infrastructure/repair-coordinator";
+import { beginOrResumeRepair, recordVerifiedRepairApproval, repairPaths, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 
 type Props = {
@@ -124,7 +124,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           projectRef.current.development?.lastRunnerEvidence?.id !== evidence.id)
         throw new Error("Il report fallito non è più verificabile sullo snapshot corrente.");
       setPhase("Sincronizzazione checkpoint persistenti del repair");
-      const operatorKey = readSecret("runner.operator.key");
+      const operatorKey = operatorRepairKey();
       const binding = await beginOrResumeRepair(endpoint, operatorKey, original, evidence, controller.signal);
       if (controller.signal.aborted) return;
       if (projectRef.current.updatedAt !== originalProject.updatedAt ||
@@ -187,7 +187,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         // Validate all local apply conditions before recording a remote approval.
         // A remote declaration must never mask a locally conflicting patch.
         locallyApproved = approvePending(originalProject, { verifiedRepair: true });
-        const operatorKey = readSecret("runner.operator.key");
+        const operatorKey = operatorRepairKey();
         const session = await recordVerifiedRepairApproval(endpoint, operatorKey,
           patch.repairSession, repairPaths(patch), evidence.id, evidence.digest);
         if (session.state !== "recorded_approval" ||

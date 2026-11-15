@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureProposal, RepairSessionBinding, RunnerJobEvidence } from "../domain/development";
 import {
   beginOrResumeRepair, getRepairCheckpoint, prepareRepairRetest, repairPaths,
-  recordVerifiedRepairApproval, syncRepairRetest, type RemoteRepairSession,
+  recordVerifiedRepairApproval, syncRepairRetest, operatorRepairKey, type RemoteRepairSession,
 } from "./repair-coordinator";
 
 const endpoint = "https://runner.example.test";
@@ -183,5 +183,24 @@ describe("SPA durable supervised repair coordinator", () => {
     await expect(beginOrResumeRepair(endpoint, key,
       { ...second, repairCount: 2 }, failure(testId, fixedDigest, fixedProposalId)))
       .rejects.toThrow(/Checkpoint remoto/);
+  });
+});
+
+
+describe("role credential separation in browser session", () => {
+  it("never reuses the job execution bearer when operator token is missing or identical", () => {
+    const values = new Map<string,string>();
+    vi.stubGlobal("sessionStorage", { getItem: (key: string) => values.get(key) ?? null });
+    try {
+      const jobKey = "j".repeat(64), operatorKey = "o".repeat(64);
+      values.set("softwarefactory.secret.runner.key", jobKey);
+      expect(() => operatorRepairKey()).toThrow(/diversa/);
+      values.set("softwarefactory.secret.runner.operator.key", jobKey);
+      expect(() => operatorRepairKey()).toThrow(/diversa/);
+      values.set("softwarefactory.secret.runner.operator.key", "short");
+      expect(() => operatorRepairKey()).toThrow(/diversa/);
+      values.set("softwarefactory.secret.runner.operator.key", operatorKey);
+      expect(operatorRepairKey()).toBe(operatorKey);
+    } finally { vi.unstubAllGlobals(); }
   });
 });
