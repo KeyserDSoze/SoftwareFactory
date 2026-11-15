@@ -250,3 +250,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Al consenso per re-test, registrazione idempotente di patch digest, review dichiarata e step obbligatori in API prima del job; polling di report verificati sincronizza il checkpoint di retest. Fallback di recupero sul successivo retry/approvazione se la risposta era incerta.
 - Gate di approvazione ulteriormente ristretto: verifica preventivamente apply locale, report passed sul digest giusto e nuovo checkpoint remoto `recorded_approval` prima di applicare la patch; mai autopush o autoapprovazione.
 - Test Vitest con mock HTTP su retry/mismatch e CI invariata con Node runner, Docker reale e Chromium. Restano #2: account e consenso attestato per operatore, coordinatore autonomo policy-based, VM rootless/Cloudflare collaudati, ancoraggio esterno.
+
+
+## v0.2 — Credenziali di ruolo e audit operatore del ledger (#27)
+
+- Separazione tra chiave job Docker e operator key dei checkpoint; registro privato `RUNNER_REPAIR_OPERATORS_JSON` bounded, fail-closed, ruoli `propose/review/approve`, nessuna API di repair accessibile con la global key.
+- Nuovi eventi ledger con `actorId` non segreto nella hash-chain; lettura delle vecchie entry senza actor come legacy. Nessun token negli export, nel progetto o nei log.
+- Campo di sessione dedicato nella SPA e uso della operator key nelle azioni di create/patch/review/retest/approval; review/approval senza scope bloccate dal server. Test Node credenziali, ruoli, CORS/invalid token e integrità, suite CI su Docker effimero.
+- Residui #2: vera identità operatore, controlli two-person e OIDC/SSO, rotation/revocation distribuite, tenants/quote e attestazione esterna automatica, VM rootless Cloudflare reali.
