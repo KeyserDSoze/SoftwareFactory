@@ -91,7 +91,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         syncInFlight.current = signature;
         setCheckpointState("syncing");
         try {
-          await syncRepairRetest(endpoint, secret, binding, repairPaths(pending),
+          await syncRepairRetest(endpoint, readSecret("runner.operator.key"), binding, repairPaths(pending),
             evidence.id, evidence.digest, verified.kind);
           if (!disposed) { syncedOutcome.current = signature; setCheckpointState("saved"); }
         } catch (error) {
@@ -132,7 +132,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
       if (retestPlan && pending) {
         // The remote coordinator must acknowledge both the exact patch digest and
         // the operator-declared review before we send the fixed source snapshot.
-        await prepareRepairRetest(endpoint, secret, pending, checksum, selectedSteps);
+        await prepareRepairRetest(endpoint, readSecret("runner.operator.key"), pending, checksum, selectedSteps);
         if (latestProject.current.updatedAt !== project.updatedAt ||
             latestProject.current.development?.pending?.id !== pending.id)
           throw new Error("Workspace modificato prima del re-test: invio annullato.");
@@ -184,6 +184,10 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     <div className="panel-title"><div><div className="eyebrow">REMOTE EXECUTION / TEST RUNNER</div><h3>Test e compilazione reali</h3></div><Cloud size={20} className="muted" /></div>
     <p className="helper">L'esito è associato all'impronta SHA-256 del codice inviato. Se la patch o il progetto cambiano, il risultato diventa automaticamente <strong>obsoleto</strong>.</p>
     {!endpoint && <div className="code-agent-warning"><ShieldAlert size={17}/> Configura URL e API key in Settings → Remote runner.</div>}
+    {isRepair && !readSecret("runner.operator.key") &&
+      <div className="code-agent-warning"><ShieldAlert size={17}/>
+        Configura anche la credenziale operatore repair nelle Impostazioni: la chiave dei job non autorizza review o approvazioni.
+      </div>}
     {isRepair && <div className={retestPlan ? "runner-verification" : "code-agent-warning"}>
       <ShieldAlert size={17}/>
       <span>{retestPlan

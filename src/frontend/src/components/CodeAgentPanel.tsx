@@ -124,8 +124,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           projectRef.current.development?.lastRunnerEvidence?.id !== evidence.id)
         throw new Error("Il report fallito non è più verificabile sullo snapshot corrente.");
       setPhase("Sincronizzazione checkpoint persistenti del repair");
-      const key = readSecret("runner.key");
-      const binding = await beginOrResumeRepair(endpoint, key, original, evidence, controller.signal);
+      const operatorKey = readSecret("runner.operator.key");
+      const binding = await beginOrResumeRepair(endpoint, operatorKey, original, evidence, controller.signal);
       if (controller.signal.aborted) return;
       if (projectRef.current.updatedAt !== originalProject.updatedAt ||
           projectRef.current.development?.pending?.id !== original.id)
@@ -187,7 +187,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         // Validate all local apply conditions before recording a remote approval.
         // A remote declaration must never mask a locally conflicting patch.
         locallyApproved = approvePending(originalProject, { verifiedRepair: true });
-        const session = await recordVerifiedRepairApproval(endpoint, key,
+        const operatorKey = readSecret("runner.operator.key");
+        const session = await recordVerifiedRepairApproval(endpoint, operatorKey,
           patch.repairSession, repairPaths(patch), evidence.id, evidence.digest);
         if (session.state !== "recorded_approval" ||
             projectRef.current.updatedAt !== originalProject.updatedAt)
