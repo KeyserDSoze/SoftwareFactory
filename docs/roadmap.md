@@ -125,3 +125,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Frontend browser su loopback per usare Web Crypto in un contesto attendibile, senza disabilitare sicurezza Chromium
 - Da verificare ancora prima della produzione: issuer terzi, TLS di rete, refresh/logout e revoca federata effettivi e key rotation ASP.NET Core contro provider reale
 - Hardening di #10: JWT HMAC legacy fail-closed fuori da Development, vincolo `sub` unico/non vuoto, test negativi 403 sul backend reale e gate di startup .NET in CI.
+
+
+## v0.3 — Fail-closed delle sessioni PostgreSQL (issue #11)
+
+- Gestione uniforme dei 401 in GET/POST/PUT/DELETE: rimozione del token OIDC o demo, dati nascosti, re-login manuale; 403 mantiene l'identità corrente.
+- Guard per evitare che risposte tardive di un token obsoleto invalidino una nuova sessione.
+- E2E in Chromium con API reale: 401 sia su lettura sia su modifica, 403 reader su create; nessun mock dei risultati HTTP in questi casi.
+- IdP federato e sessioni BFF/CSP restano in issue #9; VM rootless indipendente in issue #2.

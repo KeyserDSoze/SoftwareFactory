@@ -30,3 +30,8 @@ Il rollover prova la pubblicazione della nuova chiave JWKS, **non** certifica il
 ## Integrazione di sicurezza — issue #10 (15 novembre 2026)
 
 La modalità simmetrica demo è ammessa **solo in Development**, mai in Staging/Production/ambienti personalizzati. L'identificatore di soggetto che controlla `owner_id` deve comparire una sola volta, essere non vuoto e lungo massimo 255 caratteri: le policy negano l'accesso a claim `sub` assenti, vuoti o multipli. Il controllo viene verificato con JWT RS256 firmati in CI dal provider temporaneo e PostgreSQL reale; il processo .NET generato è anche avviato intenzionalmente in ambienti vietati per provarne il rifiuto. Non equivale a certificazione IdP esterno o sicurezza di produzione.
+
+
+## Addendum — invalidazione della sessione locale (#11, 15 novembre 2026)
+
+Decisione: ogni HTTP 401 su operazioni dati PostgreSQL invalida e rimuove la credenziale in memoria/sessionStorage e i dati visibili, senza lanciare automaticamente un redirect al provider. Si attende un nuovo login esplicito. Il 403 indica autorizzazione insufficiente, ma non invalida la sessione. Una risposta tardiva deve essere legata al token utilizzato per quella richiesta, così non può cancellare un login più recente. `removeUser()` è una pulizia **locale**, non una revoca federata: resta aperta issue #9 per CSP, BFF, IdP reale, key rollover, refresh e logout distribuito.

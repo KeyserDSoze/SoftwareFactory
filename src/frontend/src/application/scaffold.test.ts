@@ -166,6 +166,17 @@ describe("application scaffold", () => {
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_EMPTY_SUB_TOKEN");
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_MISSING_SUB_TOKEN");
     expect(ui).toContain("signinRedirect()");
+    expect(ui).toContain("clearUnauthorizedSession");
+    expect(ui).toContain("oidcManager().removeUser()");
+    expect(ui).toContain('sessionStorage.removeItem("sf_api_access_token")');
+    expect(ui).toContain("activeToken.current !== usedToken");
+    expect((ui.match(/response.status === 401/g) || []).length).toBe(4);
+    expect(ui).toContain("Sessione scaduta o non più valida. Accedi nuovamente.");
+    const e2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(e2e).toContain("clears a stored browser session when the real API returns 401 on list");
+    expect(e2e).toContain("clears the identity after a real API 401 on create");
+    expect(e2e).toContain("preserves the session for a real API 403 role denial");
+    expect(e2e).toContain('route.continue({ headers:');
     expect(oidc).toContain("signinRedirectCallback()");
     expect(oidc).toContain("signoutRedirectCallback()");
     expect(ui).toContain("signoutRedirect()");

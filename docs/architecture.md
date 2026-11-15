@@ -104,3 +104,8 @@ La suite browser mantiene la rete Docker privata ma avvia Vite su localhost all'
 ### Gate hardening JWT e identità (issue #10)
 
 Le API PostgreSQL generate permettono `Auth:Mode=legacy` esclusivamente in Development, fallendo prima dell'avvio negli ambienti Staging, Production e custom. Le policy `items.read` e `items.write` richiedono esattamente un claim `sub` non vuoto e non oltre 255 caratteri, prima che venga usato come owner del record. Factory CI controlla sia gli avvii vietati .NET sia il rifiuto reale (`403`) di JWT RS256 con `sub` assente o vuoto. Questo non sostituisce revoca, validazione di un IdP esterno o sessioni BFF (issue #9).
+
+
+### Client OAuth e reazione agli HTTP 401 (#11)
+
+Il client PostgreSQL svuota stato applicativo e credenziale locale se l'API protegge i dati restituendo 401; evita redirect forzati e richiede nuovo login esplicito. L'identity store di `oidc-client-ts` viene rimosso tramite `removeUser()` (non è una revoca presso l'IdP). Un `useRef` protegge dalle risposte tardive associate a token precedenti. I 403 restano segnalati come errori RBAC senza logout. Le prove E2E inoltrano richieste con Authorization manipolato a un vero backend .NET/PostgreSQL, distinguendo queste risposte dai mock offline.

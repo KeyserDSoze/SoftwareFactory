@@ -113,3 +113,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Non consentire mai Auth:Mode=legacy in Staging, Production o ambienti custom: solo Development. OIDC HTTP solo in Development.
 - Accesso ai dati solo con esattamente un `sub` firmato, non vuoto e lungo al massimo 255 caratteri: verificare 403 su claim vuoto/assente con JWT RS256 nel fullstack reale.
 - La Factory CI esegue il processo .NET generato in ambienti non-Development e verifica il fallimento di avvio; questo è un gate distinto dai test statici Vitest.
+
+## Invalidazione locale della sessione (issue #11)
+
+- In caso di HTTP 401 in una qualsiasi operazione CRUD PostgreSQL, eliminare subito token e dati locali, chiamare `UserManager.removeUser()` se OIDC (nessun logout/reindirizzamento automatico) e richiedere login esplicito. Il 403 mantiene la sessione.
+- Non lasciare che una risposta 401 tardiva di un vecchio token invalidi un token nuovo. Per i test Playwright della Factory inoltrare HTTP al backend reale modificando gli header tramite `route.continue`, senza sostituire le risposte dell'API.
+- I browser test fullstack includono 9 prove Chromium: mantenere sincronizzata la soglia in `fullstack-smoke.mjs`. Questo non certifica revoca del token sul provider o sicurezza di produzione.
