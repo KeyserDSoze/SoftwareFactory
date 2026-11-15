@@ -5,6 +5,7 @@ import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from 
 import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
+import { configureRepairOperators, authenticateRepairOperator, mayRecordRepairAction } from "./operator-auth.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -13,11 +14,13 @@ export function createRunnerServer({
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
   maxRetained = 100,
   admissionWaitMs = 1500,
+  repairOperators = process.env.RUNNER_REPAIR_OPERATORS_JSON,
 } = {}) {
   if (typeof apiKey !== "string" || apiKey.length < 32) throw new Error("RUNNER_API_KEY must contain at least 32 characters");
   if (!allowedOrigins.length || allowedOrigins.some(origin => !/^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/localhost(?::\d+)?$|^http:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin))) {
     throw new Error("Set explicit RUNNER_ALLOWED_ORIGINS (HTTPS or localhost), no wildcard");
   }
+  const operatorRegistry = configureRepairOperators(repairOperators, apiKey);
   return httpServer(async (req, res) => {
     const origin = req.headers.origin;
     const allowed = origin && allowedOrigins.includes(origin);
@@ -35,7 +38,16 @@ export function createRunnerServer({
     const send = (status, data) => { res.writeHead(status, headers); res.end(JSON.stringify(data)); };
     if (req.method === "OPTIONS") { send(204, {}); return; }
     if (req.url === "/healthz" && req.method === "GET") { send(200, { status: "ok", version: 1 }); return; }
-    if (!authenticate(req.headers.authorization, apiKey)) { send(401, { error: "unauthorized" }); return; }
+    const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
+    if (repairRoute && !operatorRegistry) {
+      send(503, { error: "repair_auth_unconfigured" }); return;
+    }
+    const repairOperator = repairRoute
+      ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)
+      : null;
+    if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, apiKey)) {
+      send(401, { error: "unauthorized" }); return;
+    }
     if (req.method === "GET" && req.url === "/v1/capabilities") {
       send(200, { protocol: 1, steps: ALLOWED_STEPS, execution: "remote-docker", networkDefault: "none" }); return;
     }
@@ -84,10 +96,14 @@ export function createRunnerServer({
         }
         input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       } catch { send(400, { error: "invalid_json" }); return; }
+      const action = actionRoute ? input?.action : "begin";
+      if (!mayRecordRepairAction(repairOperator, action)) {
+        send(403, { error: "operator_scope_denied" }); return;
+      }
       try {
         const result = actionRoute
-          ? await advanceRepairSession(dataDir, actionRoute[1], input)
-          : await beginRepairSession(dataDir, input);
+          ? await advanceRepairSession(dataDir, actionRoute[1], input, repairOperator.id)
+          : await beginRepairSession(dataDir, input, repairOperator.id);
         send(actionRoute ? 200 : 201, result);
       } catch (error) {
         const codes = {
