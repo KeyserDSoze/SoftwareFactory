@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,8 +135,9 @@ test("offline CLI refuses insecure private keys, verifies with pinned public key
     assert.match(verified.stdout, /RUNNER_ATTESTATION_VERIFIED/);
     await assert.rejects(run(signArgs), /RUNNER_ATTESTATION_FAILED/);
     await rm(receiptFile);
-    await writeFile(privateFile,
-      privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o644 });
+    // writeFile(mode) does not alter permissions of an existing file.
+    // Explicitly chmod to test fail-closed on a genuinely world-readable key.
+    await chmod(privateFile, 0o644);
     await assert.rejects(run(signArgs), /RUNNER_ATTESTATION_FAILED/);
     assert.equal((await stat(privateFile)).mode & 0o077, 0o044);
   } finally { await rm(dataDir, { recursive: true, force: true }); }
