@@ -133,3 +133,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Provare il refresh one-time con replay negato (400), richiesta autorizzata alla vera API e sessione persistente al reload; sul logout provare redirect HTTP al provider e rimozione dello storage.
 - L'orchestratore deve verificare `idpStats.refreshed` e `idpStats.logout` **prima** di `oidc-protocol-smoke.mjs`, così i contatori dimostrano il traffico del browser, non quello del client Node.
 - Questo non dimostra revoca di token già emessi o conformità di Identity Provider esterni: lasciare #9 aperta.
+
+## Coerenza temporale OIDC nella fixture (issue #14)
+
+- Nei refresh di `oidc-ci-provider.mjs` conservare l'`auth_time` dell'originaria autenticazione tra tutte le rotazioni; `iat` rappresenta il tempo di emissione del nuovo JWT e può avanzare.
+- `oidc-client-ts` controlla che `auth_time` non cambi: mantenere la prova Chromium #13 e quella protocollare con più refresh e replay negato; mai stampare credenziali in un assertion.

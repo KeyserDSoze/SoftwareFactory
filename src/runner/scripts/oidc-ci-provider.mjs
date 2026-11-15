@@ -50,13 +50,13 @@ function json(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 function fail(res, status, error) { json(res, status, { error }); }
-function issuePair(subject, role, nonce) {
+function issuePair(subject, role, nonce, authTime = Math.floor(Date.now() / 1000)) {
   const issuedAt = Math.floor(Date.now() / 1000);
   const access = accessToken(subject, role);
   const identity = jwt({ iss: issuer, aud: clientId, sub: subject, iat: issuedAt,
-    exp: issuedAt + 600, auth_time: issuedAt, ...(nonce ? { nonce } : {}), role });
+    exp: issuedAt + 600, auth_time: authTime, ...(nonce ? { nonce } : {}), role });
   const refresh = randomBytes(32).toString("base64url");
-  refreshTokens.set(refresh, { subject, role, nonce, expires: Date.now() + 600_000 });
+  refreshTokens.set(refresh, { subject, role, nonce, authTime, expires: Date.now() + 600_000 });
   return { access_token: access, id_token: identity, token_type: "Bearer", expires_in: 600,
     refresh_token: refresh, scope: "openid profile offline_access" };
 }
@@ -119,7 +119,7 @@ async function token(req, res) {
     refreshTokens.delete(refresh);
     if (!entry || entry.expires < Date.now()) return fail(res, 400, "invalid_grant");
     stats.refreshed++;
-    return json(res, 200, issuePair(entry.subject, entry.role, entry.nonce));
+    return json(res, 200, issuePair(entry.subject, entry.role, entry.nonce, entry.authTime));
   }
   return fail(res, 400, "unsupported_grant_type");
 }

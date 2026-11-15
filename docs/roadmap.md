@@ -148,3 +148,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Il reload conserva la sessione rinnovata; il logout verifica un 302 dell'endpoint remoto e la rimozione del profilo locale.
 - L'orchestratore Factory impone contatori di refresh e logout del provider **prima** dello smoke protocollo Node; il runner fullstack ora richiede 10 test Chromium.
 - Rimangono non verificati IdP terzi HTTPS, revoca cross-session, logout distribuito, CSRF/XSS/CSP e scelta BFF (issue #9).
+
+
+### Correzione OIDC temporale — issue #14
+
+- Il primo test di refresh via browser ha rivelato che la fixture CI modificava erroneamente `auth_time` al rinnovo; `oidc-client-ts` ha rigettato l'ID token.
+- Il provider di test ora conserva `auth_time` originale sui refresh successivi, distinta da `iat`, e il protocol smoke ne verifica la continuità con rotazione monouso.
+- Verificare nuovamente il percorso fullstack Chromium #13 prima di chiudere le issue.

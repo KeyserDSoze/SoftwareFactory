@@ -100,9 +100,27 @@ async function refresh(refreshToken) {
 const renewedResponse = await refresh(credentials.refresh_token);
 assert.equal(renewedResponse.status, 200);
 const renewed = await renewedResponse.json();
-assert.notEqual(renewed.refresh_token, credentials.refresh_token);
+assert.ok(renewed.refresh_token !== credentials.refresh_token, "Refresh token must rotate");
 checkToken(renewed.access_token, audience);
 assert.equal((await refresh(credentials.refresh_token)).status, 400, "Refresh token replay must fail");
+function idClaims(token) {
+  return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+}
+const originalIdentity = idClaims(credentials.id_token);
+const firstRefreshIdentity = idClaims(renewed.id_token);
+assert.ok(Number.isInteger(originalIdentity.auth_time), "Initial login must set auth_time");
+assert.equal(firstRefreshIdentity.auth_time, originalIdentity.auth_time,
+  "Refresh must preserve the original authentication timestamp");
+assert.ok(firstRefreshIdentity.iat >= originalIdentity.iat, "Refreshed ID token must have a valid iat");
+const nextRefreshResponse = await refresh(renewed.refresh_token);
+assert.equal(nextRefreshResponse.status, 200, "Second refresh must succeed");
+const nextRenewed = await nextRefreshResponse.json();
+checkToken(nextRenewed.access_token, audience);
+assert.ok(nextRenewed.refresh_token !== renewed.refresh_token, "Second refresh must rotate token");
+assert.equal(idClaims(nextRenewed.id_token).auth_time, originalIdentity.auth_time,
+  "Consecutive refreshes must preserve auth_time");
+assert.equal((await refresh(renewed.refresh_token)).status, 400,
+  "Previously rotated refresh token cannot be replayed");
 const returnParams = new URLSearchParams({ post_logout_redirect_uri: allowedReturn, state: randomBytes(16).toString("hex") });
 const logout = await fetch(issuer + "/logout?" + returnParams, { redirect: "manual" });
 assert.equal(logout.status, 302);
@@ -118,4 +136,4 @@ assert.ok(stats.pkceRejected >= 1);
 assert.ok(stats.redeemed >= 1);
 assert.ok(stats.refreshed >= 1);
 assert.ok(stats.logout >= 1);
-console.log("OIDC_PROTOCOL_SMOKE_PASS: RS256 JWKS, S256 PKCE, single-use codes, rotating refresh tokens, logout, JWKS rollover");
+console.log("OIDC_PROTOCOL_SMOKE_PASS: RS256 JWKS, S256 PKCE, single-use codes, auth_time stable across refreshes, replay denied, logout, JWKS rollover");

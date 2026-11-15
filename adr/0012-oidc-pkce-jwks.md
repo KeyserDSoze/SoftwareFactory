@@ -45,3 +45,8 @@ Alla verifica protocollare della pubblicazione di un nuovo `kid` si affianca una
 ## Addendum — rinnovo e logout browser verificati (#13, 15 novembre 2026)
 
 Si mantiene `oidc-client-ts` con sessione in `sessionStorage` e refresh-token grant. La CI fullstack prova ora l'intero ciclo nel browser reale dopo PKCE: `signinSilent()` usa il refresh token monouso e ottiene nuove credenziali, un replay del vecchio token è respinto dal provider, una chiamata a PostgreSQL con il nuovo JWT è autorizzata e un reload mantiene la sessione. Il logout effettua il redirect al provider e la callback browser rimuove l'identità locale. Nessun JWT o segreto è riportato nei log. I contatori della fixture sono osservati prima del test Node indipendente, quindi provano la sequenza browser. La fixture non dimostra revoca dei JWT già emessi, logout globale e politiche di sicurezza del provider reale, né protegge la SPA da XSS; la scelta di BFF e CSP resta aperta in #9.
+
+
+## Addendum — stabilità `auth_time` della sessione CI (#14, 15 novembre 2026)
+
+Una prima prova di refresh dal vero browser ha rilevato un bug della fixture OIDC: il token di rinnovo conteneva un `auth_time` diverso da quello del login originale e il client `oidc-client-ts` lo ha giustamente respinto. La fixture ora associa il timestamp di autenticazione ai record refresh rotanti e lo riusa per ogni ID token successivo, mantenendo indipendente il proprio `iat`. Il test protocollare esegue due rinnovi e verifica sia la continuità temporale sia il diniego del replay. Restano indispensabili le prove Chromium reali e, in seguito, con IdP HTTPS esterno.
