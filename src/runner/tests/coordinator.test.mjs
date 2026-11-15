@@ -89,9 +89,17 @@ test("two API processes persist a retry-safe repair session, enforce review/rete
   try {
     const failed = await f.submit();
     await f.complete(failed, "failed");
-    const created = await Promise.all(Array.from({ length: 6 }, (_, i) =>
+    const concurrent = await Promise.all(Array.from({ length: 6 }, (_, i) =>
       f.call(i % 2, "/v1/repair-sessions", begin(failed.id))));
-    assert.ok(created.every(x => x.status === 201));
+    // Shared POSIX admission deliberately returns 503 + Retry-After under
+    // contention: that is a safe refusal, not a duplicate or broken session.
+    // A fresh operator retry must recover the same idempotent session ID.
+    const created = await Promise.all(concurrent.map(async (result, i) =>
+      result.status === 503 && result.body.error === "admission_busy"
+        ? f.call(i % 2, "/v1/repair-sessions", begin(failed.id)) : result));
+    assert.ok(created.every(x => x.status === 201),
+      "All admissions must converge: " +
+      JSON.stringify(created.map(x => [x.status, x.body.error ?? null])));
     const ids = new Set(created.map(x => x.body.id));
     assert.equal(ids.size, 1, "the same failure/proposal must have one durable coordinator ID");
     const id = created[0].body.id;
