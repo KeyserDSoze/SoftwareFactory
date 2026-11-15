@@ -4,6 +4,7 @@ import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { FeatureEdit, FeatureProposal, RunnerJobEvidence } from "../domain/development";
 import { approvePending, developmentOf, dropConflictingChanges, rejectPending, replacePendingWithRepair, saveReview, setPending, undoLatest, validateProposal, workspaceConflicts } from "../domain/development";
 import { lineDiff } from "../application/code-diff";
+import { planRepairRetest } from "../application/repair-loop";
 import RunnerPanel from "./RunnerPanel";
 import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
@@ -86,48 +87,62 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     finally { onBusy(false); setPhase(""); abortRef.current = null; }
   }
   function bindRunnerJob(evidence: RunnerJobEvidence) {
-    const current = projectRef.current;
+    const current = projectRef.current, dev = developmentOf(current);
+    if (dev.revision !== evidence.revision ||
+        (dev.pending?.id ?? null) !== evidence.proposalId)
+      throw new Error("La proposta è cambiata durante l'invio dei test: job non associato.");
     update({
       ...current,
       development: { ...developmentOf(current), lastRunnerJobId: evidence.id, lastRunnerEvidence: evidence },
       updatedAt: new Date().toISOString(),
     });
   }
-  async function repair(report: RunnerReport, evidence: RunnerJobEvidence): Promise<void> {
+  async function repair(_report: RunnerReport, evidence: RunnerJobEvidence): Promise<void> {
     const originalProject = projectRef.current;
     const original = developmentOf(originalProject).pending;
-    if (!original || original.id !== evidence.proposalId || busy) {
-      onError("La proposta non è più disponibile per il repair."); return;
-    }
-    const proof = await verifyCurrentRunnerReport(originalProject, settings.runnerEndpoint || "", report, evidence);
-    if (proof.kind !== "failed" || originalProject.development?.lastRunnerEvidence?.id !== evidence.id) {
-      onError("Report non più valido per i sorgenti attuali."); return;
+    if (!original || original.id !== evidence.proposalId || busy ||
+        (original.repairCount ?? 0) >= 2 ||
+        originalProject.development?.lastRunnerEvidence?.id !== evidence.id) {
+      onError("La proposta o le prove non sono più disponibili per il repair."); return;
     }
     const controller = new AbortController();
     abortRef.current = controller;
-    setPhase("Correzione AI guidata dagli errori del test");
-    onBusy(true, "Code Agent: repair");
+    setPhase("Rivalidazione delle evidenze fallite sul runner");
+    onBusy(true, "Code Agent: repair supervisionato");
     try {
-      const raw = await proposeCodeRepair(originalProject, settings, original, report, controller.signal);
+      // Re-fetch from the authenticated server, whose API checks the journal.
+      // Never feed a stale cached UI report or an incomplete infrastructure error to AI.
+      const endpoint = settings.runnerEndpoint || "";
+      const latest = await fetchRunnerJob(endpoint, readSecret("runner.key"), evidence.id, controller.signal);
+      if (controller.signal.aborted) return;
+      const proof = await verifyCurrentRunnerReport(originalProject, endpoint, latest, evidence);
+      if (proof.kind !== "failed" ||
+          projectRef.current.updatedAt !== originalProject.updatedAt ||
+          projectRef.current.development?.lastRunnerEvidence?.id !== evidence.id)
+        throw new Error("Il report fallito non è più verificabile sullo snapshot corrente.");
+      setPhase("Correzione AI guidata da errori reali del test");
+      const raw = await proposeCodeRepair(originalProject, settings, original, latest, controller.signal);
       if (controller.signal.aborted) return;
       if (projectRef.current.updatedAt !== originalProject.updatedAt ||
           projectRef.current.development?.pending?.id !== original.id)
         throw new Error("Il workspace è cambiato: la correzione non sarà applicata.");
-      const revised = replacePendingWithRepair(projectRef.current, original.id, raw);
+      const revised = replacePendingWithRepair(projectRef.current, original.id, raw, evidence);
       update(revised);
       setActivePath(revised.development?.pending?.edits[0]?.path || "");
       setView("diff");
-      setPhase("Adversarial review dopo la correzione");
+      setPhase("Adversarial review indipendente dopo il repair");
       try {
         const patch = revised.development!.pending!;
         const review = await reviewCode(revised, settings, patch, controller.signal);
         if (controller.signal.aborted) return;
+        if (projectRef.current.development?.pending?.id !== patch.id)
+          throw new Error("Patch modificata durante la review: esito rifiutato.");
         update(saveReview(projectRef.current, patch.id, review));
         onNotice(review.verdict === "pass"
-          ? "Patch corretta e review superata. Riesegui i test: il report precedente è invalido. Solo dopo controlla e approva."
-          : "Patch corretta, ma la nuova review è bloccante. Nessun file è stato applicato.");
+          ? "Repair rivisto. Conferma un NUOVO invio al runner nel pannello test: include i controlli falliti e le build obbligatorie. Nessuna applicazione automatica."
+          : "Repair salvato ma review bloccante: niente invio automatico né approvazione.");
       } catch(error) {
-        if (!controller.signal.aborted) onError("La patch corretta è salvata ma la review non è completata: " +
+        if (!controller.signal.aborted) onError("Patch riparata salvata, review non completata: " +
           (error instanceof Error ? error.message : String(error)));
       }
     } catch(error) { if (!controller.signal.aborted) fail(error); }
@@ -144,12 +159,10 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         const evidence = originalProject.development?.lastRunnerEvidence;
         if (!evidence || evidence.proposalId !== patch.id)
           throw new Error("Dopo il repair devi rieseguire i test sul nuovo codice prima di approvare.");
-        const required = new Set<string>();
-        if (patch.edits.some(e => e.path.endsWith(".cs"))) required.add("dotnet-build");
-        if (patch.edits.some(e => e.path.startsWith("src/frontend/web/src/"))) required.add("web-build");
-        if (patch.edits.some(e => e.path.startsWith("src/frontend/web/e2e/"))) required.add("playwright");
-        if ([...required].some(step => !evidence.steps.includes(step as typeof evidence.steps[number])))
-          throw new Error("Ripeti almeno i build .NET/React corrispondenti ai file riparati.");
+        const plan = planRepairRetest(originalProject);
+        if (plan.proposalId !== evidence.proposalId ||
+            plan.steps.some(step => !evidence.steps.includes(step)))
+          throw new Error("Il re-test non ha eseguito tutti gli step falliti e le build obbligatorie.");
         const endpoint = settings.runnerEndpoint || "", key = readSecret("runner.key");
         const report = await fetchRunnerJob(endpoint, key, evidence.id);
         const status = await verifyCurrentRunnerReport(originalProject, endpoint, report, evidence);
