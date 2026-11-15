@@ -188,3 +188,8 @@ La SPA passa ora dal puro stato volatile ai checkpoint `/v1/repair-sessions` del
 ### Perimetro di autenticazione degli operatori repair (#27)
 
 Le API Docker execution mantengono la API key legacy ma il coordinatore `/v1/repair-sessions*` usa ora un registro **server-side** di credenziali operatore separate e con ruoli `propose/review/approve`; con registro assente il coordinatore fallisce chiuso e i job rimangono disponibili. Il nuovo modulo `operator-auth.mjs` valida ruoli/ID/segreti unici e ricava in modo timing-safe l'identità della chiave; l'API autorizza lo scope prima di accedere ai file del ledger. Ogni nuovo checkpoint contiene `actorId` e il suo SHA-256 lo include nella chain, senza registrare il token. I checkpoint precedenti restano leggibili come legacy/unattributed; il frontend usa un secondo token in sessionStorage solo per il ledger. **Non** è OIDC, RBAC multi-tenant, autenticazione personale, né two-person rule: un token con più scope può firmare dichiarazioni diverse. Approvazioni indipendenti firmate, revoca distribuita e governance restano nella #2.
+
+
+### Scansione idempotente e integrità durante il repair concurrent start (#28)
+
+La admission del coordinatore conserva il lock globale POSIX, ma un retry di `beginRepairSession` **non può** ignorare i record vicini per aver già trovato un rootJobId corrispondente. Vengono verificati tutti gli snapshot, incluso il checksum della chain, prima della restituzione dell'ID. Una ricognizione anomala può essere ripetuta solo due volte a distanza breve, per distinguere una voce temporanea dalla corruzione persistente. Il sistema fallisce con 409 per un volume incoerente, senza recuperi automatici o cancellazione di evidenze. Non equivale a fencing su host multipli.

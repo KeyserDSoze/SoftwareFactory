@@ -258,3 +258,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Nuovi eventi ledger con `actorId` non segreto nella hash-chain; lettura delle vecchie entry senza actor come legacy. Nessun token negli export, nel progetto o nei log.
 - Campo di sessione dedicato nella SPA e uso della operator key nelle azioni di create/patch/review/retest/approval; review/approval senza scope bloccate dal server. Test Node credenziali, ruoli, CORS/invalid token e integrità, suite CI su Docker effimero.
 - Residui #2: vera identità operatore, controlli two-person e OIDC/SSO, rotation/revocation distribuite, tenants/quote e attestazione esterna automatica, VM rootless Cloudflare reali.
+
+
+## v0.2 — Fix scansione idempotente del repair ledger (#28)
+
+- Regole di recupero conservativo su filesystem condiviso: scansioni bounded per record transitori, verifica di **tutti** i sibling prima di un 201, file persistenti difformi causano 409 e non sono cancellati o riparati automaticamente.
+- Test reali di avvii concorrenti su due istanze API e fixture temporaneo vs corrotto; CI fullstack richiesta sullo stesso SHA di main.
+- Restano in #2 fencing cross-host e prove su filesystem/VM dedicati con daemon Docker rootless reale e Cloudflare Tunnel.

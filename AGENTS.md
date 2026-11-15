@@ -258,3 +258,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Scope: `propose` per creazione/patch/retest, `review` per review operator-declared e `approve` per approvazione dichiarata. GET ledger riservato agli operatori autenticati. Controllare il ruolo PRIMA della mutazione e del lock. Il ledger registra `actorId` non segreto in ogni nuovo evento, compreso nell'hash; gli eventi legacy (senza actor) restano leggibili ma non attribuiti.
 - La SPA conserva `runner.operator.key` **solo** in sessionStorage, distinto da `runner.key` per i job. `prepareRepairRetest` attualmente invia patch + review nel medesimo flusso: per questo chi opera quella fase deve avere entrambi gli scope `propose,review`. È permesso cambiare credenziale in Settings prima di review/approval; non registrare mai questi segreti nei file del progetto, nel report o negli output di CI.
 - Questa è attribuzione della credenziale, non un controllo di due persone o un'identità umana verificata. Restano da sviluppare audit firmati indipendenti, approvazioni multifattore, RBAC/tenant, reale VM rootless e Cloudflare Tunnel (#2).
+
+
+## Ricognizione transitoria del ledger repair in concorrenza (#28)
+
+- Durante la creazione idempotente di una sessione, il coordinatore deve validare **tutti** i file di `/data/repair-sessions` prima di restituire un ID, non ritornare appena trova il job richiesto. Gli snapshot temporanei possono produrre errori transitori in un volume condiviso.
+- Su `REPAIR_INTEGRITY` la scansione sotto lock effettua soltanto **tre tentativi** (due pause da 30 ms), poi 409 fail-closed. Ogni nuovo tentativo rivalida l'intera directory e il journal; nessuna cancellazione automatica di voci difformi. Non mascherare corruzioni permanenti o inventare un risultato di test.
+- Conservare il test di concorrenza fra due API e il test con file temporaneo che scompare / file corrotto persistente; verificare la Factory CI prima di chiudere la #28.
