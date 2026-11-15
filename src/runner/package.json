@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node api.mjs",
     "worker": "node worker.mjs",
+    "orphans": "node orphans.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check api.mjs && node --check common.mjs && node --check docker.mjs && node --check worker.mjs && node --check evidence.mjs && node --check admission.mjs && node --check scripts/docker-smoke.mjs && node --check scripts/playwright-smoke.mjs && node --check scripts/fullstack-smoke.mjs && node --check scripts/auth-fixture-smoke.mjs && node --check scripts/oidc-ci-provider.mjs && node --check scripts/oidc-protocol-smoke.mjs && node --check scripts/oidc-api-rollover-smoke.mjs && node --check scripts/auth-startup-smoke.mjs"
+    "check": "node --check api.mjs && node --check common.mjs && node --check docker.mjs && node --check worker.mjs && node --check evidence.mjs && node --check admission.mjs && node --check orphans.mjs && node --check scripts/docker-smoke.mjs && node --check scripts/playwright-smoke.mjs && node --check scripts/fullstack-smoke.mjs && node --check scripts/auth-fixture-smoke.mjs && node --check scripts/oidc-ci-provider.mjs && node --check scripts/oidc-protocol-smoke.mjs && node --check scripts/oidc-api-rollover-smoke.mjs && node --check scripts/auth-startup-smoke.mjs"
   }
 }
