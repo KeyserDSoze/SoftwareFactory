@@ -118,6 +118,7 @@ try {
     "--env=VITE_OIDC_CLIENT_ID=factory-web",
     "--env=VITE_OIDC_AUDIENCE=factory-client",
     "--mount", "type=bind,src=" + path.resolve("src/runner/scripts/oidc-protocol-smoke.mjs") + ",dst=/ci-protocol.mjs,readonly",
+    "--mount", "type=bind,src=" + path.resolve("src/runner/scripts/oidc-api-rollover-smoke.mjs") + ",dst=/ci-api-rollover.mjs,readonly",
     "--env=NPM_CONFIG_CACHE=/tmp/.npm",
     "node:22-bookworm-slim",
     "npm", "run", "dev", "--prefix", "src/frontend/web", "--",
@@ -195,13 +196,21 @@ try {
   const idpStats = JSON.parse(await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
     webName, "node", "-e", secretArg]));
   assert.ok(idpStats.redeemed >= 1, "OIDC PKCE authorization code never redeemed");
+  // Run before the standalone protocol smoke: this must exercise the API's first
+  // hot JWKS refresh while its original key is still cached in the same process.
+  const rolloverPath = path.resolve("src/runner/scripts/oidc-api-rollover-smoke.mjs");
+  await access(rolloverPath);
+  const rollover = await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
+    webName, "node", "/ci-api-rollover.mjs"], { timeout: 60000 });
+  assert.match(rollover, /OIDC_API_JWKS_ROLLOVER_PASS/);
+  console.log(rollover);
   const protocolPath = path.resolve("src/runner/scripts/oidc-protocol-smoke.mjs");
   await access(protocolPath);
   const protocol = await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
     webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
   assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
   console.log(protocol);
-  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 9 Chromium tests, RS256 JWKS, PKCE login, JWT role/owner isolation and audit");
+  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 9 Chromium tests, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));

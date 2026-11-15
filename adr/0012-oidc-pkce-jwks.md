@@ -35,3 +35,8 @@ La modalità simmetrica demo è ammessa **solo in Development**, mai in Staging/
 ## Addendum — invalidazione della sessione locale (#11, 15 novembre 2026)
 
 Decisione: ogni HTTP 401 su operazioni dati PostgreSQL invalida e rimuove la credenziale in memoria/sessionStorage e i dati visibili, senza lanciare automaticamente un redirect al provider. Si attende un nuovo login esplicito. Il 403 indica autorizzazione insufficiente, ma non invalida la sessione. Una risposta tardiva deve essere legata al token utilizzato per quella richiesta, così non può cancellare un login più recente. `removeUser()` è una pulizia **locale**, non una revoca federata: resta aperta issue #9 per CSP, BFF, IdP reale, key rollover, refresh e logout distribuito.
+
+
+## Addendum — rinnovo JWKS sul processo .NET vivo (#12, 15 novembre 2026)
+
+Alla verifica protocollare della pubblicazione di un nuovo `kid` si affianca una prova sulla **stessa API ASP.NET Core già avviata** durante Chromium/PostgreSQL: un token firmato dalla chiave originale viene validato, la fixture RSA ruota, e l'API deve accettare in un tempo massimo la nuova firma attraverso il refresh metadata/JWKS configurato con `RefreshOnIssuerKeyNotFound`. Nel frattempo 401 transitori sono accettabili, non un falso successo. Sono obbligatorie una prova 401 per firma alterata e un 403 per reader sulla POST. Per evitare leakage la prova non logga né token né segreti. Il cambiamento del JWKS non implica revoca istantanea dei token precedenti, né dimostra disponibilità con un IdP reale, sotto carico o tramite HTTPS: queste verifiche restano nella #9.

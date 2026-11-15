@@ -133,3 +133,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Guard per evitare che risposte tardive di un token obsoleto invalidino una nuova sessione.
 - E2E in Chromium con API reale: 401 sia su lettura sia su modifica, 403 reader su create; nessun mock dei risultati HTTP in questi casi.
 - IdP federato e sessioni BFF/CSP restano in issue #9; VM rootless indipendente in issue #2.
+
+
+## v0.3 — Rollover JWKS sul backend live (issue #12)
+
+- CI con API .NET/PostgreSQL già avviata, provider RSA di test, `kid` iniziale e successivo dopo rotazione della fixture.
+- Il backend accetta il nuovo token senza restart dopo refresh bounded di JWKS; il test richiede firma corretta, 401 su firma falsificata e 403 su scrittura `reader`.
+- Aggiorna il vecchio gate limitato al provider con prova di interoperabilità sul backend: non prova revoca immediata, BFF, TLS né IdP esterno; restano aperti in #9.

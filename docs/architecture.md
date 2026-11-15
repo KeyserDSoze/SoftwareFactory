@@ -109,3 +109,8 @@ Le API PostgreSQL generate permettono `Auth:Mode=legacy` esclusivamente in Devel
 ### Client OAuth e reazione agli HTTP 401 (#11)
 
 Il client PostgreSQL svuota stato applicativo e credenziale locale se l'API protegge i dati restituendo 401; evita redirect forzati e richiede nuovo login esplicito. L'identity store di `oidc-client-ts` viene rimosso tramite `removeUser()` (non è una revoca presso l'IdP). Un `useRef` protegge dalle risposte tardive associate a token precedenti. I 403 restano segnalati come errori RBAC senza logout. Le prove E2E inoltrano richieste con Authorization manipolato a un vero backend .NET/PostgreSQL, distinguendo queste risposte dai mock offline.
+
+
+### Rollover delle chiavi JWKS in ASP.NET Core (#12)
+
+Dopo il test browser fullstack con JWT RSA/JWKS, la Factory CI usa un client Node interno alla stessa bridge `--internal` per chiamare l'API ASP.NET Core già avviata. Conserva un riferimento al `kid` JWKS originale e verifica un token valido; ruota la chiave RSA temporanea nel provider, attende con un budget temporale massimo che JwtBearer esegua il refresh JWKS quando incontra il nuovo `kid`, poi prova un token valido, una firma manomessa (401) e un token reader su scrittura (403). Questa prova non resetta il processo .NET e non condivide chiavi private. I token prima della rotazione possono sopravvivere fino a scadenza/cache: non si presume una revoca immediata delle credenziali vecchie. La validazione con un vero IdP HTTPS e il modello BFF/CSP restano in #9.

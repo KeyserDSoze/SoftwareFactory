@@ -119,3 +119,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - In caso di HTTP 401 in una qualsiasi operazione CRUD PostgreSQL, eliminare subito token e dati locali, chiamare `UserManager.removeUser()` se OIDC (nessun logout/reindirizzamento automatico) e richiedere login esplicito. Il 403 mantiene la sessione.
 - Non lasciare che una risposta 401 tardiva di un vecchio token invalidi un token nuovo. Per i test Playwright della Factory inoltrare HTTP al backend reale modificando gli header tramite `route.continue`, senza sostituire le risposte dell'API.
 - I browser test fullstack includono 9 prove Chromium: mantenere sincronizzata la soglia in `fullstack-smoke.mjs`. Questo non certifica revoca del token sul provider o sicurezza di produzione.
+
+## Rollover JWT/JWKS lato API reale (issue #12)
+
+- Il test `oidc-api-rollover-smoke.mjs` gira nella rete Docker `--internal` CI dopo i test browser, **prima** del test protocollo indipendente; deve osservare la vera API .NET senza riavviarla.
+- Accettare 401 solo durante un refresh di JWKS con tempo limitato: una nuova chiave `kid` deve essere validata da ASP.NET Core; firme alterate restano 401, un reader con nuova chiave non può scrivere (403).
+- Nessun log di JWT, control secret o chiave privata. Rotazione delle chiavi non è sinonimo di revoca immediata dei token precedenti o IdP di produzione certificato: #9 resta aperta.
