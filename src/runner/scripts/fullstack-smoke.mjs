@@ -181,11 +181,11 @@ try {
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
-  if (outcome.state !== "passed" || !/9 passed/.test(outcome.stdout)) {
+  if (outcome.state !== "passed" || !/10 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
     const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
     console.error("OIDC_BROWSER_DIAGNOSTICS", snippet.slice(-4));
-    throw Error("Playwright integration did not pass all 9 assertions, including PostgreSQL persistence");
+    throw Error("Playwright integration did not pass all 10 assertions, including OIDC browser refresh and PostgreSQL persistence");
   }
   for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
     const count = Number(await docker(["exec", dbName, "psql", "-U", "app", "-d", "app",
@@ -196,6 +196,8 @@ try {
   const idpStats = JSON.parse(await docker(["exec", "-e", "OIDC_CI_SECRET=" + idpControl,
     webName, "node", "-e", secretArg]));
   assert.ok(idpStats.redeemed >= 1, "OIDC PKCE authorization code never redeemed");
+  assert.ok(idpStats.refreshed >= 1, "OIDC browser never used refresh-token rotation");
+  assert.ok(idpStats.logout >= 1, "OIDC browser never reached federated logout endpoint");
   // Run before the standalone protocol smoke: this must exercise the API's first
   // hot JWKS refresh while its original key is still cached in the same process.
   const rolloverPath = path.resolve("src/runner/scripts/oidc-api-rollover-smoke.mjs");
@@ -210,7 +212,7 @@ try {
     webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
   assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
   console.log(protocol);
-  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 9 Chromium tests, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
+  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 10 Chromium tests, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));

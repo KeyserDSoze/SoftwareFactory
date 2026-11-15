@@ -140,3 +140,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - CI con API .NET/PostgreSQL già avviata, provider RSA di test, `kid` iniziale e successivo dopo rotazione della fixture.
 - Il backend accetta il nuovo token senza restart dopo refresh bounded di JWKS; il test richiede firma corretta, 401 su firma falsificata e 403 su scrittura `reader`.
 - Aggiorna il vecchio gate limitato al provider con prova di interoperabilità sul backend: non prova revoca immediata, BFF, TLS né IdP esterno; restano aperti in #9.
+
+
+## v0.3 — Sessione OIDC browser: refresh e logout federato (issue #13)
+
+- Chromium invoca `oidc-client-ts` autentico per ottenere un nuovo access token via refresh grant: verifica rotazione di access/refresh token, storage aggiornato, replay del vecchio refresh negato e autorizzazione sulla vera API PostgreSQL.
+- Il reload conserva la sessione rinnovata; il logout verifica un 302 dell'endpoint remoto e la rimozione del profilo locale.
+- L'orchestratore Factory impone contatori di refresh e logout del provider **prima** dello smoke protocollo Node; il runner fullstack ora richiede 10 test Chromium.
+- Rimangono non verificati IdP terzi HTTPS, revoca cross-session, logout distribuito, CSRF/XSS/CSP e scelta BFF (issue #9).

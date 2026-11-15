@@ -114,3 +114,8 @@ Il client PostgreSQL svuota stato applicativo e credenziale locale se l'API prot
 ### Rollover delle chiavi JWKS in ASP.NET Core (#12)
 
 Dopo il test browser fullstack con JWT RSA/JWKS, la Factory CI usa un client Node interno alla stessa bridge `--internal` per chiamare l'API ASP.NET Core già avviata. Conserva un riferimento al `kid` JWKS originale e verifica un token valido; ruota la chiave RSA temporanea nel provider, attende con un budget temporale massimo che JwtBearer esegua il refresh JWKS quando incontra il nuovo `kid`, poi prova un token valido, una firma manomessa (401) e un token reader su scrittura (403). Questa prova non resetta il processo .NET e non condivide chiavi private. I token prima della rotazione possono sopravvivere fino a scadenza/cache: non si presume una revoca immediata delle credenziali vecchie. La validazione con un vero IdP HTTPS e il modello BFF/CSP restano in #9.
+
+
+### Refresh OAuth e logout nella SPA realmente eseguita (#13)
+
+La Factory CI usa l'istanza effettiva di `oidc-client-ts` nella pagina Chromium autenticata via PKCE, invoca `signinSilent()` con refresh token e verifica che l'app riceva due credenziali ruotate, aggiorni lo storage, neghi il riuso del vecchio refresh e chiami ASP.NET Core/PostgreSQL col nuovo JWT. Il test reload prova la persistenza della sessione rinnovata. Il logout attraversa l'endpoint HTTP del provider CI e la callback browser, quindi elimina lo user store. Gli assertion restituiscono solo booleani/status HTTP, mai token o chiavi. La CI legge i contatori refresh/logout **prima** del client Node del test protocollare, distinguendo così le prove browser. Un provider terzo HTTPS e la revoca federata su più applicazioni non sono certificati.

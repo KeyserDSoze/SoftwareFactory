@@ -125,3 +125,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Il test `oidc-api-rollover-smoke.mjs` gira nella rete Docker `--internal` CI dopo i test browser, **prima** del test protocollo indipendente; deve osservare la vera API .NET senza riavviarla.
 - Accettare 401 solo durante un refresh di JWKS con tempo limitato: una nuova chiave `kid` deve essere validata da ASP.NET Core; firme alterate restano 401, un reader con nuova chiave non può scrivere (403).
 - Nessun log di JWT, control secret o chiave privata. Rotazione delle chiavi non è sinonimo di revoca immediata dei token precedenti o IdP di produzione certificato: #9 resta aperta.
+
+## Rinnovo OIDC e logout federato in Chromium (issue #13)
+
+- La suite fullstack include 10 test Chromium: mantenere la soglia `10 passed` aggiornata in `fullstack-smoke.mjs` se il numero cambia.
+- Testare `UserManager.signinSilent()` dal browser via modulo Vite reale (non emulare il refresh con uno script Node), confrontando token solo dentro il browser; mai stampare JWT, refresh token o segreti.
+- Provare il refresh one-time con replay negato (400), richiesta autorizzata alla vera API e sessione persistente al reload; sul logout provare redirect HTTP al provider e rimozione dello storage.
+- L'orchestratore deve verificare `idpStats.refreshed` e `idpStats.logout` **prima** di `oidc-protocol-smoke.mjs`, così i contatori dimostrano il traffico del browser, non quello del client Node.
+- Questo non dimostra revoca di token già emessi o conformità di Identity Provider esterni: lasciare #9 aperta.

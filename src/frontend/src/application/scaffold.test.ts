@@ -166,6 +166,14 @@ describe("application scaffold", () => {
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_EMPTY_SUB_TOKEN");
     expect(files["src/frontend/web/e2e/smoke.spec.ts"]).toContain("E2E_MISSING_SUB_TOKEN");
     expect(ui).toContain("signinRedirect()");
+    const browserE2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(browserE2e).toContain("renews OIDC session with rotated refresh token and real API access");
+    expect(browserE2e).toContain("manager.signinSilent()");
+    expect(browserE2e).toContain("refreshRotated");
+    expect(browserE2e).toContain("replayDenied: replay.status === 400");
+    expect(browserE2e).toContain("apiAuthorized: result.status === 200");
+    expect(browserE2e).toContain("const providerLogout = page.waitForResponse");
+    expect(browserE2e).toContain('key.startsWith("oidc.user:")');
     expect(ui).toContain("clearUnauthorizedSession");
     expect(ui).toContain("oidcManager().removeUser()");
     expect(ui).toContain('sessionStorage.removeItem("sf_api_access_token")');
