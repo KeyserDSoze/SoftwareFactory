@@ -10,6 +10,7 @@ import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
 import type { RunnerReport } from "../infrastructure/runner";
 import { fetchRunnerJob, verifyCurrentRunnerReport } from "../infrastructure/runner";
+import { beginOrResumeRepair, recordVerifiedRepairApproval, repairPaths } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 
 type Props = {
@@ -31,6 +32,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
   projectRef.current = project;
   const dev = developmentOf(project);
   const pending = dev.pending;
+  const remoteRepairId = pending?.repairSession?.id;
+
   const conflicts = useMemo(() => {
     try { return workspaceConflicts(project); }
     catch { return [] as string[]; }
@@ -120,6 +123,13 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           projectRef.current.updatedAt !== originalProject.updatedAt ||
           projectRef.current.development?.lastRunnerEvidence?.id !== evidence.id)
         throw new Error("Il report fallito non è più verificabile sullo snapshot corrente.");
+      setPhase("Sincronizzazione checkpoint persistenti del repair");
+      const key = readSecret("runner.key");
+      const binding = await beginOrResumeRepair(endpoint, key, original, evidence, controller.signal);
+      if (controller.signal.aborted) return;
+      if (projectRef.current.updatedAt !== originalProject.updatedAt ||
+          projectRef.current.development?.pending?.id !== original.id)
+        throw new Error("Workspace modificato durante la sincronizzazione dei checkpoint.");
       setPhase("Correzione AI guidata da errori reali del test");
       const raw = await proposeCodeRepair(originalProject, settings, original, latest, controller.signal);
       if (controller.signal.aborted) return;
@@ -127,6 +137,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           projectRef.current.development?.pending?.id !== original.id)
         throw new Error("Il workspace è cambiato: la correzione non sarà applicata.");
       const revised = replacePendingWithRepair(projectRef.current, original.id, raw, evidence);
+      if (!revised.development?.pending) throw new Error("La proposta riparata non è disponibile.");
+      revised.development.pending.repairSession = binding;
       update(revised);
       setActivePath(revised.development?.pending?.edits[0]?.path || "");
       setView("diff");
@@ -170,6 +182,12 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           throw new Error("I nuovi test non sono superati o lo snapshot è cambiato: " + status.detail);
         if (projectRef.current.updatedAt !== originalProject.updatedAt)
           throw new Error("Il progetto è cambiato durante la verifica: riprova.");
+        if (!patch.repairSession) throw new Error("Checkpoint di repair remoto assente: approvazione bloccata.");
+        const session = await recordVerifiedRepairApproval(endpoint, key,
+          patch.repairSession, repairPaths(patch), evidence.id, evidence.digest);
+        if (session.state !== "recorded_approval" ||
+            projectRef.current.updatedAt !== originalProject.updatedAt)
+          throw new Error("Checkpoint o progetto modificato: nessuna patch applicata.");
       }
       update(approvePending(projectRef.current, { verifiedRepair: isRepair }));
       setRequest("");
@@ -221,7 +239,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
             <button className="primary" disabled={busy || !ready || !request.trim() || !!pending || !!conflicts.length}
               onClick={() => void generate()}><Play size={16} /> Genera patch e review</button>}
         </div></div>
-      {phase && <div className="code-agent-phase"><RefreshCw size={15} className="spinning" /> {phase}</div>}
+      {remoteRepairId && <p className="helper">Checkpoint repair persistente: <code>{remoteRepairId.slice(0, 8)}…</code>. Le dichiarazioni di review e l'esito dei test vengono registrati sul runner al re-test e all'approvazione; nessuna modifica viene applicata automaticamente.</p>}
+    {phase && <div className="code-agent-phase"><RefreshCw size={15} className="spinning" /> {phase}</div>}
     </section>
     {pending && <section className="panel">
       <div className="panel-title"><div><div className="eyebrow">02 / PROPOSAL · NOT APPLIED</div><h3>{pending.summary}</h3></div>
