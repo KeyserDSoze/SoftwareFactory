@@ -9,7 +9,7 @@ import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate,
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
-import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
+import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport } from "../evidence.mjs";
 import { withAdmissionLock } from "../admission.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
@@ -85,6 +85,8 @@ test("API accepts a bounded immutable snapshot and returns only status", async (
   const journal = await exportResponse.json();
   assert.equal(journal.count, 1);
   assert.equal(journal.head, report.evidence.head);
+  assert.deepEqual(journal.report, report, "portable export includes the full verified report");
+  assert.equal(verifyEvidenceExport(journal).report.id, receipt.id);
   assert.equal(journal.entries[0].kind, "accepted");
   assert.equal(journal.entries[0].report.digest, receipt.digest);
 });

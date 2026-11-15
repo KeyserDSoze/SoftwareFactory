@@ -61,7 +61,7 @@ test("offline Ed25519 signature pins full report, journal and independent truste
     assert.equal(verifySignedEvidence(reformatted, receipt, publicKey).verified, true);
     assert.throws(() => verifySignedEvidence(bundle, receipt, pair().publicKey), /verification failed/);
     assert.throws(() => verifySignedEvidence(bundle, {
-      ...receipt, signature: "a" + receipt.signature.slice(1),
+      ...receipt, signature: (receipt.signature[0] === "A" ? "B" : "A") + receipt.signature.slice(1),
     }, publicKey), /verification failed/);
     assert.throws(() => signEvidenceBundle(bundle, pair().publicKey), Error);
   } finally { await rm(dataDir, { recursive: true, force: true }); }

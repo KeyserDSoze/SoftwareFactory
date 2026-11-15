@@ -288,3 +288,34 @@ node src/runner/preflight.mjs endpoint --env-file=docker/runner/.env \\
 **Endpoint** richiede due origin HTTPS senza credenziali nella URL, disabilita i redirect, verifica `GET /healthz`, il rifiuto 401 di `GET /v1/capabilities` senza Bearer, la riuscita autenticata e `networkDefault=none`, quindi il preflight CORS `OPTIONS /v1/jobs` con Authorization e Idempotency-Key. Non invia mai POST o sorgenti. Se Cloudflare Access blocca la verifica automatica prima della API, il controllo **fallisce**; occorre verificare l'integrazione reale dell'utente/Access con la Factory, senza inserire service token nel JavaScript.
 
 **Limiti:** l'esecuzione della CLI su una VM reale con tunnel effettivo richiede server, credenziali e hostname forniti e mantenuti dall'operatore. La CI Hosted GitHub controlla sintassi/Compose e simula in Node le condizioni pericolose, ma **non prova** rootless Docker su una VM dedicata o Cloudflare Zero Trust/Access. La issue #2 resta aperta per il collaudo operativo effettivo, evidenze off-host e hardening distribuito.
+
+
+## Firma offline Ed25519 delle evidenze esportate (#23)
+
+L'endpoint Bearer `GET /v1/jobs/{id}/evidence` ora restituisce `{version,id,count,head,report,entries}`: il report è completo e la sequenza JSONL può essere verificata **senza contattare il runner**. Un export troncato, con un solo record modificato oppure con stato/exitCode in conflitto con l'ultima entry viene rifiutato. Le entrate includono output di compilazione redatti, ma sono ancora dati potenzialmente sensibili: custodire file `evidence.json` fuori da repository pubbliche, con permessi 0600.
+
+La firma è **volontaria, fuori dal runner e separata da Docker**. Esempio operativo su un PC di un operatore fidato (non sulla VM runner né dentro GitHub Actions):
+
+```sh
+# Una tantum su postazione di firma fidata, NON sul runner
+umask 077
+openssl genpkey -algorithm Ed25519 -out attestor-private.pem
+openssl pkey -in attestor-private.pem -pubout -out attestor-public.pem
+chmod 600 attestor-private.pem
+# Custodire la pubblica verificata in un canale separato e affidabile
+
+# Esporta l'endpoint HTTPS autorizzato: il token arriva solo da una variabile
+# di sessione NON stampata e non inclusa nella URL. Usare un client sicuro
+# che salvi la risposta HTTP Bearer sul PC come evidence.json (mode 0600).
+# Non includere bearer/token nel terminal history, nel command line o nei log.
+
+node src/runner/attest.mjs sign \\
+  --evidence=evidence.json --private-key=attestor-private.pem --out=receipt.json
+# Su postazione di verifica differente, con chiave pubblica già pinned
+node src/runner/attest.mjs verify \\
+  --evidence=evidence.json --receipt=receipt.json --public-key=attestor-public.pem
+```
+
+Il comando `sign` rilegge e verifica localmente ogni entry SHA-256, stato e digest, rifiuta bundle `queued/running` (nessuna esecuzione conclusa) e firma un documento contenente `jobId`, `inputDigest`, `state`, `count`, `head` e `bundleSha256`; aggiunge il fingerprint SHA-256 della chiave Ed25519 pubblica e una signature Base64url. Il file ricevuta viene creato con `mode 0600` e non sovrascrive file esistenti. Il comando `verify` ricalcola ogni valore dall'export, confronta il fingerprint della chiave **pinned esplicitamente** e verifica la firma; non esegue richieste di rete né legge credenziali runner. Le chiavi private sono accettate soltanto da file regolari non symlink con permessi 0600. Il codice usa solo `node:crypto`, nessun pacchetto esterno.
+
+**Modello di fiducia:** un host runner compromesso può ricalcolare l'intera hash-chain e generare un bundle locale convincente, ma non può modificare un export *già firmato da un operatore esterno* senza invalidarne la firma. La firma attesta soltanto la scelta del firmatario di sottoscrivere i byte/log, **non** l'effettiva esecuzione di build/test, l'autenticità della data, l'identità della VM o l'assenza di alterazioni precedenti alla firma. Occorrono custodia off-host della chiave, distribuzione fidata della pubblica, conservazione della ricevuta fuori dal server, e in futuro ancoraggio automatico, firma da infrastruttura indipendente e collaudo della VM rootless (issue #2). Non mettere la private key nel `.env` del runner, nei container o nella repository.

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { atomicWrite, jobDirectory, readReport } from "./common.mjs";
 
 const ZERO = "0".repeat(64);
@@ -43,8 +44,8 @@ export function verifyEvidenceExport(bundle) {
         bundle.head !== previousHash || bundle.report.evidence?.version !== 1 ||
         bundle.report.evidence.count !== bundle.entries.length ||
         bundle.report.evidence.head !== previousHash ||
-        JSON.stringify(snapshot(bundle.report)) !==
-          JSON.stringify(bundle.entries[bundle.entries.length - 1].report))
+        !isDeepStrictEqual(snapshot(bundle.report),
+          bundle.entries[bundle.entries.length - 1].report)
       throw invalid();
     return { report: bundle.report, entries: bundle.entries, head: previousHash };
   } catch (error) {

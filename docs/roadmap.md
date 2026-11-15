@@ -218,3 +218,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Modalità host: verifica filesystem privato e Socket Unix uid 1000 e `docker info` con `name=rootless`; modalità endpoint HTTPS: 401 senza token, capabilities Bearer, CORS preflight e redirect non seguiti, nessun job creato.
 - Test di regressione su configurazioni rootful/public port/volumi insicuri, permessi, redirect e Origin wildcard; CI esegue Compose preflight con il solo env placeholder.
 - Resta nella #2 la verifica **reale** su VM e Cloudflare Tunnel/Access, l'attestazione off-host, fencing cross-host e repair loop.
+
+
+## v0.2 — Bundle di evidenze offline e firma Ed25519 (#23)
+
+- Export autenticato con report intero, head/count e entry journal; validatore offline puro senza rete/credenziali runner, fail-closed su modifiche, tagli e stato non coerente.
+- Firma Ed25519 opzionale su postazione indipendente del firmatario: digest del bundle, input digest, stato, identificatore job e fingerprint public key. Verifica pubblica con chiave pinned, non suggerita dalla ricevuta.
+- CI con chiavi temporanee, test di riscrittura completa del journal vs firma già emessa, CLI mode 0600 senza sovrascritture e integrazione API.
+- Non confondere firma manuale post-export con prova di Docker rootless o timestamp affidabile. Restano #2 ancoraggio remoto automatico, VM/tunnel reale, fencing e repair loop.

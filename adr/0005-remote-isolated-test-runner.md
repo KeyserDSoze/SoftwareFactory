@@ -63,3 +63,8 @@ Il nome Docker iniziale usava soltanto le prime otto cifre dell'UUID job: due jo
 ## Addendum — readiness check senza eseguire workload non fidati (#22, 15 novembre 2026)
 
 Il preflight del runner è separato dall'effettivo deployment: una CLI solo lettura valida Compose risolto (non stampandone configurazione e credenziali), un host con socket/daemon rootless e directory private, e, opzionalmente, l'endpoint HTTPS con autenticazione Bearer e CORS richiesti dalla SPA, senza creare job o seguire redirect. La CI può verificare Compose e simulare risposte Docker/HTTP, ma non autentica un Cloudflare Tunnel reale né certifica una VM rootless. L'operatore deve fornire le evidenze e i segreti del server esterno e completare il collaudo in #2; il parser non esegue un auto-remediation e non include credenziali nei report.
+
+
+## Addendum — firma dell'export da postazione indipendente (#23, 15 novembre 2026)
+
+La hash-chain del runner (#19) rileva manomissioni non coordinate, ma un amministratore che controlla lo stesso volume può ricostruire journal e report. La decisione aggiunge un export Bearer self-contained e una CLI **offline** che verifica la chain e firma con Ed25519 un manifest con digest SHA-256 del bundle e identificatori dello stato. La private key rimane fuori da runner, API e Docker; il verificatore possiede già una public key pinned ottenuta da canale separato. Dopo una firma esterna, riscrivere l'intero journal non basta a produrre una firma valida senza rubare la chiave. La firma non attesta automaticamente che il contenuto fosse corretto prima di essere firmato, né prova la data o la VM effettiva: pubblicazione/ancoraggio off-host automatico e hardening restano nella #2.

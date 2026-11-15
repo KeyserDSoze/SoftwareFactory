@@ -218,3 +218,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - La CLI `src/runner/preflight.mjs` in modalità `compose` non deve mai stampare `docker compose config` (contiene API key e token tunnel); verificare topology/permissions sul JSON risolto e stampare solo esiti non sensibili. `host` valida socket, owner, directory mode 0700 e `docker info SecurityOptions` rootless sotto uid 1000. `endpoint` usa HTTPS, non segue redirect, non invia POST/codice e verifica Bearer/CORS Idempotency-Key.
 - La GitHub Actions CI usa solo `.env.example` e test finti per host/HTTPS. **Non** dichiarare deployment Cloudflare/VM reale né rootless production verificati senza prove da una VM dedicata; non inserire Bearer/Access service token in URL, command line, repository o log.
+
+
+## Attestazione portatile Ed25519 senza segreti nel runner (#23)
+
+- `GET /v1/jobs/:id/evidence` deve esportare **report completo + entries + head/count** dopo aver verificato il journal. Un client offline deve poter rivalidare l'intera catena senza API key. Qualsiasi differenza tra report ed ultima entry è errore fail-closed.
+- `src/runner/attest.mjs sign` è **solo per macchine dell'operatore esterne al runner**: chiave privata Ed25519 in file 0600, vietata in Docker, sul runner, nelle repository e nei log. Non aggiungere API di signing server-side. La CLI `verify` riceve la public key pinned per canale attendibile, **non** dalla ricevuta o dall'endpoint; verifica firma, bundle SHA256 e journal completo, compreso stato/digest.
+- Il bundle esportato può includere log di build redatti ma ancora sensibili: custodirlo e non pubblicarlo indiscriminatamente. Una ricevuta firmata non certifica da sola l'esecuzione su Docker, un orario fidato o la provenienza hardware. La #2 richiede ancora ancoraggio off-host automatico e VM rootless reale.
