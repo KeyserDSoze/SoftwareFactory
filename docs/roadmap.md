@@ -163,3 +163,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Eventi `silentRenewError` e `userUnloaded` nel componente React per rinnovi automatici; protezione delle sessioni recenti dalle risposte tardive.
 - E2E con reale identity fixture e Chromium: refresh monouso già consumato (deny reale) e token endpoint temporaneamente irraggiungibile; 12 test browser nel gate CI.
 - Da verificare: IdP terzo HTTPS, coordinamento cross-tab/device, revoca di access token, BFF/CSP e gestione completa del logout federato (#9).
+
+
+## v0.3 — Content-Security-Policy build-time sul Nginx generato (#16)
+
+- `Content-Security-Policy` applicata dal Nginx delle app PostgreSQL: script solo same-origin (no inline/eval), API/IdP normalizzati nella `connect-src`, frame/base/object limitati e callback SPA funzionante.
+- Configurazione rigenerata dal Dockerfile con input pubblici validati; rigetto di credenziali, injection, query, fragment, HTTP remoto non consentito; compatibilità con path issuer Keycloak.
+- Verifica Factory CI con Nginx **e Chromium reali** nella rete privata e test di blocco script inline; il gate sale a **13 test browser**.
+- Stili React ancora compatibili via `style-src 'unsafe-inline'`; rischi XSS/CSRF, progettazione BFF/HttpOnly, revoca federata e IdP esterno nella #9.

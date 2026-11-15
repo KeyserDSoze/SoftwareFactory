@@ -378,21 +378,11 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
     const webManifest = JSON.parse(files[webManifestPath]);
     webManifest.dependencies["oidc-client-ts"] = "3.5.0";
     files[webManifestPath] = JSON.stringify(webManifest, null, 2) + "\n";
-    files["src/frontend/web/nginx.conf"] = [
-      "server {",
-      "  listen 80;",
-      "  server_name _;",
-      "  root /usr/share/nginx/html;",
-      "  index index.html;",
-      "  location / { try_files $uri $uri/ /index.html; }",
-      "  add_header X-Content-Type-Options nosniff always;",
-      "  add_header Referrer-Policy no-referrer always;",
-      "  add_header X-Frame-Options DENY always;",
-      "}",
-      "",
-    ].join("\n");
+    files["src/frontend/web/nginx.conf"] = "server {\n  listen 80;\n  server_name _;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n  add_header Content-Security-Policy \"default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' http://localhost:8080; frame-src 'none'; form-action 'self'\" always;\n  add_header X-Content-Type-Options nosniff always;\n  add_header Referrer-Policy no-referrer always;\n  add_header X-Frame-Options DENY always;\n  add_header Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;\n}\n";
+    files["src/frontend/web/scripts/build-nginx.mjs"] = "/** Generate the deploy Nginx config from validated public origins (never secrets). */\nimport { writeFileSync } from \"node:fs\";\nimport { fileURLToPath } from \"node:url\";\n\nfunction origin(value, name, optional = false) {\n  if (optional && !value) return null;\n  if (typeof value !== \"string\" || !value || /[\\u0000-\\u0020\\u007f\"';\\\\]/.test(value))\n    throw Error(name + \" is not a clean URL\");\n  let url;\n  try { url = new URL(value); } catch { throw Error(name + \" must be a valid absolute URL\"); }\n  if (![\"http:\", \"https:\"].includes(url.protocol) || !url.hostname ||\n      url.username || url.password || url.search || url.hash)\n    throw Error(name + \" requires a public HTTP(S) URL without credentials/query/fragment\");\n  const loopback = [\"localhost\", \"127.0.0.1\", \"[::1]\"].includes(url.hostname);\n  const internalCI = process.env.CI === \"true\" && process.env.SF_CSP_INTERNAL_TEST === \"true\" &&\n    [\"api\", \"identity\"].includes(url.hostname);\n  if (url.protocol === \"http:\" && !loopback && !internalCI)\n    throw Error(name + \" requires HTTPS (HTTP restricted to localhost and isolated CI)\");\n  return url.origin;\n}\n\nconst api = origin(process.env.VITE_API_URL || \"http://localhost:8080\", \"VITE_API_URL\");\nconst issuer = origin(process.env.VITE_OIDC_AUTHORITY || \"\", \"VITE_OIDC_AUTHORITY\", true);\nif ((issuer && (!process.env.VITE_OIDC_CLIENT_ID || !process.env.VITE_OIDC_AUDIENCE)) ||\n    (!issuer && process.env.VITE_OIDC_CLIENT_ID))\n  throw Error(\"OIDC public configuration is incomplete\");\nconst connections = [...new Set([\"'self'\", api, issuer].filter(Boolean))].join(\" \");\nconst policy = [\n  \"default-src 'none'\", \"base-uri 'none'\", \"object-src 'none'\",\n  \"frame-ancestors 'none'\", \"script-src 'self'\",\n  \"style-src 'self' 'unsafe-inline'\", \"img-src 'self' data:\",\n  \"font-src 'self'\", \"connect-src \" + connections,\n  \"frame-src \" + (issuer || \"'none'\"),\n  \"form-action 'self'\" + (issuer ? \" \" + issuer : \"\"),\n].join(\"; \");\nconst config = [\n  \"server {\", \"  listen 80;\", \"  server_name _;\",\n  \"  root /usr/share/nginx/html;\", \"  index index.html;\",\n  \"  location / { try_files $uri $uri/ /index.html; }\",\n  '  add_header Content-Security-Policy \"' + policy + '\" always;',\n  \"  add_header X-Content-Type-Options nosniff always;\",\n  \"  add_header Referrer-Policy no-referrer always;\",\n  \"  add_header X-Frame-Options DENY always;\",\n  '  add_header Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;',\n  \"}\", \"\",\n].join(\"\\n\");\nwriteFileSync(fileURLToPath(new URL(\"../nginx.conf\", import.meta.url)), config, { mode: 0o644 });\nconsole.log(\"CSP_NGINX_BUILD_PASS: validated public API and OIDC origins\");\n";
     files["docker/Web.Dockerfile"] = files["docker/Web.Dockerfile"]
-      .replace('EXPOSE 80', 'COPY src/frontend/web/nginx.conf /etc/nginx/conf.d/default.conf' + String.fromCharCode(10) + 'EXPOSE 80');
+      .replace('RUN npm run build', 'RUN npm run build' + String.fromCharCode(10) + 'RUN node scripts/build-nginx.mjs')
+      .replace('EXPOSE 80', 'COPY --from=build /app/nginx.conf /etc/nginx/conf.d/default.conf' + String.fromCharCode(10) + 'EXPOSE 80');
     files["README.md"] += [
       "", "## Login OpenID Connect (solo PostgreSQL)",
       "",
@@ -403,7 +393,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "La SPA usa oidc-client-ts per redirect con PKCE, validazione di state/nonce, callback e logout; Nginx permette il fallback SPA su /auth/callback.",
       "La modalita Auth__Mode=legacy con Auth__SigningKey e disponibile solo in Development per test senza identity provider, e rifiutata in Production.",
       "HTTPS e obbligatorio per authority/discovery OIDC in Production. E2E con provider di test HTTP solo sulla rete Docker interna della CI.",
-      "La baseline non implementa ancora sessioni BFF, refresh/revoca comprovati, rotazione signing key in produzione o CSP specifica per il provider.",
+      "La distribuzione Nginx rigenera una CSP applicata alla build usando gli origin pubblici VITE_API_URL e VITE_OIDC_AUTHORITY. Script inline/eval vietati, HTTP remoto vietato salvo fixture CI privata. Configura HTTPS con provider reale e TLS/reverse proxy per un deploy pubblico.",
       "",
     ].join("\n");
     files["tests/README.md"] += "\nLa Factory verifica il protocollo OAuth2/OIDC con un provider fittizio soltanto in CI; non sostituisce test con provider di identita reale.\n";
@@ -653,6 +643,34 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       '  await expect(page.getByLabel("Titolo elemento")).toBeVisible();',
       '  await expect(page.getByRole("button", { name: "Esci" })).toBeVisible();',
       '  await page.unrouteAll();',
+      '});',
+      '',
+      'test("enforces Nginx CSP in Chromium and blocks inline scripts", async ({ page, request }) => {',
+      '  test.skip(!integration || !process.env.E2E_CSP_ORIGIN, "Requires real Nginx CSP on isolated network");',
+      '  const base = process.env.E2E_CSP_ORIGIN!;',
+      '  const home = await request.get(base + "/");',
+      '  const callback = await request.get(base + "/auth/callback");',
+      '  expect(home.status()).toBe(200);',
+      '  expect(callback.status()).toBe(200);',
+      '  const policy = home.headers()["content-security-policy"] || "";',
+      '  expect(callback.headers()["content-security-policy"]).toBe(policy);',
+      '  expect(policy).toContain("default-src \'none\'");',
+      '  expect(policy).toContain("script-src \'self\'");',
+      '  expect(policy).toContain("connect-src \'self\' http://api:8080 http://identity:8999");',
+      '  expect(policy).toContain("frame-ancestors \'none\'");',
+      '  expect(policy).not.toMatch(/script-src[^;]*unsafe-inline|unsafe-eval/);',
+      '  expect(home.headers()["x-content-type-options"]).toBe("nosniff");',
+      '  expect(home.headers()["permissions-policy"]).toContain("geolocation=()");',
+      '  await page.goto(base + "/");',
+      '  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();',
+      '  const injected = await page.evaluate(async () => {',
+      '    const script = document.createElement("script");',
+      '    script.textContent = "window.__sfCspInjected = true";',
+      '    document.head.appendChild(script);',
+      '    await new Promise<void>(resolve => setTimeout(resolve, 80));',
+      '    return Boolean((window as Window & { __sfCspInjected?: boolean }).__sfCspInjected);',
+      '  });',
+      '  expect(injected).toBe(false);',
       '});',
       '',
       'test("signs in and out using browser OIDC redirect + PKCE", async ({ page }) => {',

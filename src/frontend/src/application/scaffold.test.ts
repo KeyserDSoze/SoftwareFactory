@@ -209,6 +209,22 @@ describe("application scaffold", () => {
     expect(files["src/frontend/web/nginx.conf"]).toContain("try_files $uri $uri/ /index.html");
     expect(files["README.md"]).toContain("Auth__Mode=oidc");
     expect(files["src/frontend/web/nginx.conf"]).toContain("X-Content-Type-Options");
+    const nginx = files["src/frontend/web/nginx.conf"];
+    const cspBuilder = files["src/frontend/web/scripts/build-nginx.mjs"];
+    expect(nginx).toContain("Content-Security-Policy");
+    expect(nginx).toContain("script-src 'self'");
+    expect(nginx).toContain("frame-ancestors 'none'");
+    expect(nginx).not.toMatch(/script-src[^;]*unsafe-inline/);
+    expect(cspBuilder).toContain("VITE_OIDC_AUTHORITY");
+    expect(cspBuilder).toContain("VITE_API_URL");
+    expect(cspBuilder).toContain("SF_CSP_INTERNAL_TEST");
+    expect(cspBuilder).toContain("writeFileSync");
+    expect(files["docker/Web.Dockerfile"]).toContain("RUN node scripts/build-nginx.mjs");
+    expect(files["docker/Web.Dockerfile"]).toContain("COPY --from=build /app/nginx.conf");
+    const browserCsp = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(browserCsp).toContain("enforces Nginx CSP in Chromium");
+    expect(browserCsp).toContain("E2E_CSP_ORIGIN");
+    expect(browserCsp).toContain("__sfCspInjected");
 
     expect(files["docker/compose.yml"]).toContain("AUTH_SIGNING_KEY:-");
     expect(files["docker/compose.yml"]).toContain("AUTH_AUDIENCE:?");

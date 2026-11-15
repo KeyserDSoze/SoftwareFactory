@@ -71,6 +71,7 @@ jobs:
         run: |
           docker pull mcr.microsoft.com/dotnet/aspnet:11.0
           docker pull postgres:17-alpine
+          docker pull nginx:1.27-alpine
           timeout 300s node src/runner/scripts/fullstack-smoke.mjs src/frontend/generated-fixture
       - name: Capture Playwright failures
         if: failure()

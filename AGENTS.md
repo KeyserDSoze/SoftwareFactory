@@ -145,3 +145,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `renewOidcSession` controlla lo user corrente prima di eliminarlo, per non invalidare un login più recente; `WorkItems` ascolta `addSilentRenewError` per il rinnovo automatico e `addUserUnloaded` per nascondere CRUD e token.
 - Factory fullstack: **12 prove Chromium**. In CI la fixture OIDC deve negare davvero il replay dello stesso refresh token, e l'interruzione di rete Playwright deve colpire solo il token endpoint; non usare risposte HTTP simulate per il primo scenario.
 - Non loggare JWT, refresh token, error description dei provider o segreti. Revoca distribuita e BFF/CSP restano nella #9.
+
+
+## CSP Nginx delle app PostgreSQL generate (#16)
+
+- `scripts/build-nginx.mjs` valida gli origin pubblici API/IdP e scrive la CSP all'interno della build dell'immagine, evitando header obsoleti se cambia l'IdP. Accettare HTTPS o loopback, con eccezione HTTP privata solo con `CI=true` + `SF_CSP_INTERNAL_TEST=true` e host `api`/`identity`.
+- Script inline/eval vietati, `frame-ancestors 'none'`, `connect-src` a origini esplicite. I realm/prefissi URL degli IdP sono validi ma l'allowlist usa solo `origin`. `style-src 'unsafe-inline'` resta per compatibilità React: non confondere con script inline.
+- La Factory CI ora richiede **13 test Chromium**, incluso Nginx reale su bridge Docker `--internal` senza host port né socket, blocco dello script inline e fallback /auth/callback, oltre a test di rifiuto di input maligni.
+- Non dichiarare un deploy pronto per Internet: token in sessionStorage e modello BFF/CSP/IdP reale restano in issue #9.
