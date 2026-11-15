@@ -3,6 +3,7 @@ import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wre
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
 import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
+import { prepareRepairRetest, repairPaths, syncRepairRetest } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 import {
   fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
@@ -37,6 +38,9 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   const pendingSubmission = useRef<{ signature: string; idempotencyKey: string } | null>(null);
   const latestProject = useRef(project);
   latestProject.current = project;
+  const syncInFlight = useRef<string | null>(null);
+  const syncedOutcome = useRef<string | null>(null);
+  const [checkpointState, setCheckpointState] = useState<"idle" | "syncing" | "saved" | "error">("idle");
   const pendingRepair = project.development?.pending;
   const isRepair = (pendingRepair?.repairCount ?? 0) > 0;
   const retestPlan = (() => {
@@ -74,7 +78,32 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     setVerification(null);
     if (!report || report.id !== jobId || !endpoint) return;
     void verifyCurrentRunnerReport(project, endpoint, report, evidence)
-      .then(verified => { if (!disposed) setVerification(verified); })
+      .then(async verified => {
+        if (disposed) return;
+        setVerification(verified);
+        const pending = project.development?.pending;
+        const binding = pending?.repairSession;
+        if (!binding || (pending?.repairCount ?? 0) === 0 ||
+            (verified.kind !== "passed" && verified.kind !== "failed") ||
+            evidence?.id !== report.id || !secret) return;
+        const signature = report.id + ":" + verified.kind;
+        if (syncedOutcome.current === signature || syncInFlight.current === signature) return;
+        syncInFlight.current = signature;
+        setCheckpointState("syncing");
+        try {
+          await syncRepairRetest(endpoint, secret, binding, repairPaths(pending),
+            evidence.id, evidence.digest, verified.kind);
+          if (!disposed) { syncedOutcome.current = signature; setCheckpointState("saved"); }
+        } catch (error) {
+          if (!disposed) {
+            setCheckpointState("error");
+            onError("Sincronizzazione checkpoint repair: " +
+              (error instanceof Error ? error.message : String(error)));
+          }
+        } finally {
+          if (syncInFlight.current === signature) syncInFlight.current = null;
+        }
+      })
       .catch(() => { if (!disposed) setVerification({ kind: "invalid", detail: "Impossibile verificare il report." }); });
     return () => { disposed = true; };
   }, [project, evidence, report, jobId, endpoint]);
@@ -93,13 +122,21 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     const consent = retestPlan
       ? "Re-test supervisionato " + retestPlan.attempt + "/2: inviare al runner il NUOVO codice riparato? " +
         "Verranno rieseguiti tutti i controlli falliti e le build richieste (" + selectedSteps.join(", ") +
-        "). La review non equivale a un test e nessuna patch sarà applicata automaticamente."
+        "). La review non equivale a un test: il checkpoint viene registrato sul server senza applicare patch."
       : "Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.";
     if (!window.confirm(consent)) return;
     setRequesting(true);
     try {
       const files = runnerSourceFiles(project, pending !== undefined);
       const checksum = await runnerRequestDigest(label, files, selectedSteps);
+      if (retestPlan && pending) {
+        // The remote coordinator must acknowledge both the exact patch digest and
+        // the operator-declared review before we send the fixed source snapshot.
+        await prepareRepairRetest(endpoint, secret, pending, checksum, selectedSteps);
+        if (latestProject.current.updatedAt !== project.updatedAt ||
+            latestProject.current.development?.pending?.id !== pending.id)
+          throw new Error("Workspace modificato prima del re-test: invio annullato.");
+      }
       const signature = runnerEndpoint(endpoint) + ":" + checksum;
       const idempotencyKey = pendingSubmission.current?.signature === signature
         ? pendingSubmission.current.idempotencyKey : crypto.randomUUID();
@@ -155,6 +192,13 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
           ". Gli step falliti e le build necessarie non possono essere esclusi."
         : "Repair in attesa di review positiva o evidenze valide. Nessun test o codice verrà applicato automaticamente."}</span>
     </div>}
+    {isRepair && pendingRepair?.repairSession && <p className="helper">
+      Checkpoint persistente <code>{pendingRepair.repairSession.id.slice(0, 8)}…</code>
+      {checkpointState === "saved" ? " · esito test registrato" :
+        checkpointState === "syncing" ? " · sincronizzazione esito in corso" :
+        checkpointState === "error" ? " · sincronizzazione fallita: approvazione bloccata" :
+        " · l'esito verificato sarà registrato dopo i test"}
+    </p>}
     <div className="runner-checks">{AVAILABLE.map(({ step, label }) =>
       <label className="checkline" key={step}><input type="checkbox" checked={steps.includes(step)} disabled={requesting || repairing}
         onChange={e => setSteps(current => e.target.checked ? [...current, step] : current.filter(x => x !== step))}/>{label}</label>)}</div>
