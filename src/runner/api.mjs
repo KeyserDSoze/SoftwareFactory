@@ -114,6 +114,8 @@ export function createRunnerServer({
           REPAIR_EVIDENCE: [409, "repair_evidence"],
           REPAIR_INTEGRITY: [409, "repair_integrity"],
           REPAIR_CAPACITY: [429, "repair_capacity"],
+          REPAIR_ACTOR_CONFLICT: [409, "repair_actor_conflict"],
+          REPAIR_LEGACY_READONLY: [409, "repair_legacy_readonly"],
         };
         if (codes[error.code]) send(codes[error.code][0], { error: codes[error.code][1] });
         else if (error.code === "ENOENT") send(404, { error: "not_found" });

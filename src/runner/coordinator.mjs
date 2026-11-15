@@ -150,12 +150,46 @@ export function verifyRepairSession(record) {
         state = "recorded_approval";
       } else throw issue("REPAIR_INTEGRITY");
     }
+    enforceActorSeparation(record.events, "REPAIR_INTEGRITY");
     if (head !== record.head || state !== record.state ||
         !isDeepStrictEqual(attempts, record.attempts) ||
         record.events[0].at !== record.createdAt)
       throw issue("REPAIR_INTEGRITY");
     return record;
   } catch { throw issue("REPAIR_INTEGRITY"); }
+}
+
+/**
+ * Authorization invariants apply to BOTH new checkpoints and historical
+ * verification. Legacy journals can be inspected but never retroactively
+ * acquire an author or an independently reviewed approval.
+ */
+function enforceActorSeparation(events, failureCode) {
+  const proposer = events[0]?.actorId;
+  if (proposer === undefined) {
+    if (events.some(event => event.actorId !== undefined))
+      throw issue("REPAIR_INTEGRITY"); // Mixed attributed/unattributed history.
+    if (failureCode !== "REPAIR_INTEGRITY")
+      throw issue("REPAIR_LEGACY_READONLY");
+    return; // Read-only legacy history from before #27.
+  }
+  if (!ACTOR.test(proposer)) throw issue(failureCode);
+  let reviewer = null;
+  for (const event of events.slice(1)) {
+    if (!ACTOR.test(event.actorId)) throw issue(failureCode);
+    if (event.kind === "patch") {
+      if (event.actorId !== proposer) throw issue(failureCode);
+      reviewer = null; // Each attempt requires its own independent review.
+    } else if (event.kind === "review") {
+      if (event.actorId === proposer) throw issue(failureCode);
+      reviewer = event.actorId;
+    } else if (event.kind === "retest_passed" || event.kind === "retest_failed") {
+      if (event.actorId !== proposer) throw issue(failureCode);
+    } else if (event.kind === "record_approval") {
+      if (!reviewer || event.actorId === reviewer || event.actorId === proposer)
+        throw issue(failureCode);
+    }
+  }
 }
 
 async function readSession(dataDir, id) {
@@ -311,6 +345,7 @@ export async function advanceRepairSession(dataDir, id, input, actorId) {
   });
 }
 function projectEvents(next) {
+  enforceActorSeparation(next.events, "REPAIR_ACTOR_CONFLICT");
   let state = "awaiting_patch", attempts = [];
   for (const event of next.events.slice(1)) {
     const d = event.data;
