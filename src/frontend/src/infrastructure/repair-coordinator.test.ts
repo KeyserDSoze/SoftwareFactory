@@ -228,7 +228,7 @@ describe("checkpoint network retry with independent one-step actions", () => {
       return response;
     });
     await expect(prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]))
-      .rejects.toThrow(/Network response dropped/);
+      .rejects.toThrow(/Runner non raggiungibile/); // Transport intentionally redacts network errors.
     expect(remote.stored.state).toBe("awaiting_review");
     const resume = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
     expect(resume.state).toBe("awaiting_retest");
