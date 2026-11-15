@@ -155,3 +155,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Il primo test di refresh via browser ha rivelato che la fixture CI modificava erroneamente `auth_time` al rinnovo; `oidc-client-ts` ha rigettato l'ID token.
 - Il provider di test ora conserva `auth_time` originale sui refresh successivi, distinta da `iat`, e il protocol smoke ne verifica la continuità con rotazione monouso.
 - Verificare nuovamente il percorso fullstack Chromium #13 prima di chiudere le issue.
+
+
+## v0.3 — Rifiuto refresh token e guasti di rete (#15)
+
+- Rinnovo OIDC esplicito con rimozione fail-closed su `invalid_grant`/`login_required`/`invalid_token`; mantenimento della sessione sui soli errori transitori finché l'access token è valido.
+- Eventi `silentRenewError` e `userUnloaded` nel componente React per rinnovi automatici; protezione delle sessioni recenti dalle risposte tardive.
+- E2E con reale identity fixture e Chromium: refresh monouso già consumato (deny reale) e token endpoint temporaneamente irraggiungibile; 12 test browser nel gate CI.
+- Da verificare: IdP terzo HTTPS, coordinamento cross-tab/device, revoca di access token, BFF/CSP e gestione completa del logout federato (#9).

@@ -138,3 +138,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - Nei refresh di `oidc-ci-provider.mjs` conservare l'`auth_time` dell'originaria autenticazione tra tutte le rotazioni; `iat` rappresenta il tempo di emissione del nuovo JWT e può avanzare.
 - `oidc-client-ts` controlla che `auth_time` non cambi: mantenere la prova Chromium #13 e quella protocollare con più refresh e replay negato; mai stampare credenziali in un assertion.
+
+## Fail-closed degli errori di rinnovo OIDC (#15)
+
+- La SPA deve rimuovere la sessione se il refresh token riceve un errore protocollare terminale (es. `invalid_grant`); una falla di rete transitoria non deve eliminare sessioni ancora valide.
+- `renewOidcSession` controlla lo user corrente prima di eliminarlo, per non invalidare un login più recente; `WorkItems` ascolta `addSilentRenewError` per il rinnovo automatico e `addUserUnloaded` per nascondere CRUD e token.
+- Factory fullstack: **12 prove Chromium**. In CI la fixture OIDC deve negare davvero il replay dello stesso refresh token, e l'interruzione di rete Playwright deve colpire solo il token endpoint; non usare risposte HTTP simulate per il primo scenario.
+- Non loggare JWT, refresh token, error description dei provider o segreti. Revoca distribuita e BFF/CSP restano nella #9.

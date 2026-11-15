@@ -50,3 +50,8 @@ Si mantiene `oidc-client-ts` con sessione in `sessionStorage` e refresh-token gr
 ## Addendum — stabilità `auth_time` della sessione CI (#14, 15 novembre 2026)
 
 Una prima prova di refresh dal vero browser ha rilevato un bug della fixture OIDC: il token di rinnovo conteneva un `auth_time` diverso da quello del login originale e il client `oidc-client-ts` lo ha giustamente respinto. La fixture ora associa il timestamp di autenticazione ai record refresh rotanti e lo riusa per ogni ID token successivo, mantenendo indipendente il proprio `iat`. Il test protocollare esegue due rinnovi e verifica sia la continuità temporale sia il diniego del replay. Restano indispensabili le prove Chromium reali e, in seguito, con IdP HTTPS esterno.
+
+
+## Addendum — rinnovo fallito: terminale vs transitorio (#15, 15 novembre 2026)
+
+Il rinnovo di un refresh token rifiutato definitivamente (`invalid_grant`, `login_required`, `invalid_token`) richiede la pulizia dello user store locale e la richiesta di login esplicito; non comporta redirect federati automatici né revoca dei JWT già rilasciati. Errori di rete temporanei non devono distruggere una sessione con access token ancora valido. Il modulo OIDC espone `renewOidcSession` con controllo della sessione corrente e il componente React riceve i segnali di rifiuto del rinnovo automatico ed elimina dati e UI autenticata allo scarico della credenziale. Due prove Chromium verificano rispettivamente `invalid_grant` dal vero provider temporaneo (refresh token consumato) e token endpoint irraggiungibile; il test mantiene il controllo del reale backend .NET/PostgreSQL, con 12 scenari browser complessivi. La #9 rimane aperta per integrazione con IdP HTTPS reali, revoca distribuita, CSP, cookie e BFF.

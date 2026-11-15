@@ -160,6 +160,17 @@ describe("application scaffold", () => {
     expect(auth).toContain("SecurityAlgorithms.RsaSha256");
     expect(auth).toContain("RequireHttpsMetadata = !builder.Environment.IsDevelopment()");
     expect(oidc).toContain("UserManager");
+    expect(oidc).toContain("isTerminalOidcRenewError");
+    expect(oidc).toContain("error instanceof ErrorResponse");
+    expect(oidc).toContain("renewOidcSession");
+    expect(oidc).toContain("current?.refresh_token === before.refresh_token");
+    expect(ui).toContain("addSilentRenewError");
+    expect(ui).toContain("addUserUnloaded");
+    expect(ui).toContain("removeSilentRenewError");
+    const renewE2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(renewE2e).toContain("revoked OIDC refresh token clears session after real invalid_grant");
+    expect(renewE2e).toContain("transient refresh network failure retains a valid OIDC session");
+    expect(renewE2e).toContain('route.abort("failed")');
     expect(oidc).toContain('response_type: "code"');
     expect(oidc).toContain("WebStorageStateStore");
     expect(oidc).toContain("extraQueryParams");
