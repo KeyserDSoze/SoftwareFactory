@@ -8,7 +8,7 @@ import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
 import { jobDirectory, readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
-import { getRepairSession, verifyRepairSession } from "../coordinator.mjs";
+import { beginRepairSession, getRepairSession, verifyRepairSession } from "../coordinator.mjs";
 
 const apiKey = "runner-integration-key-abcdefghijklmnopqrstuvwxyz";
 const editorKey = "editor-key-abcdefghijklmnopqrstuvwxyz1234567890";
@@ -87,6 +87,25 @@ const reviewed = { action: "review", verdict: "pass", consent: true };
 const approval = id => ({ action: "record_approval", consent: true, confirmSessionId: id });
 const pathFor = id => "/v1/repair-sessions/" + id;
 const next = id => pathFor(id) + "/checkpoints";
+
+test("first checkpoint reuses the exact session timestamp across a simulated millisecond boundary", async () => {
+  const f = await fixture();
+  try {
+    const failed = await f.submit();
+    await f.complete(failed, "failed");
+    let clockCalls = 0;
+    const clock = () => (++clockCalls === 1
+      ? "2026-11-16T00:00:00.999Z" : "2026-11-16T00:00:01.000Z");
+    const started = await beginRepairSession(f.dataDir, begin(failed.id), "editor", clock);
+    assert.equal(clockCalls, 1, "only one timestamp may be generated for start");
+    const file = path.join(f.dataDir, "repair-sessions", started.id + ".json");
+    const stored = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(stored.createdAt, "2026-11-16T00:00:00.999Z");
+    assert.equal(stored.events[0].at, stored.createdAt);
+    assert.equal(verifyRepairSession(stored).state, "awaiting_patch");
+    assert.equal((await f.call(1, pathFor(started.id))).body.state, "awaiting_patch");
+  } finally { await f.close(); }
+});
 
 test("two API processes persist a retry-safe repair session, enforce review/retest and record approval only", async () => {
   const f = await fixture();

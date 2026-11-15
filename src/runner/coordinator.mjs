@@ -67,11 +67,11 @@ function sessionFile(dataDir, id) {
   if (!UUID.test(id)) throw issue("REPAIR_INVALID");
   return path.join(baseDirectory(dataDir), id + ".json");
 }
-function checkpoint(record, kind, data, actorId) {
+function checkpoint(record, kind, data, actorId, at = new Date().toISOString()) {
   if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   const previousHash = record.head;
   const event = { sequence: record.events.length + 1, previousHash,
-    kind, at: new Date().toISOString(), actorId, data };
+    kind, at, actorId, data };
   const hash = digest(event);
   return { ...record, head: hash, events: [...record.events, { ...event, hash }] };
 }
@@ -217,7 +217,9 @@ export async function getRepairSession(dataDir, id) {
 async function locked(dataDir, action) {
   return withAdmissionLock(dataDir, action, 1500);
 }
-export async function beginRepairSession(dataDir, input, actorId) {
+export async function beginRepairSession(
+  dataDir, input, actorId, timestamp = () => new Date().toISOString(),
+) {
   if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   if (!exact(input, ["failedJobId","proposalId","paths","consent"]) ||
       input.consent !== true || !UUID.test(input.failedJobId) ||
@@ -266,7 +268,9 @@ export async function beginRepairSession(dataDir, input, actorId) {
     if (!legitimateFailure(rootEvidence.report)) throw issue("REPAIR_NOT_FAILED");
     const report = rootEvidence.report;
     const id = randomUUID();
-    const createdAt = new Date().toISOString();
+    // One instant for the persisted session and its first hashed event.
+    // Two Date calls can straddle a millisecond and spuriously fail integrity.
+    const createdAt = timestamp();
     const required = requiredSteps(input.paths, report.steps);
     const start = { version: 1, id, createdAt,
       rootJobId: input.failedJobId, rootDigest: report.digest,
@@ -275,7 +279,7 @@ export async function beginRepairSession(dataDir, input, actorId) {
     const next = checkpoint(start, "started", {
       rootJobId: report.id, rootDigest: report.digest,
       proposalId: input.proposalId, paths: input.paths, rootSteps: report.steps,
-    }, actorId);
+    }, actorId, createdAt);
     verifyRepairSession(next);
     await atomicWrite(sessionFile(dataDir, id), next);
     return overview(next);
