@@ -4,6 +4,7 @@ import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
 import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
+import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -49,6 +50,61 @@ export function createRunnerServer({
         if (e.code === "EVIDENCE_INVALID") send(409, { error: "evidence_invalid" });
         else if (e.code === "ENOENT") send(404, { error: "not_found" });
         else send(500, { error: "read_failure" });
+      }
+      return;
+    }
+    // Repair sessions are a checkpoint ledger, not an AI or source-code execution API.
+    // Each write is explicitly consented and checked again against verified runner evidence.
+    const repairId = /^\/v1\/repair-sessions\/([a-f0-9-]{36})$/.exec(req.url || "");
+    if (req.method === "GET" && repairId) {
+      try { send(200, await getRepairSession(dataDir, repairId[1])); }
+      catch (error) {
+        if (error.code === "ENOENT") send(404, { error: "not_found" });
+        else if (error.code === "REPAIR_INTEGRITY") send(409, { error: "repair_integrity" });
+        else send(500, { error: "internal_error" });
+      }
+      return;
+    }
+    const actionRoute = /^\/v1\/repair-sessions\/([a-f0-9-]{36})\/checkpoints$/.exec(req.url || "");
+    if (req.method === "POST" && (req.url === "/v1/repair-sessions" || actionRoute)) {
+      if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+        send(415, { error: "json_required" }); return;
+      }
+      const maxBytes = 4096;
+      if (Number(req.headers["content-length"] || 0) > maxBytes) {
+        send(413, { error: "too_large" }); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > maxBytes) { send(413, { error: "too_large" }); return; }
+          chunks.push(chunk);
+        }
+        input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400, { error: "invalid_json" }); return; }
+      try {
+        const result = actionRoute
+          ? await advanceRepairSession(dataDir, actionRoute[1], input)
+          : await beginRepairSession(dataDir, input);
+        send(actionRoute ? 200 : 201, result);
+      } catch (error) {
+        const codes = {
+          REPAIR_INVALID: [422, "repair_invalid"],
+          REPAIR_CONFLICT: [409, "repair_conflict"],
+          REPAIR_NOT_FAILED: [409, "repair_not_failed"],
+          REPAIR_TRANSITION: [409, "repair_transition"],
+          REPAIR_EVIDENCE: [409, "repair_evidence"],
+          REPAIR_INTEGRITY: [409, "repair_integrity"],
+          REPAIR_CAPACITY: [429, "repair_capacity"],
+        };
+        if (codes[error.code]) send(codes[error.code][0], { error: codes[error.code][1] });
+        else if (error.code === "ENOENT") send(404, { error: "not_found" });
+        else if (error.code === "ADMISSION_BUSY") {
+          res.writeHead(503, { ...headers, "Retry-After": "2" });
+          res.end(JSON.stringify({ error: "admission_busy" }));
+        } else send(500, { error: "internal_error" });
       }
       return;
     }
