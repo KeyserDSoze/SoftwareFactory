@@ -85,6 +85,38 @@ test("API accepts a bounded immutable snapshot and returns only status", async (
   assert.equal(journal.entries[0].kind, "accepted");
   assert.equal(journal.entries[0].report.digest, receipt.digest);
 });
+test("API rejects tampered report, edited journal, missing journal and unauthenticated export", async () => {
+  const accepted = await request("/v1/jobs", { method: "POST", body: JSON.stringify(job()) });
+  assert.equal(accepted.status, 202);
+  const { id } = await accepted.json();
+  const d = jobDirectory(dir, id);
+  const reportPath = path.join(d, "report.json");
+  const journalPath = path.join(d, "evidence.jsonl");
+  const report = await readFile(reportPath, "utf8");
+  const journal = await readFile(journalPath, "utf8");
+  try {
+    const anon = await fetch(url + "/v1/jobs/" + id + "/evidence", { headers: { Origin: origin } });
+    assert.equal(anon.status, 401);
+    await writeFile(reportPath, report.replace('"state": "queued"', '"state": "passed"'));
+    assert.equal((await request("/v1/jobs/" + id)).status, 409);
+    assert.equal((await request("/v1/jobs/" + id + "/evidence")).status, 409);
+    await writeFile(reportPath, report);
+    const forged = JSON.parse(journal);
+    forged.report.label = "forged";
+    await writeFile(journalPath, JSON.stringify(forged) + "\n");
+    assert.equal((await request("/v1/jobs/" + id)).status, 409);
+    await writeFile(journalPath, "");
+    assert.equal((await request("/v1/jobs/" + id)).status, 409);
+    await writeFile(journalPath, journal);
+    assert.equal((await request("/v1/jobs/" + id)).status, 200);
+    await rm(journalPath);
+    assert.equal((await request("/v1/jobs/" + id)).status, 409);
+  } finally {
+    await writeFile(reportPath, report);
+    await writeFile(journalPath, journal);
+  }
+});
+
 test("API validates schema and never accepts files outside allowlist", async () => {
   const res = await request("/v1/jobs", { method: "POST", body: JSON.stringify({
     label: "bad", files: { ".env": "TOKEN=secret" }, steps: ["dotnet-build"],
@@ -249,6 +281,46 @@ test("orphan claim blocks execution, does not starve queue, and never becomes pa
       "recovery scanner must not overwrite a job that finished after its first read");
     assert.equal((await verifyJobEvidence(dataDir, raceId)).report.state, "passed");
     assert.ok(!(await readdir(raceDir)).includes(".claim"));
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("journal detects valid-prefix truncation, forged step exit code and redacts output", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-audit-data-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-audit-work-"));
+  const id = "00000000-0000-4000-a000-000000000022";
+  try {
+    const d = jobDirectory(dataDir, id);
+    const checked = validateRequest(job(["dotnet-build"]));
+    await mkdir(d, { recursive: true });
+    await writeFile(path.join(d, "input.json"), JSON.stringify(checked.request));
+    await atomicWrite(path.join(d, "report.json"), {
+      id, digest: checked.digest, label: "audit", state: "queued",
+      acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps,
+    });
+    await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
+    const finished = await executeJob(id, {
+      dataDir, workspaceRoot: work,
+      executeStep: async plan => ({ step: "dotnet-build", state: "passed", exitCode: 0,
+        durationMs: 4, image: plan.image, stdout: "token=example-secret", stderr: "" }),
+    });
+    assert.equal(finished.state, "passed");
+    const verified = await verifyJobEvidence(dataDir, id);
+    assert.deepEqual(verified.entries.map(entry => entry.kind),
+      ["accepted", "started", "step", "finished"]);
+    assert.doesNotMatch(JSON.stringify(verified.entries), /example-secret/);
+    const file = path.join(d, "evidence.jsonl");
+    const complete = await readFile(file, "utf8");
+    const validPrefix = complete.split("\n").slice(0, -2).join("\n") + "\n";
+    await writeFile(file, validPrefix);
+    await assert.rejects(verifyJobEvidence(dataDir, id), /integrity/);
+    await writeFile(file, complete);
+    await atomicWrite(path.join(d, "report.json"), {
+      ...finished, results: [{ ...finished.results[0], exitCode: 7 }],
+    });
+    await assert.rejects(verifyJobEvidence(dataDir, id), /integrity/);
   } finally {
     await rm(dataDir, { recursive: true, force: true });
     await rm(work, { recursive: true, force: true });

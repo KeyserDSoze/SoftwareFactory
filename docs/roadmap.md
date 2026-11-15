@@ -187,3 +187,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Polling e retention rispettano lock; i job claimed non bloccano la coda e non vengono marcati prematuramente falliti.
 - Recovery fail-closed di crash con intervento operativo: nessun timeout per rubare lock, nessuna riesecuzione o `passed` artificiale.
 - Rimanenti #2: fencing multi-host, coda/quote transazionali, audit append-only, cleanup dei container orfani, fix loop e VM rootless reale.
+
+
+## v0.2 — Evidenze append-only SHA-256 del runner (#19)
+
+- Journal JSONL privato per job, con eventi accettazione, avvio, preparazione, step, conclusione/recovery e SHA-256 concatenati.
+- `report.evidence` lega report, conteggio e head; endpoint di export autenticato e letture fail-closed HTTP 409 su alterazioni/troncamenti.
+- Fsync dei record prima del report, output redatti e test di manomissione oltre a smoke Docker effettivo. Restano #2: attestazione off-host, fencing distribuito, quote/idempotenza transazionali, rootless VM e fix loop supervisionato.

@@ -185,3 +185,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 ### Race fra conclusione e recovery (#18)
 
 - Un poller che legge `running` e poi non trova una claim non deve scrivere `failed` sul vecchio snapshot: deve **acquisire una claim atomica e rileggere** il report. Se lo stato ora è concluso, non modificarlo. Mai falsificare o sovrascrivere un `passed` reale a causa di una scansione tardiva.
+
+
+## Evidenze append-only del runner (#19)
+
+- `evidence.jsonl` per job è scritto via append fsync sotto claim atomica (API solo su UUID nuovo). Eventi `accepted`, `started`, `preparation`, `step`, `finished`, `recovered`, `rejected`. `report.json` deve coincidere con l'ultimo snapshot e portare `evidence.count/head` validi.
+- `GET /v1/jobs/:id` e `/evidence` sono autenticati e verificano tutta la catena: manomissione/assenza → 409 `evidence_invalid` (mai `passed`). Job legacy senza journal non sono migrati implicitamente. Anche worker/poller e recovery devono verificare prima di eseguire o scrivere.
+- Redigere stdout/stderr/command/reason **prima** della persistenza e mai inserire input sorgente o secret nella catena. Dopo crash fra journal e report non troncare il journal automaticamente: fail closed + riconciliazione operatore.
+- Un hash-chain locale non è WORM, firma digitale, prova di isolamento rootless né attestazione server: #2 resta aperta.

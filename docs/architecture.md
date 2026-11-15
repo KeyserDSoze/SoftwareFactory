@@ -148,3 +148,8 @@ La Factory genera un modulo `oidc.ts` con `broadcastOidcLogout` e `subscribeOidc
 
 
 La recovery di `running` privo di claim è serializzata da una nuova `mkdir(.claim)` e da una **seconda lettura del report mentre la claim è detenuta**: questa evita che un poller con stato obsoleto sovrascriva come `failed` il `passed` appena scritto dal worker che ha terminato e rilasciato il lock. Il recupero viene saltato se un altro processo ha già acquisito la claim.
+
+
+### Integrità locale verificabile delle evidenze job (#19)
+
+La API crea l'entry `accepted` nel journal JSONL all'accettazione della snapshot e salva `report.evidence.head/count`. Il worker serializza l'accesso con `.claim`, e registra ciascuna fase e i risultati redatti con hash SHA-256 che include quello precedente; le recovery scrivono eventi propri e non modificano silenziosamente report e prove. L'aggiunta del record è fsync-ata prima del replace atomico di `report.json`. Gli endpoint Bearer `GET /jobs/{id}` e `/evidence` verificano hash, sequence, digest, conteggio e snapshot finale; una divergenza è un 409 (non `passed`) e blocca il worker. Il registro non include sorgenti né credenziali. Il medesimo disco non conferisce autenticità contro compromissioni amministrative: l'ancoraggio remoto firmato e un daemon rootless VM sono ancora obiettivi della #2.

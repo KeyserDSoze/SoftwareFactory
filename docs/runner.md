@@ -214,3 +214,14 @@ Prima di leggere `queued`, `executeJob` crea atomicamente `/data/jobs/<uuid>/.cl
 
 
 **Protezione dalla race di recupero:** il poller, dopo aver osservato un vecchio `running` senza lock, acquisisce a sua volta una claim atomica, rilegge il report *sotto claim* e cambia lo stato in `failed` soltanto se è tuttora `running`. Se il worker proprietario ha appena scritto `passed` prima della scansione, il suo risultato non viene sovrascritto. Il recovery non può attribuire automaticamente il lock a un processo vivo dopo un crash; l'operatore deve continuare a riconciliare gli orfani.
+
+
+## Registro append-only delle evidenze del runner (#19)
+
+Il runner genera `jobs/<uuid>/evidence.jsonl`: un registro JSONL **per job**, con `sequence`, `previousHash` SHA-256, timestamp, tipo evento e snapshot dei risultati. Gli eventi registrati sono `accepted` all'accettazione HTTP; `started`; `preparation` per npm; `step` per ogni build/test/skip; `finished` oppure `recovered`/`rejected` durante il recupero. Gli snapshot registrano digest sorgenti, step autorizzati, comando, exit code, durata e stdout/stderr **redatti**; non memorizzano il codice sorgente e non contengono API key. Il report porta `evidence: {version:1,count,head}` che identifica l'ultima entry.
+
+Entrambi gli endpoint protetti da Bearer, `GET /v1/jobs/{uuid}` e il nuovo `GET /v1/jobs/{uuid}/evidence`, verificano sequenza, hash, contatore, head e corrispondenza fra il report corrente e l'ultimo evento. Manomissioni o assenza del journal di un job esistente restituiscono **HTTP 409 `evidence_invalid`** e non un falso `passed`. È possibile esportare l'intera catena autenticandosi allo stesso modo che per il report. I job legacy privi di journal non sono migrati automaticamente: richiedono riconciliazione, non possono essere considerati verificati.
+
+Le scritture sono serializzate dalla claim esclusiva del worker (oppure dall'UUID nuovo creato dalla API), aggiunte in append e sincronizzate con `fsync` **prima** dell'aggiornamento atomico del report. Un crash tra questi due momenti causa una divergenza: il runner la considera un errore di integrità che richiede un operatore, non una scusa per riscrivere o tagliare automaticamente il journal. La retention del runner elimina la directory solo dopo il periodo previsto.
+
+**Limite fondamentale:** l'hash-chain sullo **stesso disco** non è una firma indipendente, un file WORM o un'attestazione di esecuzione: un amministratore che controlla il filesystem può riscrivere tutta la storia e ricalcolare gli hash. Per veridicità contro un server compromesso servono ancora firme, ancore esterne/off-host, quote transazionali e validazione Docker rootless su VM (#2).
