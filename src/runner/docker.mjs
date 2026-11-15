@@ -1,6 +1,7 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { scrub } from "./common.mjs";
+import { runnerContainerIdentity } from "./orphans.mjs";
 
 const SAFE_IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{2,180}$/;
 const TIME_LIMIT_MS = 120_000;
@@ -132,9 +133,9 @@ export function isInfrastructureFailure(result) {
       INFRA_FAILURE.test((result.stderr || "") + "\n" + (result.stdout || "")));
 }
 export function runDockerStep(plan, id, step, { spawnProcess = spawn, timeoutMs = plan.timeoutMs } = {}) {
-  const name = "sf-" + id.slice(0, 8) + "-" + step;
+  const { name, labels } = runnerContainerIdentity(id, step);
   const args = [...plan.args];
-  args.splice(2, 0, "--name", name);
+  args.splice(2, 0, "--name", name, ...labels.flatMap(([key, value]) => ["--label", key + "=" + value]));
   const started = Date.now();
   return new Promise(resolve => {
     let stdout = "", stderr = "", settled = false, timedOut = false;
