@@ -234,7 +234,8 @@ test("server enforces three distinct actor IDs even when one credential has all 
     const root = await f.submit();
     await f.complete(root, "failed");
     const started = await f.call(0, "/v1/repair-sessions", begin(root.id));
-    assert.equal(started.status, 201);
+    assert.equal(started.status, 201,
+      "independent actor session must start: " + String(started.body.error || "no error"));
     const id = started.body.id;
     const changed = await f.submit({ ...code,
       [backend]: "namespace Demo; public record Invoice(int StrictActor);" });
