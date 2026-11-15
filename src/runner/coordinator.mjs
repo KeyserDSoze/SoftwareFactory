@@ -200,6 +200,7 @@ export async function beginRepairSession(dataDir, input, actorId) {
       try {
         entries = await readdir(root, { withFileTypes: true });
         if (entries.length > MAX_SESSIONS) throw issue("REPAIR_CAPACITY");
+        let matching = null;
         for (const entry of entries) {
           if (!entry.isFile() || !/^[-a-f0-9]{36}\.json$/.test(entry.name))
             throw issue("REPAIR_INTEGRITY");
@@ -213,9 +214,12 @@ export async function beginRepairSession(dataDir, input, actorId) {
             if (existing.proposalId !== input.proposalId ||
                 !isDeepStrictEqual(existing.paths, input.paths))
               throw issue("REPAIR_CONFLICT");
-            return overview(existing); // retry-safe, also after a completed checkpoint
+            matching = existing;
           }
         }
+        // Never allow an early matching record to conceal a corrupt sibling.
+        // Validate every directory entry before returning even a replayed ID.
+        if (matching) return overview(matching);
         break;
       } catch (error) {
         if (error.code !== "REPAIR_INTEGRITY" || attempt === 2) throw error;
