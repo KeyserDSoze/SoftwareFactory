@@ -226,3 +226,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Firma Ed25519 opzionale su postazione indipendente del firmatario: digest del bundle, input digest, stato, identificatore job e fingerprint public key. Verifica pubblica con chiave pinned, non suggerita dalla ricevuta.
 - CI con chiavi temporanee, test di riscrittura completa del journal vs firma già emessa, CLI mode 0600 senza sovrascritture e integrazione API.
 - Non confondere firma manuale post-export con prova di Docker rootless o timestamp affidabile. Restano #2 ancoraggio remoto automatico, VM/tunnel reale, fencing e repair loop.
+
+
+## v0.2 — Ciclo AI repair / re-test supervisionato (#24)
+
+- Per ogni repair massimo 2 tentativi: conferma utente per invio log a modello, ricarica del report autenticato e verifica di stato fallito/digest/proposta prima del prompt, stesse path della patch.
+- Provenienza `repairTrail` con ID, hash e step del fallimento. Nuova review avversaria, re-test deterministico con tutti gli step precedenti più build obbligatorie; nuovo consenso esplicito per invio dello snapshot riparato.
+- Receipt UUID/digest verificata, rete/idempotenza del runner già operativa; approvazione solo manuale dopo report `passed` corrente su tutti gli step richiesti, zero push o apply automatico.
+- Rimane aperta la #2 per coordinatore background 24/7, fix loop autonomo server-side con policy/approvazioni, deployment rootless/Cloudflare reale, fencing e attestazione indipendente automatizzata.
