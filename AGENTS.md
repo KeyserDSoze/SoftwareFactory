@@ -209,3 +209,6 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `node src/runner/orphans.mjs --job=<uuid>` è per l'operatore sul **worker** e di default non elimina niente. Cleanup solo con `--apply --confirm-job=<uuid>`, report e journal validi, stato `failed/incomplete`, assenza di claim e `docker inspect` che confermi ID completo, nome e tre label **anche immediatamente prima** della rimozione.
 - Non aggiungere endpoint Docker sulla API esposta e non usare `docker prune` o match per prefissi. Lo strumento non recupera lock orfani, non muta il ledger e non ritenta il job: serve ancora una riconciliazione umana di worker e daemon.
 - La CLI rifiuta socket rootful; la Factory CI inietta un adapter Docker sul runner effimero per dimostrare la rimozione selettiva senza toccare container estranei. Non confondere con attestazione di un servizio su VM rootless reale.
+
+
+- La CLI di ricognizione orfani non può fidarsi del solo percorso `DOCKER_HOST`: verifica `docker info SecurityOptions` e richiede `name=rootless` esatto prima delle operazioni. Gli adapter Docker iniettati nei test su runner GitHub **non** dimostrano rootless: non presentare tale smoke come collaudo production.

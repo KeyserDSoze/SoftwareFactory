@@ -7,7 +7,7 @@ import path from "node:path";
 import { atomicWrite, jobDirectory, readReport, validateRequest } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
 import { planStep, runDockerStep } from "../docker.mjs";
-import { reconcileRunnerContainers, runnerContainerIdentity } from "../orphans.mjs";
+import { reconcileRunnerContainers, runnerContainerIdentity, rootlessSecurityOptions } from "../orphans.mjs";
 
 const jobId = "a1234567-1111-4111-8111-111111111111";
 const otherJob = "a1234567-2222-4222-8222-222222222222";
@@ -53,6 +53,12 @@ function dockerBackend(inspected = container()) {
   };
   return { exec, calls };
 }
+test("daemon rootless identification fails closed for malformed or non-rootless Docker security options", () => {
+  assert.equal(rootlessSecurityOptions(["name=seccomp,profile=builtin", "name=rootless"]), true);
+  for (const invalid of [undefined, null, "name=rootless", {}, [], ["rootless"],
+    ["name=notrootless"], ["name=rootless-but-not-really"], ["name=seccomp"]])
+    assert.equal(rootlessSecurityOptions(invalid), false);
+});
 test("full UUID container names avoid first-eight-character collisions and expose no credentials", async () => {
   const identity = runnerContainerIdentity(jobId, step);
   assert.equal(identity.name, "sf-" + jobId + "-" + step);

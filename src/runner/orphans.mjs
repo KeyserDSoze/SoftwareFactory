@@ -21,14 +21,29 @@ export function runnerContainerIdentity(id, step) {
   return { name: "sf-" + id + "-" + step,
     labels: [[RUNNER_LABEL, "job"], [JOB_LABEL, id], [STEP_LABEL, step]] };
 }
+/** Docker socket paths are not a security proof: inspect the daemon's own mode. */
+export function rootlessSecurityOptions(options) {
+  return Array.isArray(options) && options.some(option => option === "name=rootless");
+}
+let inspectedHost = null;
 async function defaultDocker(args) {
   const host = process.env.DOCKER_HOST || "unix:///run/docker.sock";
   // Never silently inspect an unrelated rootful host Docker daemon.
   if (host !== "unix:///run/docker.sock" && !/^unix:\/\/\/run\/user\/[0-9]+\/docker\.sock$/.test(host))
     throw Error("Operator command requires a dedicated rootless Docker socket");
+  const env = { PATH: process.env.PATH, HOME: "/tmp", DOCKER_HOST: host };
+  if (inspectedHost !== host) {
+    const { stdout } = await execFile("docker",
+      ["info", "--format", "{{json .SecurityOptions}}"],
+      { timeout: 12_000, maxBuffer: 2_000_000, env });
+    let options;
+    try { options = JSON.parse(stdout); } catch { throw Error("Invalid Docker daemon security options"); }
+    if (!rootlessSecurityOptions(options))
+      throw Error("Docker daemon is not confirmed rootless; orphan cleanup refused");
+    inspectedHost = host;
+  }
   const { stdout } = await execFile("docker", args, {
-    timeout: 12_000, maxBuffer: 2_000_000,
-    env: { PATH: process.env.PATH, HOME: "/tmp", DOCKER_HOST: host },
+    timeout: 12_000, maxBuffer: 2_000_000, env,
   });
   return stdout;
 }
