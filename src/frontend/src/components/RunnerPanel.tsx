@@ -122,9 +122,11 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     const label = retestPlan?.label ??
       (project.config.name + (pending ? " · proposal: " + pending.summary : " · approved workspace")).slice(0, 160);
     const consent = retestPlan
-      ? "Re-test supervisionato " + retestPlan.attempt + "/2: inviare al runner il NUOVO codice riparato? " +
-        "Verranno rieseguiti tutti i controlli falliti e le build richieste (" + selectedSteps.join(", ") +
-        "). La review non equivale a un test: il checkpoint viene registrato sul server senza applicare patch."
+      ? "Repair supervisionato " + retestPlan.attempt + "/2. Confermi il PASSAGGIO SUCCESSIVO? " +
+        "Il primo click registra solo il digest della patch con la chiave del proponente; " +
+        "il secondo registra solo la review con la chiave di un altro operatore; " +
+        "il terzo, dopo il ritorno alla chiave proponente, invia i test (" +
+        selectedSteps.join(", ") + "). Nessun codice viene applicato automaticamente."
       : "Inviare il codice sorgente al runner remoto? Verrà eseguito in container isolati sul tuo server, non nel browser.";
     if (!window.confirm(consent)) return;
     setRequesting(true);

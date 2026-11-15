@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { configureRepairOperators, authenticateRepairOperator,
   mayRecordRepairAction } from "../operator-auth.mjs";
 import { createRunnerServer } from "../api.mjs";
-import { verifyRepairSession } from "../coordinator.mjs";
+import { verifyRepairSession, advanceRepairSession, getRepairSession } from "../coordinator.mjs";
 
 const globalKey = "global-runner-credential-abcdefghijklmnopqrstuvwxyz";
 const proposeKey = "propose-secret-abcdefghijklmnopqrstuvwxyz123456";
@@ -94,7 +94,7 @@ test("repair endpoint is disabled without registry, while ordinary execution cap
   }
 });
 
-test("legacy local checkpoint without actor remains verifiable but unattributed; actor tampering invalidates chain", () => {
+test("legacy local checkpoint without actor remains verifiable but unattributed; actor tampering invalidates chain", async () => {
   const id = "00000000-0000-4000-a000-000000000027";
   const proposalId = "00000000-0000-4000-a000-000000000028";
   const jobId = "00000000-0000-4000-a000-000000000029";
@@ -124,4 +124,26 @@ test("legacy local checkpoint without actor remains verifiable but unattributed;
   const edited = recordEvent("operator_a");
   edited.events[0].actorId = "operator_b";
   assert.throws(() => verifyRepairSession(edited), /REPAIR_INTEGRITY/);
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-legacy-repair-"));
+  try {
+    const target = path.join(dir, "repair-sessions");
+    await mkdir(target, { recursive: true });
+    const file = path.join(target, id + ".json");
+    const historic = JSON.stringify(recordEvent(null), null, 2) + "\n";
+    await writeFile(file, historic);
+    const readable = await getRepairSession(dir, id);
+    assert.equal(readable.state, "awaiting_patch");
+    assert.deepEqual(readable.audit, [
+      { sequence: 1, kind: "started", actorId: null },
+    ]);
+    await assert.rejects(
+      advanceRepairSession(dir, id, {
+        action: "patch", consent: true, digest: "b".repeat(64),
+        paths: record.paths,
+      }, "operator_a"),
+      { code: "REPAIR_LEGACY_READONLY" },
+    );
+    assert.equal(await readFile(file, "utf8"), historic,
+      "a legacy record cannot gain an author through an API mutation");
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

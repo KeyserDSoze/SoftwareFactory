@@ -211,3 +211,32 @@ describe("role credential separation in browser session", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 });
+
+describe("checkpoint network retry with independent one-step actions", () => {
+  it("resumes from committed patch after the HTTP reply was lost without creating another patch", async () => {
+    const remote = backendMock();
+    const fixed = proposal(fixedProposalId, 1);
+    const steps = ["dotnet-build", "dotnet-test", "web-build"] as const;
+    const original = remote.handle.getMockImplementation()!;
+    let lost = false;
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      const response = await original(url, init);
+      if (!lost && init.body && JSON.parse(String(init.body)).action === "patch") {
+        lost = true;
+        throw new Error("Network response dropped after durable write");
+      }
+      return response;
+    });
+    await expect(prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]))
+      .rejects.toThrow(/Network response dropped/);
+    expect(remote.stored.state).toBe("awaiting_review");
+    const resume = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
+    expect(resume.state).toBe("awaiting_retest");
+    expect(remote.calls.map(c => c.data?.action).filter(Boolean))
+      .toEqual(["patch","review"]);
+    const ready = await prepareRepairRetest(endpoint, key, fixed, fixedDigest, [...steps]);
+    expect(ready.state).toBe("awaiting_retest");
+    expect(remote.calls.map(c => c.data?.action).filter(Boolean))
+      .toEqual(["patch","review"]);
+  });
+});
