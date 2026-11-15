@@ -19,6 +19,14 @@ export type FeatureProposal = {
   review?: FeatureReview;
   repairCount?: number;
   previousProposalId?: string;
+  /** Server-verified failed jobs that caused each bounded repair; no log or token storage. */
+  repairTrail?: RepairAttempt[];
+};
+export type RepairAttempt = {
+  attempt: number;
+  failedJobId: string;
+  failedDigest: string;
+  steps: RunnerJobEvidence["steps"];
 };
 export type AppliedFeature = {
   id: string;
@@ -225,13 +233,20 @@ export function dropConflictingChanges(project: FactoryProject): FactoryProject 
  * The AI may REPLACE only the same files, not expand its access to new paths.
  * Prior review and runner evidence are invalidated: repair never auto-approves.
  */
-export function replacePendingWithRepair(project: FactoryProject, proposalId: string, raw: string): FactoryProject {
+export function replacePendingWithRepair(
+  project: FactoryProject, proposalId: string, raw: string,
+  evidence?: RunnerJobEvidence,
+): FactoryProject {
   const dev = developmentOf(project), old = dev.pending;
   if (!old || old.id !== proposalId) throw new Error("Proposta cambiata durante la correzione.");
   if (old.revision !== dev.revision || workspaceConflicts(project).length)
     throw new Error("Workspace modificato: riparazione annullata.");
   const previousCount = old.repairCount ?? 0;
   if (previousCount >= 2) throw new Error("Massimo due riparazioni AI per proposta.");
+  if (evidence && (evidence.proposalId !== old.id || evidence.revision !== dev.revision ||
+      dev.lastRunnerEvidence?.id !== evidence.id || dev.lastRunnerEvidence?.digest !== evidence.digest ||
+      !Array.isArray(evidence.steps) || !evidence.steps.length))
+    throw new Error("Prove del job fallito non più associate alla proposta: repair annullato.");
   const bare: FactoryProject = { ...project, development: { ...dev, pending: undefined } };
   const next = validateProposal(raw, bare, old.request);
   const oldPaths = old.edits.map(e => e.path).sort();
@@ -244,7 +259,13 @@ export function replacePendingWithRepair(project: FactoryProject, proposalId: st
     ...project,
     development: {
       ...dev,
-      pending: { ...next, repairCount: previousCount + 1, previousProposalId: old.id },
+      pending: { ...next, repairCount: previousCount + 1, previousProposalId: old.id,
+        repairTrail: [
+          ...(old.repairTrail || []),
+          ...(evidence ? [{ attempt: previousCount + 1, failedJobId: evidence.id,
+            failedDigest: evidence.digest, steps: [...evidence.steps] }] : []),
+        ],
+      },
       lastRunnerJobId: undefined,
       lastRunnerEvidence: undefined,
     },
