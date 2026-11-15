@@ -10,6 +10,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicWrite, jobDirectory, readReport, validateRequest } from "../common.mjs";
 import { executeJob } from "../worker.mjs";
+import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
 
 const dataDir = await mkdtemp(path.join(tmpdir(), "sf-real-runner-data-"));
 const work = await mkdtemp(path.join(tmpdir(), "sf-real-runner-work-"));
@@ -27,6 +28,7 @@ async function submit(files, steps) {
     id, digest: checked.digest, state: "queued", label: checked.request.label,
     steps, acceptedAt: new Date().toISOString(), results: [],
   });
+  await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
   const report = await executeJob(id, { dataDir, workspaceRoot: work, environment: {
     RUNNER_NODE_IMAGE: "node:22-bookworm-slim", RUNNER_ALLOW_NET_DEPS: "false",
     RUNNER_CONTAINER_UID: process.getuid() + ":" + process.getgid(),
@@ -35,6 +37,11 @@ async function submit(files, steps) {
   assert.deepEqual((await readReport(dataDir, id)).results, report.results);
   assert.equal((await readdir(work)).length, 0, "No build workspace should survive the job");
   assert.ok(!(await readdir(dir)).includes(".claim"), "Real Docker job must release its exclusive claim");
+  const verified = await verifyJobEvidence(dataDir, id);
+  assert.equal(verified.report.state, report.state);
+  assert.equal(verified.head, report.evidence.head);
+  assert.equal(verified.entries[0].kind, "accepted");
+  assert.equal(verified.entries.at(-1).kind, "finished");
   return report;
 }
 try {

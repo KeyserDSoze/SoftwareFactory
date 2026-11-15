@@ -8,6 +8,7 @@ import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate,
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
+import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
 const origin = "http://localhost:5173";
@@ -75,6 +76,14 @@ test("API accepts a bounded immutable snapshot and returns only status", async (
   const input = JSON.parse(await readFile(path.join(jobDirectory(dir, receipt.id), "input.json"), "utf8"));
   assert.equal(validateRequest(input).digest, receipt.digest);
   assert.equal(report.fileCount, 4);
+  assert.equal(report.evidence.count, 1);
+  const exportResponse = await request("/v1/jobs/" + receipt.id + "/evidence");
+  assert.equal(exportResponse.status, 200);
+  const journal = await exportResponse.json();
+  assert.equal(journal.count, 1);
+  assert.equal(journal.head, report.evidence.head);
+  assert.equal(journal.entries[0].kind, "accepted");
+  assert.equal(journal.entries[0].report.digest, receipt.digest);
 });
 test("API validates schema and never accepts files outside allowlist", async () => {
   const res = await request("/v1/jobs", { method: "POST", body: JSON.stringify({
@@ -118,6 +127,7 @@ test("worker writes real step receipts and skips missing tests without false suc
     await writeFile(path.join(d, "input.json"), JSON.stringify(checked.request));
     await atomicWrite(path.join(d, "report.json"), { id, digest: checked.digest, state: "queued",
       label: "test", acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps });
+    await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
     let invoked = 0;
     const report = await executeJob(id, { dataDir, workspaceRoot: work, executeStep: async plan => {
       invoked++; assert.ok(plan.args.includes("--network")); return { step: "dotnet-build", state: "passed", exitCode: 0,
@@ -128,6 +138,10 @@ test("worker writes real step receipts and skips missing tests without false suc
     assert.deepEqual(report.results.map(s => s.state), ["passed", "skipped"]);
     assert.equal((await readReport(dataDir,id)).state,"incomplete");
     assert.equal((await readdir(work)).length, 0);
+    const verified = await verifyJobEvidence(dataDir, id);
+    assert.deepEqual(verified.entries.map(x => x.kind),
+      ["accepted", "started", "step", "step", "finished"]);
+    assert.equal(verified.report.state, "incomplete");
   } finally { await rm(dataDir, { recursive: true, force: true }); await rm(work, { recursive: true, force: true }); }
 });
 
@@ -146,6 +160,7 @@ test("atomic claim guarantees one execution even with two worker instances", asy
       id, digest: checked.digest, label: "atomic", state: "queued",
       acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps,
     });
+    await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
     let notify;
     const started = new Promise(resolve => { notify = resolve; });
     const hold = new Promise(resolve => { release = resolve; });
@@ -191,7 +206,13 @@ test("orphan claim blocks execution, does not starve queue, and never becomes pa
       await mkdir(dir, { recursive: true });
       await writeFile(path.join(dir, "input.json"), JSON.stringify(checked.request));
       await atomicWrite(path.join(dir, "report.json"), { id, digest: checked.digest,
-        state, label: "orphan", acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps });
+        state: "queued", label: "orphan", acceptedAt: new Date().toISOString(),
+        results: [], steps: checked.request.steps });
+      const initial = await readReport(dataDir, id);
+      await recordJobEvidence(dataDir, id, initial, "accepted");
+      if (state === "running") await recordJobEvidence(dataDir, id, {
+        ...initial, state: "running", startedAt: new Date().toISOString(), summary: "test start",
+      }, "started");
     }
     await mkdir(path.join(jobDirectory(dataDir, orphan), ".claim"));
     let processed = [];
@@ -208,14 +229,26 @@ test("orphan claim blocks execution, does not starve queue, and never becomes pa
       executeQueuedJob: async () => {} });
     assert.equal((await readReport(dataDir, orphan)).state, "failed",
       "manual removal of orphan claim allows failure recovery, never automatic retry");
-    const ended = await readReport(dataDir, orphan);
-    await atomicWrite(path.join(jobDirectory(dataDir, orphan), "report.json"), {
-      ...ended, state: "passed", summary: "Completed by owning worker", finishedAt: new Date().toISOString(),
+    // A real completed journal must not be overwritten by an out-of-date recovery.
+    const raceId = "00000000-0000-4000-a000-000000000021";
+    const raceDir = jobDirectory(dataDir, raceId);
+    await mkdir(raceDir, { recursive: true });
+    await atomicWrite(path.join(raceDir, "report.json"), {
+      id: raceId, digest: (await readReport(dataDir, orphan)).digest,
+      state: "queued", label: "race", acceptedAt: new Date().toISOString(),
+      results: [], steps: ["dotnet-build"],
     });
-    assert.equal(await recoverUnclaimedJob(dataDir, orphan), false,
+    const fresh = await readReport(dataDir, raceId);
+    await recordJobEvidence(dataDir, raceId, fresh, "accepted");
+    await recordJobEvidence(dataDir, raceId, { ...fresh, state: "running",
+      startedAt: new Date().toISOString(), summary: "started" }, "started");
+    const running = await readReport(dataDir, raceId);
+    await recordJobEvidence(dataDir, raceId, { ...running, state: "passed",
+      finishedAt: new Date().toISOString(), summary: "completed" }, "finished");
+    assert.equal(await recoverUnclaimedJob(dataDir, raceId), false,
       "recovery scanner must not overwrite a job that finished after its first read");
-    assert.equal((await readReport(dataDir, orphan)).state, "passed");
-    assert.ok(!(await readdir(jobDirectory(dataDir, orphan))).includes(".claim"));
+    assert.equal((await verifyJobEvidence(dataDir, raceId)).report.state, "passed");
+    assert.ok(!(await readdir(raceDir)).includes(".claim"));
   } finally {
     await rm(dataDir, { recursive: true, force: true });
     await rm(work, { recursive: true, force: true });
@@ -261,6 +294,7 @@ test("dependency errors are incomplete, not code defects to repair with AI", asy
       id, digest: checked.digest, state: "queued", label: "prep-failure",
       acceptedAt: new Date().toISOString(), results: [], steps: checked.request.steps,
     });
+    await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
     const calls = [];
     const report = await executeJob(id, { dataDir, workspaceRoot: work, executeStep: async (plan, job, step) => {
       calls.push(step);
