@@ -161,3 +161,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Trasmettere il segnale su logout esplicito, 401 API e rinnovo definitivamente rifiutato. La scheda ricevente chiama `oidcManager().removeUser()`, nasconde dati e richiede un nuovo accesso **senza ritrasmettere il segnale** (no ping-pong) né fare redirect forzato.
 - Rimuovere il listener in cleanup React. `BroadcastChannel` è best-effort e non sostituisce back-channel logout OIDC/cross-device o revoca di JWT già emessi.
 - Il gate fullstack Factory include **15 test Chromium**, due con schede indipendenti, login reale PKCE e 401 inoltrati alla vera API .NET con `route.continue`; nessun mock di risposte server.
+
+
+### Self-delivery BroadcastChannel (fix #17)
+
+- Il mittente e il listener React della **stessa pagina** devono usare lo stesso oggetto `BroadcastChannel`; istanze distinte sul medesimo documento ricevono i messaggi reciproci, sovrascrivendo per errore il messaggio locale 401.
+- La subscription è ref-counted: `close()` solo quando non restano listener, senza reinviare l'evento ricevuto. Mantenere i test 401 precedenti **oltre** alle prove multi-tab della #17.

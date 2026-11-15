@@ -165,7 +165,11 @@ describe("application scaffold", () => {
     expect(oidc).toContain("renewOidcSession");
     expect(oidc).toContain("subscribeOidcLogout");
     expect(oidc).toContain("broadcastOidcLogout");
-    expect(oidc).toContain('channel.postMessage("logout")');
+    expect(oidc).toContain('oidcLogoutChannel()?.postMessage("logout")');
+    expect(oidc).toContain('let logoutChannel: BroadcastChannel | undefined;');
+    expect(oidc).toContain("if (!logoutChannel) logoutChannel = new BroadcastChannel(logoutChannelName)");
+    expect(oidc).toContain("logoutSubscribers++");
+    expect(oidc).toContain("logoutSubscribers--");
     expect(oidc).toContain('if (event.data === "logout") handler()');
     expect(oidc).toContain('channel.removeEventListener("message", onMessage)');
     expect(oidc).toContain("channel.close()");
