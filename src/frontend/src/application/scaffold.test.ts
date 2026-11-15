@@ -163,6 +163,23 @@ describe("application scaffold", () => {
     expect(oidc).toContain("isTerminalOidcRenewError");
     expect(oidc).toContain("error instanceof ErrorResponse");
     expect(oidc).toContain("renewOidcSession");
+    expect(oidc).toContain("subscribeOidcLogout");
+    expect(oidc).toContain("broadcastOidcLogout");
+    expect(oidc).toContain('channel.postMessage("logout")');
+    expect(oidc).toContain('if (event.data === "logout") handler()');
+    expect(oidc).toContain('channel.removeEventListener("message", onMessage)');
+    expect(oidc).toContain("channel.close()");
+    expect(oidc).not.toContain("localStorage");
+    expect(ui).toContain("stopCrossTabLogout()");
+    expect(ui).toContain("Sessione chiusa da un'altra scheda.");
+    expect(ui).toContain("broadcastOidcLogout()");
+    const multiTabE2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(multiTabE2e).toContain("manual OIDC logout clears another authenticated browser tab");
+    expect(multiTabE2e).toContain("real API 401 in one OIDC browser tab invalidates another tab");
+    expect(multiTabE2e).toContain("page.context().newPage()");
+    expect(multiTabE2e).toContain("authorization: \"Bearer invalid.jwt.token\"");
+    expect(multiTabE2e).toContain("other.reload()");
+
     expect(oidc).toContain("current?.refresh_token === before.refresh_token");
     expect(ui).toContain("addSilentRenewError");
     expect(ui).toContain("addUserUnloaded");

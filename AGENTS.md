@@ -153,3 +153,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Script inline/eval vietati, `frame-ancestors 'none'`, `connect-src` a origini esplicite. I realm/prefissi URL degli IdP sono validi ma l'allowlist usa solo `origin`. `style-src 'unsafe-inline'` resta per compatibilità React: non confondere con script inline.
 - La Factory CI ora richiede **13 test Chromium**, incluso Nginx reale su bridge Docker `--internal` senza host port né socket, blocco dello script inline e fallback /auth/callback, oltre a test di rifiuto di input maligni.
 - Non dichiarare un deploy pronto per Internet: token in sessionStorage e modello BFF/CSP/IdP reale restano in issue #9.
+
+
+## Logout OIDC tra più schede (#17)
+
+- `BroadcastChannel` same-origin trasporta **solo la stringa costante `logout`**, mai token, refresh, identificatori o dati. Le schede conservano il proprio `sessionStorage`; non introdurre nuovi secret nel localStorage.
+- Trasmettere il segnale su logout esplicito, 401 API e rinnovo definitivamente rifiutato. La scheda ricevente chiama `oidcManager().removeUser()`, nasconde dati e richiede un nuovo accesso **senza ritrasmettere il segnale** (no ping-pong) né fare redirect forzato.
+- Rimuovere il listener in cleanup React. `BroadcastChannel` è best-effort e non sostituisce back-channel logout OIDC/cross-device o revoca di JWT già emessi.
+- Il gate fullstack Factory include **15 test Chromium**, due con schede indipendenti, login reale PKCE e 401 inoltrati alla vera API .NET con `route.continue`; nessun mock di risposte server.

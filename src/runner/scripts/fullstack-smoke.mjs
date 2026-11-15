@@ -249,11 +249,11 @@ try {
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
-  if (outcome.state !== "passed" || !/13 passed/.test(outcome.stdout)) {
+  if (outcome.state !== "passed" || !/15 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
     const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
     console.error("OIDC_BROWSER_DIAGNOSTICS", snippet.slice(-4));
-    throw Error("Playwright integration did not pass all 13 assertions, including OIDC browser refresh and PostgreSQL persistence");
+    throw Error("Playwright integration did not pass all 15 assertions, including OIDC browser refresh and PostgreSQL persistence");
   }
   for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
     const count = Number(await docker(["exec", dbName, "psql", "-U", "app", "-d", "app",
@@ -280,7 +280,7 @@ try {
     webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
   assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
   console.log(protocol);
-  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 13 Chromium tests with Nginx CSP, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
+  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 15 Chromium tests with multi-tab logout, Nginx CSP, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));

@@ -171,3 +171,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Configurazione rigenerata dal Dockerfile con input pubblici validati; rigetto di credenziali, injection, query, fragment, HTTP remoto non consentito; compatibilità con path issuer Keycloak.
 - Verifica Factory CI con Nginx **e Chromium reali** nella rete privata e test di blocco script inline; il gate sale a **13 test browser**.
 - Stili React ancora compatibili via `style-src 'unsafe-inline'`; rischi XSS/CSRF, progettazione BFF/HttpOnly, revoca federata e IdP esterno nella #9.
+
+
+## v0.3 — Logout OIDC tra schede dello stesso origin (#17)
+
+- Segnalazione `BroadcastChannel` di sole invalidazioni `logout` per logout volontario, 401 server e refresh token definitivamente rifiutato; i token non attraversano il canale e restano nel `sessionStorage` di ogni scheda.
+- Schede riceventi eliminano utente OIDC, dati CRUD e sessione locale senza redirect provider e senza echo-loop; listener chiuso allo smontaggio React.
+- Factory CI fullstack: **15 test Chromium**, due test nuovi con due pagine dello stesso browser context, login PKCE separato, logout reale e 401 ASP.NET Core reale propagati, reload senza credenziali.
+- Limiti: solo schede attive stesso origin/browser, non revoca server dei JWT e nessun coordinamento cross-device. IdP esterno HTTPS e BFF/HttpOnly restano in #9.
