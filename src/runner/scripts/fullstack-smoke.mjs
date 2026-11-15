@@ -167,9 +167,18 @@ try {
   assert.match(cspConfig, /connect-src 'self' http:\/\/api:8080 http:\/\/identity:8999/);
   assert.doesNotMatch(cspConfig, /script-src[^;]*unsafe-inline/);
   await access(path.join(webRoot, "dist/index.html"));
+  // Validate the real configuration before starting a long-lived Nginx process.
+  // Keep all host ports closed and mount only a read-only config and compiled dist.
+  await docker(["run", "--rm", "--network", network, "--read-only",
+    "--tmpfs=/var/cache/nginx:rw,nosuid,nodev,size=16m",
+    "--tmpfs=/var/run:rw,nosuid,nodev,size=4m",
+    "--mount", "type=bind,src=" + path.join(webRoot, "nginx.conf") + ",dst=/etc/nginx/conf.d/default.conf,readonly",
+    "--mount", "type=bind,src=" + path.join(webRoot, "dist") + ",dst=/usr/share/nginx/html,readonly",
+    "--entrypoint=nginx", "nginx:1.27-alpine", "-t"], { timeout: 10000 });
   await docker(["run", "-d", "--name", cspName, "--network", network,
     "--network-alias", "secure-web", "--read-only", "--cap-drop=ALL",
-    "--cap-add=NET_BIND_SERVICE", // Only capability needed to listen on Nginx port 80
+    "--cap-add=NET_BIND_SERVICE", "--cap-add=SETUID", "--cap-add=SETGID", "--cap-add=CHOWN",
+    // Official Nginx master needs these to bind 80 and switch worker UID.
     "--security-opt=no-new-privileges", "--memory=160m", "--cpus=0.5", "--pids-limit=64",
     "--tmpfs=/var/cache/nginx:rw,nosuid,nodev,size=16m",
     "--tmpfs=/var/run:rw,nosuid,nodev,size=4m",
