@@ -5,7 +5,7 @@ import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from 
 import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
-import { configureRepairOperators, authenticateRepairOperator, mayRecordRepairAction } from "./operator-auth.mjs";
+import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction } from "./operator-auth.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -15,12 +15,26 @@ export function createRunnerServer({
   maxRetained = 100,
   admissionWaitMs = 1500,
   repairOperators = process.env.RUNNER_REPAIR_OPERATORS_JSON,
+  repairOperatorsFile = process.env.RUNNER_REPAIR_OPERATORS_FILE,
 } = {}) {
   if (typeof apiKey !== "string" || apiKey.length < 32) throw new Error("RUNNER_API_KEY must contain at least 32 characters");
   if (!allowedOrigins.length || allowedOrigins.some(origin => !/^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/localhost(?::\d+)?$|^http:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin))) {
     throw new Error("Set explicit RUNNER_ALLOWED_ORIGINS (HTTPS or localhost), no wildcard");
   }
-  const operatorRegistry = configureRepairOperators(repairOperators, apiKey);
+  if (repairOperatorsFile !== undefined && repairOperatorsFile !== null &&
+      repairOperatorsFile !== "" &&
+      (repairOperators !== undefined && repairOperators !== null &&
+       repairOperators !== "")) {
+    throw new Error("Configure only one repair operator source: JSON or FILE");
+  }
+  if (repairOperatorsFile &&
+      (typeof repairOperatorsFile !== "string" || !path.isAbsolute(repairOperatorsFile) ||
+       repairOperatorsFile.includes("\0")))
+    throw new Error("RUNNER_REPAIR_OPERATORS_FILE must be an absolute path");
+  // Inline source is a legacy startup-only configuration. File source is loaded
+  // on every repair request so two API instances can revoke a key immediately.
+  const inlineOperatorRegistry = repairOperatorsFile ? null
+    : configureRepairOperators(repairOperators, apiKey);
   return httpServer(async (req, res) => {
     const origin = req.headers.origin;
     const allowed = origin && allowedOrigins.includes(origin);
@@ -39,8 +53,15 @@ export function createRunnerServer({
     if (req.method === "OPTIONS") { send(204, {}); return; }
     if (req.url === "/healthz" && req.method === "GET") { send(200, { status: "ok", version: 1 }); return; }
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
-    if (repairRoute && !operatorRegistry) {
+    if (repairRoute && !repairOperatorsFile && !inlineOperatorRegistry) {
       send(503, { error: "repair_auth_unconfigured" }); return;
+    }
+    let operatorRegistry = inlineOperatorRegistry;
+    if (repairRoute && repairOperatorsFile) {
+      try { operatorRegistry = await loadRepairOperatorsFile(repairOperatorsFile, apiKey); }
+      catch {
+        send(503, { error: "repair_auth_unavailable" }); return;
+      }
     }
     const repairOperator = repairRoute
       ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)

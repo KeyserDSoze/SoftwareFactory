@@ -2,12 +2,55 @@
  * This registry is server-side only; never echo or persist the actual keys.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
+import { open } from "node:fs/promises";
+import { constants } from "node:fs";
+import path from "node:path";
 
 const ROLES = new Set(["propose", "review", "approve"]);
 const ID = /^[a-z][a-z0-9_-]{1,31}$/;
 const SECRET = /^[\x21-\x7e]{32,256}$/;
 const deny = () => { throw new Error("Invalid RUNNER_REPAIR_OPERATORS_JSON configuration"); };
 const fingerprint = token => createHash("sha256").update(token).digest();
+const MAX_FILE_BYTES = 10000;
+const unavailable = () => Object.assign(new Error("repair_operator_registry_unavailable"),
+  { code: "REPAIR_AUTH_UNAVAILABLE" });
+
+/** Operator registry rotation: every request reads a new fd, so an atomic
+ * same-filesystem rename takes effect without an API restart or a stale cache.
+ * The API service owns this secret; it must never be mounted in the worker.
+ */
+export async function loadRepairOperatorsFile(filePath, runnerKey) {
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath) ||
+      filePath.includes("\0")) throw unavailable();
+  let fd;
+  try {
+    fd = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = await fd.stat();
+    if (!stat.isFile() || stat.nlink !== 1 ||
+        (stat.mode & 0o077) !== 0 ||
+        stat.size < 1 || stat.size > MAX_FILE_BYTES) throw unavailable();
+    // Bounded even if an administrator modifies a file in place. Rotate only
+    // with atomic rename: in-place writes could yield a transient 503.
+    const chunks = [];
+    let total = 0;
+    while (total <= MAX_FILE_BYTES) {
+      const chunk = Buffer.alloc(Math.min(2048, MAX_FILE_BYTES + 1 - total));
+      const { bytesRead } = await fd.read(chunk, 0, chunk.length, total);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > MAX_FILE_BYTES) throw unavailable();
+    return configureRepairOperators(Buffer.concat(chunks).toString("utf8"), runnerKey)
+      ?? (() => { throw unavailable(); })();
+  } catch {
+    // Not distinguishable to external callers: missing, symlink, permissions,
+    // malformed JSON and interrupted replacement all fail closed.
+    throw unavailable();
+  } finally {
+    await fd?.close().catch(() => {});
+  }
+}
 
 export function configureRepairOperators(source, runnerKey) {
   if (source === undefined || source === null || source === "")
