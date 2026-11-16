@@ -68,6 +68,7 @@ const checked = validateRequest({
       "<Project><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>",
     "tests/backend/Tests.csproj":
       "<Project><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>",
+    "src/backend/domain/Guard.cs": "namespace Demo; public record Guard(int Value);",
   },
   steps: ["dotnet-build", "dotnet-test"],
 });
@@ -112,7 +113,7 @@ test("daemon disappears after first code step: worker reports incomplete, no sec
       ["accepted", "started", "step", "finished"]);
     await assert.rejects(beginRepairSession(f.dataDir, {
       failedJobId: f.id, proposalId: randomUUID(),
-      paths: ["src/backend/applications/Api/Api.csproj"], consent: true,
+      paths: ["src/backend/domain/Guard.cs"], consent: true,
     }, "editor"), { code: "REPAIR_NOT_FAILED" });
   } finally { await f.close(); }
 });

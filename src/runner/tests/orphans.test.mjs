@@ -71,6 +71,9 @@ test("full UUID container names avoid first-eight-character collisions and expos
   const plan = planStep("web-build", source, "/srv/softwarefactory/test");
   let args;
   await runDockerStep(plan, jobId, step, { timeoutMs: 1000,
+    // This test stubs spawnProcess and verifies argv only; it never connects
+    // to Docker. Production execution must use the default rootless probe.
+    probeDocker: async () => true,
     spawnProcess: (_binary, argv) => {
       args = argv;
       const child = new EventEmitter();
