@@ -225,7 +225,7 @@ describe("application scaffold", () => {
     expect(ui).toContain("clearUnauthorizedSession");
     expect(ui).toContain("oidcManager().removeUser()");
     expect(ui).toContain('sessionStorage.removeItem("sf_api_access_token")');
-    expect(ui).toContain("activeToken.current !== usedToken");
+    expect(ui).toContain("sessionMatches(usedToken, expectedEpoch)");
     expect((ui.match(/response.status === 401/g) || []).length).toBe(4);
     expect(ui).toContain("Sessione scaduta o non più valida. Accedi nuovamente.");
     const e2e = files["src/frontend/web/e2e/smoke.spec.ts"];
