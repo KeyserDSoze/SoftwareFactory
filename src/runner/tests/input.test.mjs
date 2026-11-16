@@ -9,7 +9,10 @@ import { atomicWrite, jobDirectory, readReport, validateRequest } from "../commo
 import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
 import { MAX_RUNNER_INPUT_BYTES, isStableRunnerInputSnapshot,
   isTrustedRunnerInputFile, readRunnerInput } from "../input.mjs";
-import { executeJob } from "../worker.mjs";
+import { executeJob, runWorker } from "../worker.mjs";
+import { createRunnerServer } from "../api.mjs";
+import { beginRepairSession } from "../coordinator.mjs";
+import { portableEvidenceBundle, verifyEvidenceExport } from "../evidence.mjs";
 
 const id = "00000000-0000-4000-a000-000000000053";
 async function fixture() {
@@ -124,6 +127,119 @@ test("an unsafe input never reaches the Docker step or creates a passed receipt"
     assert.equal(report.state, "passed");
     assert.equal(executions, 1);
   } finally {
+    await f.close();
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+
+test("worker polling rejects invalid queued input as incomplete, not a code-test failure", async () => {
+  for (const badInput of ["symlink", "permissions", "digest"]) {
+    const f = await fixture();
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "sf-rejected-input-work-"));
+    let executions = 0;
+    try {
+      if (badInput === "symlink") {
+        const original = f.file + ".backup";
+        await rename(f.file, original);
+        await symlink(original, f.file);
+      } else if (badInput === "permissions") {
+        await chmod(f.file, 0o666);
+      } else {
+        await writeFile(f.file, JSON.stringify({
+          ...f.checked.request, label: "changed-after-admission",
+        }));
+      }
+      const executeStep = async () => {
+        executions++;
+        throw Error("No Docker step may execute for rejected queued input");
+      };
+      const runOnePoll = () => runWorker({
+        dataDir: f.dataDir, workspaceRoot, pollMs: 1,
+        heartbeatIntervalMs: 60_000,
+        stop: (() => { let polls = 0; return () => polls++ > 0; })(),
+        executeQueuedJob: (jobId, options) =>
+          executeJob(jobId, { ...options, executeStep }),
+      });
+      await runOnePoll();
+      const verified = await verifyJobEvidence(f.dataDir, id);
+      assert.equal(verified.report.state, "incomplete", badInput);
+      assert.equal(verified.report.startedAt ?? null, null, badInput);
+      assert.deepEqual(verified.report.results, [], badInput);
+      assert.ok(Number.isFinite(Date.parse(verified.report.finishedAt)));
+      assert.deepEqual(verified.entries.map(entry => entry.kind),
+        ["accepted", "rejected"], badInput);
+      assert.match(verified.report.summary, /before any code tests/i);
+      assert.doesNotMatch(verified.report.summary, /changed-after-admission|input\\.json|Item\\.cs/);
+      assert.equal(executions, 0);
+      // Recovery of a rejected terminal job must not re-run it, even if
+      // the original unsafe input is restored while the worker keeps polling.
+      if (badInput === "symlink") {
+        await rm(f.file);
+        await rename(f.file + ".backup", f.file);
+      } else if (badInput === "permissions") {
+        await chmod(f.file, 0o600);
+      } else {
+        await writeFile(f.file, f.body);
+      }
+      await runOnePoll();
+      assert.equal(executions, 0);
+      assert.deepEqual((await verifyJobEvidence(f.dataDir, id)).entries
+        .map(entry => entry.kind), ["accepted", "rejected"]);
+    } finally {
+      await f.close();
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("rejected job remains API-verifiable but cannot be a failed-test AI repair root", async () => {
+  const f = await fixture();
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "sf-rejected-api-work-"));
+  const key = "runner-rejected-proof-key-abcdefghijklmnopqrstuvwxyz";
+  const server = createRunnerServer({
+    apiKey: key, apiKeyFile: "", tenantsFile: "",
+    allowedOrigins: ["http://localhost:5173"], dataDir: f.dataDir,
+  });
+  try {
+    await chmod(f.file, 0o666);
+    await runWorker({
+      dataDir: f.dataDir, workspaceRoot, pollMs: 1,
+      heartbeatIntervalMs: 60_000,
+      stop: (() => { let polls = 0; return () => polls++ > 0; })(),
+      executeQueuedJob: (jobId, options) => executeJob(jobId, {
+        ...options, executeStep: () => { throw Error("Unexpected Docker step"); },
+      }),
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const base = "http://127.0.0.1:" + server.address().port;
+    const request = async endpoint => {
+      const response = await fetch(base + endpoint, {
+        headers: { Origin: "http://localhost:5173",
+          Authorization: "Bearer " + key },
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const report = await request("/v1/jobs/" + id);
+    assert.equal(report.status, 200);
+    assert.equal(report.body.state, "incomplete");
+    const evidence = await request("/v1/jobs/" + id + "/evidence");
+    assert.equal(evidence.status, 200);
+    assert.equal(verifyEvidenceExport(evidence.body).report.state, "incomplete");
+    assert.deepEqual(verifyEvidenceExport(evidence.body).entries.map(e => e.kind),
+      ["accepted", "rejected"]);
+    // The repair coordinator independently enforces a failed *code step*
+    // receipt; a rejected/empty result never qualifies, irrespective of UI.
+    await assert.rejects(beginRepairSession(f.dataDir, {
+      failedJobId: id,
+      proposalId: "00000000-0000-4000-a000-000000000054",
+      paths: ["src/backend/domain/Item.cs"],
+      consent: true,
+    }, "editor"), { code: "REPAIR_NOT_FAILED" });
+  } finally {
+    if (server.listening)
+      await new Promise(resolve => server.close(resolve));
     await f.close();
     await rm(workspaceRoot, { recursive: true, force: true });
   }

@@ -41,7 +41,10 @@ export async function recoverUnclaimedJob(dataDir, id) {
   } finally { await rm(claim, { recursive: true, force: true }); }
 }
 
-/** Serialize pre-execution failure, rather than writing an unaudited failed report. */
+/** A rejected queued job never ran code tests: preserve an auditable
+ * terminal `incomplete`, not a misleading `failed` that would invite AI repair.
+ * The exclusive claim prevents a concurrent worker from changing the verdict.
+ */
 async function rejectQueuedJob(dataDir, id) {
   const claim = path.join(jobDirectory(dataDir, id), ".claim");
   try { await mkdir(claim, { mode: 0o700 }); }
@@ -50,8 +53,8 @@ async function rejectQueuedJob(dataDir, id) {
     const { report } = await verifyJobEvidence(dataDir, id);
     if (report.state !== "queued") return false;
     await recordJobEvidence(dataDir, id, {
-      ...report, state: "failed", finishedAt: new Date().toISOString(),
-      summary: "Worker rejected job; inspect input and runner configuration",
+      ...report, state: "incomplete", finishedAt: new Date().toISOString(),
+      summary: "Worker rejected job before any code tests; inspect runner input or configuration",
     }, "rejected");
     return true;
   } finally { await rm(claim, { recursive: true, force: true }); }

@@ -438,3 +438,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Protezione `jobs/<id>/input.json` in worker con `O_NOFOLLOW`, `fstat` pre/post, UID owner, hardlink/symlink vietati, mode non group/other writable, cap 8MB e lettura bounded sulla stessa FD; rifiutare JSON e inode instabili.
 - Controllo digest invariato contro report/journal hash-chain, niente Docker su input unsafe, errori generici senza sorgenti. Test Node di lettura POSIX e integrazione `executeJob`; legacy 0644 non scrivibili compatibili.
 - Resta #2 per attestazione off-host, VM Docker rootless, IAM tenant, fencing distribuito e Cloudflare Access realmente verificati.
+
+
+## v0.2 — Preflight worker: incomplete anziché false failed (#54)
+
+- `rejectQueuedJob` chiude in `incomplete` i `queued` non eseguibili, con evento journal `rejected` e senza inventare codice testato o esito `failed`.
+- Prove Node di polling su symlink, permessi, digest mismatch, mancata esecuzione Docker e mancata ripresa dopo ripristino; GET API report/evidence continua a verificare il journal; repair AI rifiuta `incomplete`.
+- No cambiamenti alla recovery di `running`, né alle quote, idempotency e ai limiti #2: Docker rootless VM, Cloudflare Access, identità e attestation off-host ancora da verificare.

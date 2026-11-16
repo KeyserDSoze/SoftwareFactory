@@ -315,3 +315,8 @@ Il confine di fiducia rimane una sola API e un solo volume POSIX: tenant non son
 ### Inode di input del worker verificato prima dell'esecuzione (#53)
 
 Le evidenze del job (#50) e il payload sorgenti non devono avere modelli di lettura incoerenti: ora `executeClaimedJob` apre `input.json` con un'unica FD `O_NOFOLLOW`, controlla owner UID, regolarità, nlink=1, permessi non scrivibili da gruppo/altri e dimensione 1–8MB, legge bounded e verifica che inode/mtime/ctime/size/mode siano invariati. Solo dopo esegue `validateRequest` e il confronto digest con la chain verificata, prima di qualsiasi step Docker. Un symlink, hardlink, inode unlinked o file alterato non diventa codice eseguibile né prova di successo; file legacy 0644 non scrivibili restano accettati. È una difesa locale e non dimostra attestazione, fencing multi-host, rootless VM o identità tenant federata (#2).
+
+
+### Preflight del worker e classificazione probatoria degli esiti (#54)
+
+Un job con report validato ma input non caricabile, symlink, permessi insicuri o digest diverso non ha eseguito nemmeno uno step di codice: trasformarlo da `queued` a `failed` avrebbe confuso un guasto del runner con un difetto del programma e avviato un possibile repair AI non giustificato. Il worker registra invece una sola transizione `queued → incomplete` con evento `rejected`, summary generica e `finishedAt`, sotto claim atomica e su report/journal verificati; nessun retry automatico o `started` artificiale. La verifica API conferma `accepted,rejected` e il coordinatore richiede `failed` con step fallito realmente eseguito. Restano invariati recovery `running → failed`, audit, quote, rate e idempotenza (#2).

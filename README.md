@@ -269,3 +269,9 @@ La runner API supporta ora una modalità opt-in `RUNNER_TENANTS_FILE` con creden
 ## Avanzamento #53 — input del worker letto su inode fidato (16 novembre 2026)
 
 L'hardening del runner prosegue con la [#53](https://github.com/KeyserDSoze/SoftwareFactory/issues/53): `input.json` viene letto dal worker con `O_NOFOLLOW`, `fstat` prima/dopo e lettura bounded (8MB), senza seguire symlink/hardlink o file sostituiti. Il digest sorgenti viene comunque confrontato col report verificato prima dell'esecuzione; un input non fidato non autorizza Docker o un esito `passed`. Test Node POSIX proteggono file owner/permessi/inode/dimensioni, rollback e integrazione worker. Le prove locali/CI non certificano un host Docker rootless di produzione, attestazioni indipendenti o IAM tenant: la #2 resta aperta.
+
+
+---
+## Avanzamento #54 — rifiuto del job prima dei test (16 novembre 2026)
+
+La [#54](https://github.com/KeyserDSoze/SoftwareFactory/issues/54) elimina un falso `failed`: se il worker rifiuta il job quando è ancora `queued` per input symlink/permessi non sicuri, digest differente o configurazione invalidata, salva l'esito terminale `incomplete`, il timestamp di chiusura e l'evento hash-chain `rejected`, **senza affermare che un test di codice sia fallito**. Il runner non rilancia automaticamente il job, continua a verificare API/evidenze e il coordinatore repair non accetta questi esiti come origine di AI repair. Restano separati l'esito di test di codice realmente fallito e la recovery di un `running` orfano; #2 rimane aperta per VM rootless e attestazione indipendente.

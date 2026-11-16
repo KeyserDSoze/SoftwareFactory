@@ -447,3 +447,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Il worker legge `jobs/<uuid>/input.json` soltanto tramite `readRunnerInput` (`src/runner/input.mjs`): singola FD `O_NOFOLLOW`, `fstat` prima/dopo, owner UID effettivo, file regolare con `nlink=1`, non group/world writable, 1..8.000.000 byte, inode/size/mode/mtime/ctime invariati.
 - Non sostituire la lettura limitata con `readFile(path)`. Accettare input legacy 0644 solo se non scrivibili da altri; output ed errori non devono contenere sorgenti o percorsi sensibili. Input malformato/unsafe impedisce l'avvio del primo step Docker e non può dare `passed`.
 - Mantenere `validateRequest` e il confronto digest del job rispetto al report+journal verificati, oltre ai test Node POSIX su symlink/hardlink, FD unlinked dopo rename, size, mode e integrazione `executeJob`. Non equivale a isolamento filesystem da un host admin malevolo o a rootless proof (epica #2).
+
+
+## Rifiuto job pre-esecuzione senza false failure di test (#54)
+
+- `rejectQueuedJob` usa lo stato terminale `incomplete` e il checkpoint journal `rejected`, con summary generica senza sorgenti o path, soltanto se un report verificato è ancora `queued` sotto claim atomica. `failed` resta riservato a fallimenti di test di codice effettivamente avviati (la recovery legacy di un `running` orfano rimane invariata).
+- I job `incomplete` non vengono ripresi automaticamente e non sbloccano AI repair; il coordinatore richiede `failed` più uno step di codice eseguito con exit code non-zero. Test Node su polling reale e input symlink, permessi, digest mismatch, lettura report/evidence via API e rifiuto del repair.
+- Le verifiche hash-chain restano obbligatorie: non trasformare un input corrotto in report `passed`, né saltare i controlli per quota, idempotency o retention. #2 resta aperta per host/VM rootless, IAM, attestation, network e multi-host.
