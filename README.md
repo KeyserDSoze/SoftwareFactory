@@ -305,3 +305,9 @@ La [#58](https://github.com/KeyserDSoze/SoftwareFactory/issues/58) corregge la r
 ## Avanzamento #59 — operatore Docker con rootless JIT senza cache (16 novembre 2026)
 
 La [#59](https://github.com/KeyserDSoze/SoftwareFactory/issues/59) corregge il comando di pulizia manuale dei container orfani. La precedente cache `inspectedHost` evitava di rifare il probe rootless dopo la prima richiesta al medesimo socket, permettendo di arrivare a `docker rm -f` anche se il daemon fosse cambiato. Ora **ogni** chiamata operatore (ps, inspect, rm) è preceduta da una nuova verifica rootless sul medesimo socket Unix allowlisted, con output/timeout bounded e ambiente CLI senza segreti. Risposte rootful, host non permessi o errori Docker interrompono l'operazione senza eliminazioni né messaggi diagnostici sensibili. I test provano la perdita della modalità rootless prima della rimozione e preservano journal/claim, conferma esplicita e identità del container. Non sostituisce il collaudo VM rootless o fencing multi-host della #2.
+
+
+---
+## Avanzamento #60 — lettura atomica verificata del registro operatori repair (16 novembre 2026)
+
+La [#60](https://github.com/KeyserDSoze/SoftwareFactory/issues/60) elimina una finestra d'incoerenza nel file delle credenziali repair: prima veniva verificato solo l'inode **prima** della lettura. Ora l'API legge esattamente i byte indicati dal `fstat` iniziale e confronta un secondo `fstat` dello stesso descriptor prima di accettare il registro. Scritture in place anche di pari dimensione, append/truncate, modifiche ai permessi o link e letture incomplete falliscono con `repair_auth_unavailable`; le chiavi non vengono esposte. La rotazione via rename atomico resta operativa fra richieste e le altre verifiche di segregazione proponente/revisore/approvatore rimangono attive. Test Node riproducono i casi senza race temporali artificiali. Questo non certifica identità federate o MFA di persone reali e la #2 resta aperta.

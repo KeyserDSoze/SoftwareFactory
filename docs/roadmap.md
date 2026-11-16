@@ -480,3 +480,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rimuovere `inspectedHost` e obbligare `docker info --format SecurityOptions` prima di ogni `ps/inspect/rm` dell'operatore sul socket Unix rootless allowlisted; JSON array tipizzato, output 4KiB, timeout 5s sul probe e 12s sui comandi.
 - Non ereditare `HOME`/config Docker o segreti dell'host; usare `DOCKER_CONFIG=/tmp` ed errori generici senza diagnostic leak. Conservare claim, prova evidenze, conferma job e verifica label; callback soltanto Node test trusted.
 - Test Node simulano info ripetute, rootful/JSON malformato/socket remoto e daemon cambiato a metà cleanup con nessun `rm`. ADR 0016; #2 resta aperta per VM rootless reale, Cloudflare Access e attestazione/fencing.
+
+
+## v0.2 — Pre/post fstat vincolato per file operatori repair (#60)
+
+- Estendere l'autenticazione degli operatori repair con lettura size-pinned dal solo FD `O_NOFOLLOW`, verifiche owner-only, inode/link/size/timestamps/mode prima e dopo. Fallire chiuso per EOF, append/truncate, riscrittura in place (anche JSON valido, stessa lunghezza), chmod/link concorrenti, senza esporre path e chiavi.
+- Mantenere la rotazione atomica fra richieste e la reauth all'interno dei lock; niente cache o sessione di token, niente bypass tramite job payload. Test Node deterministici tramite FD wrapper con mutazioni nel mezzo della lettura, oltre alle API due-replica preesistenti.
+- ADR 0017, issue #60. Non collauda identity federation, VM Docker rootless, Cloudflare Access, fencing o attestazione off-host, ancora in #2 e #9.
