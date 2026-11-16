@@ -253,3 +253,8 @@ La API del runner legge ora i checkpoint repair attraverso un unico file descrip
 ## Verifica evidence del runner senza file-swap e letture illimitate (#50)
 
 I file `report.json` e `evidence.jsonl` vengono ora letti e verificati **dallo stesso file descriptor sicuro**: nessun symlink, hardlink, permesso group/world writable o file oltre 4 MB può essere utilizzato come prova per report, esportazioni, quote o checkpoint. La verifica conferma che inode e contenuti siano stabili durante la lettura. L'integrità locale rimane fail-closed: HTTP 409 per prove corrotte, 503 per ammissioni bloccate e 404 solo se il report non esiste. Test su due istanze API provano casi manipolati e recupero dopo ripristino. Non è una firma indipendente né un'attestazione rootless: #2 rimane aperta.
+
+
+## API runner: hot rotation delle credenziali (#51)
+
+È disponibile la modalità opzionale `RUNNER_API_KEY_FILE`, alternativa alla precedente `RUNNER_API_KEY`. La chiave viene letta da un file privato e verificata per ogni richiesta, con reload immediato al rename atomico, senza reboot delle API. Due repliche possono rifiutare la chiave vecchia (401) e usare quella nuova; un file mancante o insicuro blocca l'autenticazione (503), mai fallback. I POST sono riautenticati anche nel lock condiviso prima di creare job, così una richiesta in attesa non può usare una chiave revocata. L'override Compose monta **solo nella API** la directory dei segreti, non nel worker. È un hardening dell'unico segreto globale, non un'implementazione IAM multi-tenant o Cloudflare Access (#2).

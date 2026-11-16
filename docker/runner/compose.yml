@@ -12,7 +12,9 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     environment:
-      RUNNER_API_KEY: "${RUNNER_API_KEY:?Set a strong random RUNNER_API_KEY}"
+      # Either this env value or a file-backed credential via an override.
+      RUNNER_API_KEY: "${RUNNER_API_KEY:-}"
+      RUNNER_API_KEY_FILE: "${RUNNER_API_KEY_FILE:-}"
       RUNNER_REPAIR_OPERATORS_JSON: "${RUNNER_REPAIR_OPERATORS_JSON:-}"
       RUNNER_ALLOWED_ORIGINS: "${RUNNER_ALLOWED_ORIGINS:?Set explicit https origins}"
       RUNNER_DATA_DIR: /data

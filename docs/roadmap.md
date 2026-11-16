@@ -416,3 +416,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Eliminare `readFile(path)` non bounded nella prova per-job: report e journal devono usare FD `O_NOFOLLOW`, `fstat` pre/post, UID/links/mode/size e lettura limitata a 4MB, senza accettare inode sostituiti durante rename.
 - Test su 2 API con symlink/hardlink, file con permessi insicuri, oversize e ripristino, mantenendo 404 soltanto per report mancante, 409 proof corrotta e 503 admission fail-closed; nessuna modifica a digest o schema/numero di step.
 - Firma off-host, VM Docker rootless reale, IAM tenant e Cloudflare Access rimangono in #2.
+
+
+## v0.2 — API job key ricaricabile senza restart (#51)
+
+- `RUNNER_API_KEY_FILE` privato, mutuamente esclusivo con la chiave inline, con O_NOFOLLOW/fstat pre/post, owner UID, nlink=1, mode owner-only e lunghezza bounded. Reload per ogni richiesta su due repliche API: dopo rename, vecchia chiave 401; file unsafe/missing 503.
+- Sotto lock di ammissione, nuova verifica della chiave prima di idempotent replay e directory job: revoca durante l'attesa non autorizza nuove esecuzioni. Compose override API-only read-only directory bind mount, worker senza secret.
+- Test HTTP su due processi/repliche, rotazione, negative file e revoca durante lock. Restano IAM tenant, Cloudflare Access, Docker rootless reale e firma indipendente in #2.
