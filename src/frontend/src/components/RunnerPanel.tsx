@@ -90,8 +90,11 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         // fails; 401/403/404/409 and malformed JSON must stop automatic polls.
         setReport(null);
         setVerification(null);
-        setPollNotice({ kind: consecutiveFailures ? "paused" : "blocked",
-          detail: consecutiveFailures
+        // An auth/integrity denial after a previous transient failure must
+        // remain a hard stop, not be mislabeled as exhausted network retries.
+        const transient = runnerPollDecision(error, 0).retry;
+        setPollNotice({ kind: transient ? "paused" : "blocked",
+          detail: transient
             ? "Letture automatiche sospese dopo cinque tentativi senza risposta valida."
             : "Lettura fermata: il runner ha rifiutato la richiesta o il report non è valido." });
         onError("Report runner: " + (error instanceof Error ? error.message : String(error)));
