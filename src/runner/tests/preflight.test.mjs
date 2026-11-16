@@ -291,6 +291,42 @@ test("Compose binds each socket-capable runner to its reviewed build context and
   }
 });
 
+test("Compose blocks NODE_OPTIONS, LD_PRELOAD and unexpected env for API and socket-owning worker", () => {
+  for (const service of ["runner-api", "runner-worker"]) {
+    for (const [key, value] of [
+      ["NODE_OPTIONS", "--import=/data/hostile.mjs"],
+      ["NODE_PATH", "/data/evil"],
+      ["LD_PRELOAD", "/data/intercept.so"],
+      ["DOCKER_CONFIG", "/tmp/hostile"],
+      ["NPM_CONFIG_SCRIPT_SHELL", "/bin/sh"],
+      ["BASH_ENV", "/data/hostile"],
+      ["PATH", "/data/bin"],
+      ["UNREVIEWED_RUNTIME_TOGGLE", "true"],
+    ]) {
+      const config = composeConfig();
+      config.services[service].environment[key] = value;
+      assert.throws(() => inspectComposeConfig(config),
+        /unapproved runtime environment override/, service + " " + key);
+    }
+    for (const override of ["/tmp", "/mnt/other", "", null]) {
+      const config = composeConfig();
+      config.services[service].environment.RUNNER_DATA_DIR = override;
+      assert.throws(() => inspectComposeConfig(config),
+        /unapproved runtime environment override/);
+    }
+    const config = composeConfig();
+    config.services[service].environment = ["NODE_OPTIONS=--import=/data/evil.mjs"];
+    assert.throws(() => inspectComposeConfig(config),
+      /unapproved runtime environment override/);
+  }
+  const approved = composeConfig();
+  approved.services["runner-api"].environment.RUNNER_API_KEY_FILE = "";
+  approved.services["runner-api"].environment.RUNNER_TENANTS_FILE = "";
+  approved.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON = "";
+  approved.services["runner-api"].environment.RUNNER_MAX_QUEUED = "4";
+  assert.equal(inspectComposeConfig(approved).status, "passed");
+});
+
 test("Compose tunnel cannot be replaced by another image, startup hook or local build", () => {
   for (const mutate of [
     c => { c.services.cloudflared.image = "attacker/cloudflared:latest"; },

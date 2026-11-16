@@ -60,6 +60,27 @@ const trustedTunnelImage = svc => {
        "develop"].some(key => svc[key] != null))
     fail("cloudflared: unapproved image or executable override");
 };
+// A reviewed Dockerfile and CMD can still be overridden by NODE_OPTIONS,
+// NODE_PATH or LD_PRELOAD. Only the environment variables explicitly used
+// by the audited Compose files can reach these socket/data-bearing processes.
+const apiEnvironmentKeys = new Set([
+  "RUNNER_API_KEY", "RUNNER_API_KEY_FILE", "RUNNER_TENANTS_FILE",
+  "RUNNER_REPAIR_OPERATORS_JSON", "RUNNER_REPAIR_OPERATORS_FILE",
+  "RUNNER_ALLOWED_ORIGINS", "RUNNER_DATA_DIR", "RUNNER_MAX_QUEUED",
+  "RUNNER_MAX_ACCEPTED_PER_MINUTE", "RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS",
+  "RUNNER_PORT",
+]);
+const workerEnvironmentKeys = new Set([
+  "RUNNER_DATA_DIR", "RUNNER_RETENTION_HOURS", "RUNNER_ALLOW_NET_DEPS",
+  "RUNNER_NPM_REGISTRY", "RUNNER_HOST_WORK_DIR", "DOCKER_HOST",
+]);
+const trustedRuntimeEnvironment = (name, svc, allowed) => {
+  const env = svc.environment;
+  if (!env || typeof env !== "object" || Array.isArray(env) ||
+      Object.keys(env).some(key => !allowed.has(key)) ||
+      env.RUNNER_DATA_DIR !== "/data")
+    fail(name + ": unapproved runtime environment override");
+};
 // Reject obvious host-system bind targets and noncanonical paths. An
 // operator may use /srv or /var/lib for dedicated runner data; symlink and
 // directory ownership checks still require live host preflight on the VM.
@@ -114,6 +135,8 @@ export function inspectComposeConfig(config) {
   safeService("runner-worker", worker);
   trustedBuild("runner-api", api, "docker/runner/Dockerfile.api");
   trustedBuild("runner-worker", worker, "docker/runner/Dockerfile.worker");
+  trustedRuntimeEnvironment("runner-api", api, apiEnvironmentKeys);
+  trustedRuntimeEnvironment("runner-worker", worker, workerEnvironmentKeys);
   const apiMounts = mountsFor(api), workerMounts = mountsFor(worker, true);
   const apiData = apiMounts.find(v => v.target === "/data");
   const registry = apiMounts.find(v => v.target === "/run/secrets/runner-operators");
