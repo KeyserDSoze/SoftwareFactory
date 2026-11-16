@@ -127,10 +127,17 @@ const safeNetworkTopology = config => {
       !Object.hasOwn(networks, "default"))
     fail("Compose network policy requires a single private default network");
   const defaultNetwork = networks.default;
+  // Compose v2's JSON serializer emits ipam: {} even for its implicit
+  // default bridge. The EMPTY object is neutral; any user-configured IPAM
+  // subnet, driver or allocation is still denied.
   if (!plainRecord(defaultNetwork) ||
-      Object.keys(defaultNetwork).some(key => !["name", "external"].includes(key)) ||
+      Object.keys(defaultNetwork).some(key =>
+        !["name", "external", "ipam"].includes(key)) ||
       defaultNetwork.name !== project + "_default" ||
-      (defaultNetwork.external != null && defaultNetwork.external !== false))
+      (defaultNetwork.external != null && defaultNetwork.external !== false) ||
+      (defaultNetwork.ipam != null &&
+        (!plainRecord(defaultNetwork.ipam) ||
+          Object.keys(defaultNetwork.ipam).length !== 0)))
     fail("Compose default network is external or unapproved");
   for (const [name, svc] of Object.entries(config.services)) {
     const joined = svc.networks;

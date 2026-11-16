@@ -66,6 +66,10 @@ test("resolved Compose enforces isolated worker socket and loopback-only API wit
 test("Compose network gate accepts only implicit or explicit private default for every reviewed service", () => {
   const baseline = composeConfig();
   assert.equal(inspectComposeConfig(baseline).status, "passed");
+  // Real docker compose config --format=json includes ipam:{} by default.
+  const serializer = composeConfig();
+  serializer.networks.default.ipam = {};
+  assert.equal(inspectComposeConfig(serializer).status, "passed");
   const implicit = composeConfig();
   for (const svc of Object.values(implicit.services)) delete svc.networks;
   assert.equal(inspectComposeConfig(implicit).status, "passed");
@@ -89,6 +93,8 @@ test("Compose network gate denies external/renamed/extra networks even without n
     c => { c.networks.default.driver = "host"; },
     c => { c.networks.default.internal = false; },
     c => { c.networks.default.ipam = { config: [{ subnet: "10.1.0.0/16" }] }; },
+    c => { c.networks.default.ipam = { driver: "custom" }; },
+    c => { c.networks.default.ipam = [] ; },
     c => { c.name = "../runner"; },
     c => { c.name = "Runner"; },
     c => { c.networks = null; },
