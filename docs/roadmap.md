@@ -628,3 +628,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Risolto il bug segnalato dalla CI della #82: la sezione top-level `volumes:` viene scritta dopo tutti i servizi (compresi Jaeger, Redis, RabbitMQ e MinIO) e solo per database con named volume.
 - Management ports RabbitMQ/Jaeger/OTLP ora bindate loopback; quattro varianti database e servizi opzionali verificate tramite `docker compose config --format json` nella Factory CI.
 - ADR 0040. Si tratta di controllo sintattico/di configurazione, non prova della salute o sicurezza di immagini/servizi né deploy production-ready; l'epica #9 rimane aperta.
+
+## v0.3 — Allowlist CORS HTTPS per API OIDC generata (#84)
+
+- Nuovo `BrowserCorsStartup.cs` nello scaffold PostgreSQL: `Web:AllowedOrigins` esplicito e obbligatorio in Production/Staging/QA, solo HTTPS e senza wildcard/credentials; default HTTP soltanto loopback o host CI web in Development.
+- Configurazione Compose `WEB_ALLOWED_ORIGINS`, `docker/.env.example`, README applicazione generata aggiornati; distinguere frontend origin da `PUBLIC_API_URL` dell'API browser.
+- Test Vitest dei template, fail-closed sul binario compilato ASP.NET Core e preflight OPTIONS allow/deny su API fullstack con Playwright/IdP CI. ADR 0041. Da fare nell'epica #9: IdP HTTPS esterno reale, protezioni BFF/sessione, TLS e CORS effettivo su reverse proxy/CDN produzione.

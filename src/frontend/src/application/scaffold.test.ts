@@ -554,6 +554,46 @@ describe("application scaffold", () => {
       }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+  it("generates strict production OIDC CORS allowlist without wildcard or credentials", () => {
+    const files = generateFiles(example());
+    const program = files["src/backend/applications/Api/Program.cs"];
+    const cors = files["src/backend/applications/Api/BrowserCorsStartup.cs"];
+    const compose = files["docker/compose.yml"];
+    expect(cors).toContain('builder.Configuration["Web:AllowedOrigins"]');
+    expect(cors).toContain('!builder.Environment.IsDevelopment()');
+    expect(cors).toContain("configured.Split(',', StringSplitOptions.None)");
+    expect(cors).toContain("origins.Length > 8");
+    expect(cors).toContain("origins.Distinct(StringComparer.Ordinal)");
+    expect(cors).toContain("origin.Contains('*')");
+    expect(cors).toContain("uri.UserInfo.Length != 0");
+    expect(cors).toContain("uri.Query.Length != 0");
+    expect(cors).toContain("uri.Fragment.Length != 0");
+    expect(cors).toContain('uri.AbsolutePath != "/"');
+    expect(cors).toContain("uri.GetLeftPart(UriPartial.Authority)");
+    expect(cors).toContain("Uri.UriSchemeHttps");
+    expect(cors).toContain("uri.IsLoopback");
+    expect(cors).toContain('uri.Host == "web"');
+    expect(cors).toContain("policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()");
+    expect(cors).not.toContain("AllowAnyOrigin");
+    expect(cors).not.toContain("AllowCredentials");
+    expect(program).toContain("builder.AddBrowserCors();");
+    expect(program).toContain('app.UseCors("web");');
+    expect(program).not.toContain('policy.WithOrigins("http://localhost:3000"');
+    expect(compose).toContain('Web__AllowedOrigins: "${WEB_ALLOWED_ORIGINS:-}"');
+    expect(files["docker/.env.example"]).toContain("WEB_ALLOWED_ORIGINS=");
+    expect(files["README.md"]).toContain("WEB_ALLOWED_ORIGINS=https://app.example");
+    const e2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(e2e).toContain("API CORS preflight allows only configured browser origins");
+    expect(e2e).toContain('"Access-Control-Request-Method": "POST"');
+    expect(e2e).toContain('response.headers()["access-control-allow-origin"]');
+    expect(e2e).toContain("https://attacker.example");
+
+    const other = example();
+    other.config.database = "mysql";
+    const noOidc = generateFiles(other);
+    expect(noOidc["src/backend/applications/Api/BrowserCorsStartup.cs"]).toBeUndefined();
+    expect(noOidc["docker/compose.yml"]).not.toContain("Web__AllowedOrigins");
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";

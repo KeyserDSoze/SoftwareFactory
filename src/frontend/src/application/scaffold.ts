@@ -32,6 +32,7 @@ function dockerCompose(c: ProjectConfig): string {
       '      Auth__Issuer: "${AUTH_ISSUER:-}"',
       '      Auth__Audience: "${AUTH_AUDIENCE:?Set AUTH_AUDIENCE in docker/.env}"',
       '      Auth__SigningKey: "${AUTH_SIGNING_KEY:-}"',
+      '      Web__AllowedOrigins: "${WEB_ALLOWED_ORIGINS:-}"',
     );
   }
   if (deps.length) services.push("    depends_on:", "      db:", "        condition: " + (c.database === "postgresql" ? "service_healthy" : "service_started"));
@@ -251,7 +252,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "- Frontend: " + c.frontends.join(", "), "- Database: " + c.database,
       "- Deploy target: " + c.deployment, "", "## Rischi e alternative", "", done("adversarial")),
     "docker/compose.yml": dockerCompose(c),
-    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "APP_ENVIRONMENT=Development", "PUBLIC_API_URL=http://localhost:8080", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "OIDC_PUBLIC_AUTHORITY=", "OIDC_PUBLIC_CLIENT_ID=", "OIDC_PUBLIC_AUDIENCE=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
+    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "APP_ENVIRONMENT=Development", "PUBLIC_API_URL=http://localhost:8080", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "OIDC_PUBLIC_AUTHORITY=", "OIDC_PUBLIC_CLIENT_ID=", "OIDC_PUBLIC_AUDIENCE=", "WEB_ALLOWED_ORIGINS=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
     "docker/Api.Dockerfile": lines("FROM mcr.microsoft.com/dotnet/sdk:" + c.dotnetVersion + " AS build",
       "WORKDIR /app", "COPY src/backend/ ./src/backend/", "RUN dotnet publish src/backend/applications/Api/Api.csproj -c Release -o /out",
       "FROM mcr.microsoft.com/dotnet/aspnet:" + c.dotnetVersion, "WORKDIR /app", "COPY --from=build /out ./",
@@ -325,11 +326,53 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
 
   if (c.database === "postgresql") {
     Object.assign(files, postgresqlFiles(c));
+    // Validate the HTTPS-only browser CORS allowlist before app/database startup.
+    files["src/backend/applications/Api/BrowserCorsStartup.cs"] = [
+      "namespace FactoryApp.Api;",
+      "public static class BrowserCorsStartup {",
+      "    private static readonly string[] DevelopmentOrigins = [",
+      '        "http://localhost:3000", "http://localhost:5173",',
+      '        "http://127.0.0.1:4173", "http://web:4173",',
+      "    ];",
+      "    public static void AddBrowserCors(this WebApplicationBuilder builder) {",
+      '        var configured = builder.Configuration["Web:AllowedOrigins"];',
+      "        string[] origins;",
+      "        if (string.IsNullOrEmpty(configured)) {",
+      "            if (!builder.Environment.IsDevelopment())",
+      '                throw new InvalidOperationException("Web:AllowedOrigins is required outside Development.");',
+      "            origins = DevelopmentOrigins;",
+      "        } else {",
+      "            if (configured.Length > 1024)",
+      '                throw new InvalidOperationException("Web:AllowedOrigins exceeds its size limit.");',
+      "            origins = configured.Split(',', StringSplitOptions.None);",
+      "        }",
+      "        if (origins.Length == 0 || origins.Length > 8 ||",
+      "            origins.Distinct(StringComparer.Ordinal).Count() != origins.Length)",
+      '            throw new InvalidOperationException("Web:AllowedOrigins requires 1-8 unique origins.");',
+      "        foreach (var origin in origins) {",
+      "            if (origin.Length < 8 || origin.Length > 256 ||",
+      "                origin != origin.Trim() || origin.Contains('*') ||",
+      "                !Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||",
+      "                uri.UserInfo.Length != 0 || uri.Query.Length != 0 ||",
+      '                uri.Fragment.Length != 0 || uri.AbsolutePath != "/" ||',
+      "                !string.Equals(uri.GetLeftPart(UriPartial.Authority), origin, StringComparison.Ordinal) ||",
+      "                (uri.Scheme != Uri.UriSchemeHttps &&",
+      "                  !(builder.Environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp &&",
+      '                    (uri.IsLoopback || uri.Host == "web"))))',
+      '                throw new InvalidOperationException("Web:AllowedOrigins must contain clean HTTPS origins (HTTP loopback in Development only).");',
+      "        }",
+      '        builder.Services.AddCors(options => options.AddPolicy("web", policy =>',
+      "            policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));",
+      "    }",
+      "}",
+      "",
+    ].join("\n");
     const apiPath = "src/backend/applications/Api/Program.cs";
     files["src/backend/applications/Api/Api.csproj"] = files["src/backend/applications/Api/Api.csproj"]
       .replace("</ItemGroup>", '<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="' +
         (c.dotnetVersion === "11.0" ? "11.0.0" : "10.0.15") + '" /></ItemGroup>');
     files[apiPath] = files[apiPath]
+      .replace('builder.Services.AddCors(options => options.AddPolicy("web", policy => policy.WithOrigins("http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:4173", "http://web:4173").AllowAnyHeader().AllowAnyMethod()));', "")
       .replace('app.UseCors("web");', "")
       .replace("using FactoryApp.Business;", "using FactoryApp.Business;\nusing FactoryApp.Domain;\nusing FactoryApp.Api;\nusing Microsoft.AspNetCore.RateLimiting;\nusing Npgsql;")
       .replace("var app = builder.Build();", [
@@ -340,6 +383,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
         'builder.Services.AddScoped<WorkItemService>();',
         'builder.Services.AddSingleton<PostgresSchemaMigrator>();',
         'builder.AddWorkItemSecurity();',
+        'builder.AddBrowserCors();',
         'var app = builder.Build();',
         'app.UseExceptionHandler(errors => errors.Run(async context => {',
         '  context.Response.StatusCode = 500;',
@@ -398,10 +442,35 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "La SPA usa oidc-client-ts per redirect con PKCE, validazione di state/nonce, callback e logout; Nginx permette il fallback SPA su /auth/callback. Docker Compose e solo un default locale: web e API ascoltano su 127.0.0.1 e non espongono HTTP sulla rete esterna. APP_ENVIRONMENT=Development abilita il demo locale; per un deploy dietro reverse proxy HTTPS impostare APP_ENVIRONMENT=Production, PUBLIC_API_URL=https://api.example (URL raggiungibile dal browser, NON host Docker interno), AUTH_MODE=oidc con issuer HTTPS e le tre OIDC_PUBLIC_* complete. Configurare a parte TLS, proxy, CORS e redirect URI con IdP reale.",
       "La modalita Auth__Mode=legacy con Auth__SigningKey e disponibile solo in Development per test senza identity provider, e rifiutata in Production.",
       "HTTPS e obbligatorio per authority/discovery OIDC in Production. E2E con provider di test HTTP solo sulla rete Docker interna della CI.",
+      "Per consentire richieste browser all'API da un dominio HTTPS pubblicato dietro reverse proxy, imposta WEB_ALLOWED_ORIGINS=https://app.example (uno o piu origin HTTPS esatti, separati da virgola senza spazi) in docker/.env. In Production, Staging e QA la API rifiuta di avviarsi se manca Web:AllowedOrigins o contiene HTTP, wildcard, path o credenziali. In Development, se non configurato, sono consentiti solo localhost/127.0.0.1 e il container web della CI; HTTP remoto non e consentito nemmeno in Development. WEB_ALLOWED_ORIGINS e l'origin del frontend, diverso da PUBLIC_API_URL che e l'origin dell'API visto dal browser. Nessuna cookie credential CORS e consentita.",
       "La distribuzione Nginx rigenera una CSP applicata alla build usando gli origin pubblici VITE_API_URL e VITE_OIDC_AUTHORITY. Script inline/eval vietati, HTTP remoto vietato salvo fixture CI privata. Le tre variabili pubbliche OIDC (authority/client ID/audience) devono essere tutte presenti oppure tutte assenti: la build rifiuta configurazioni parziali. Nginx applica Cache-Control no-store a tutte le risposte, inclusa /auth/callback, impedendo cache HTTP di callback e HTML; anche gli asset statici non saranno cacheable. Configura HTTPS con provider reale e TLS/reverse proxy/CDN senza riabilitare la cache delle callback per un deploy pubblico.",
       "",
     ].join("\n");
     files["tests/README.md"] += "\nLa Factory verifica il protocollo OAuth2/OIDC con un provider fittizio soltanto in CI; non sostituisce test con provider di identita reale.\n";
+    files["src/frontend/web/e2e/smoke.spec.ts"] += [
+      "",
+      'test("API CORS preflight allows only configured browser origins", async ({ request }) => {',
+      '  test.skip(!integration || process.env.E2E_DATABASE !== "postgresql" || !process.env.E2E_API_ORIGIN, "Requires live PostgreSQL API");',
+      '  const endpoint = process.env.E2E_API_ORIGIN! + "/api/items";',
+      '  const preflight = (origin: string) => request.fetch(endpoint, {',
+      '    method: "OPTIONS",',
+      '    headers: { Origin: origin, "Access-Control-Request-Method": "POST",',
+      '      "Access-Control-Request-Headers": "authorization,content-type" },',
+      '  });',
+      '  for (const origin of ["http://127.0.0.1:4173", "http://web:4173"]) {',
+      '    const response = await preflight(origin);',
+      '    expect(response.status()).toBe(204);',
+      '    expect(response.headers()["access-control-allow-origin"]).toBe(origin);',
+      '    expect(response.headers()["access-control-allow-credentials"]).toBeUndefined();',
+      '  }',
+      '  for (const forbidden of ["https://attacker.example", "null", "http://evil:4173"]) {',
+      '    const response = await preflight(forbidden);',
+      '    expect(response.headers()["access-control-allow-origin"]).toBeUndefined();',
+      '    expect(response.headers()["access-control-allow-credentials"]).toBeUndefined();',
+      '  }',
+      '});',
+      "",
+    ].join("\n");
     files["src/frontend/web/src/App.tsx"] = files["src/frontend/web/src/App.tsx"]
       .replace('import { useEffect, useState } from "react";', 'import { useEffect, useState } from "react";\nimport WorkItems from "./WorkItems";')
       .replace('</main>;', '<WorkItems api={API}/></main>;');

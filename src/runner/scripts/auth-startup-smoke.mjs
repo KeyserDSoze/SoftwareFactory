@@ -41,3 +41,40 @@ for (const [environment, mode, authority, expected] of cases) {
   assert.match(result.stderr + "\n" + result.stdout, expected, "Expected fail-closed rejection: " + environment);
 }
 console.log("AUTH_STARTUP_NEGATIVE_PASS: 5 actual .NET fail-closed startup checks");
+// Invalid browser CORS origins must be rejected BEFORE the app attempts to
+// connect to PostgreSQL. This exercises the compiled generated C# class,
+// not merely template patterns. A real IdP is not contacted.
+const invalidCors = [
+  ["Production", "", /Web:AllowedOrigins is required/],
+  ["Staging", "", /Web:AllowedOrigins is required/],
+  ["QA", "", /Web:AllowedOrigins is required/],
+  ["Production", "http://localhost:3000", /Web:AllowedOrigins must contain/],
+  ["Production", "http://web:4173", /Web:AllowedOrigins must contain/],
+  ["Production", "*", /Web:AllowedOrigins must contain/],
+  ["Production", "null", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test/", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test/path", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test?x=y", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test#section", /Web:AllowedOrigins must contain/],
+  ["Production", "https://user:password@app.example.test", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test,https://app.example.test", /Web:AllowedOrigins requires 1-8 unique/],
+  ["Production", "https://app.example.test, https://other.example.test", /Web:AllowedOrigins must contain/],
+  ["Production", "https://app.example.test,", /Web:AllowedOrigins must contain/],
+  ["Production", Array.from({ length: 9 }, (_, i) => "https://app" + i + ".example.test").join(","), /Web:AllowedOrigins requires 1-8 unique/],
+  ["Development", "http://remote.example.test", /Web:AllowedOrigins must contain/],
+];
+for (const [environment, origins, expected] of invalidCors) {
+  const result = spawnSync("dotnet", [api], {
+    cwd: root, encoding: "utf8", timeout: 15000, maxBuffer: 256_000,
+    env: { ...baseEnvironment, ASPNETCORE_ENVIRONMENT: environment,
+      Auth__Mode: "oidc", Auth__Authority: "https://identity.example.test",
+      Web__AllowedOrigins: origins },
+  });
+  assert.equal(result.error, undefined, "dotnet must be runnable for CORS validation");
+  assert.notEqual(result.status, 0, "Invalid browser CORS origins must fail startup");
+  assert.match(result.stderr + "\n" + result.stdout, expected,
+    "Generated API must reject unsafe CORS origins before any DB migration");
+}
+console.log("AUTH_CORS_STARTUP_NEGATIVE_PASS: " + invalidCors.length +
+  " actual compiled .NET origin allowlist checks");
+
