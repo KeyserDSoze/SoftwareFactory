@@ -1278,8 +1278,8 @@ test("preflight mode flags reject conflicting credential profiles before Docker 
     ["compose", "--tenants", "--tenants"],
     ["compose", "--runner-key-file", "--runner-key-file"],
     ["compose", "--runner-key-file=true"],
-    ["host", "--runner-key-file"],
-    ["host", "--tenants"],
+    ["host", "--tenants", "--runner-key-file"],
+    ["host", "--tenants", "--operator-registry"],
     ["endpoint", "--operator-registry",
       "--url=https://runner.example.org", "--origin=https://factory.example.org"],
   ]) {
