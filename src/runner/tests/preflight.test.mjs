@@ -48,7 +48,8 @@ function composeConfig() {
       image: "cloudflare/cloudflared:latest",
       cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
       profiles: ["tunnel"], networks: { default: null },
-      command: "tunnel run --token not-a-real-token",
+      user: "1000:1000", read_only: true,
+      command: ["tunnel", "--no-autoupdate", "run", "--token", "not-a-real-token"],
     },
   } };
 }
@@ -412,11 +413,83 @@ test("Compose tunnel cannot be replaced by another image, startup hook or local 
     const config = composeConfig();
     mutate(config);
     assert.throws(() => inspectComposeConfig(config),
-      /cloudflared: unapproved image or executable override/);
+      /cloudflared: unapproved image, command or runtime override/);
   }
   const noTunnel = composeConfig();
   delete noTunnel.services.cloudflared;
   assert.equal(inspectComposeConfig(noTunnel).status, "passed");
+});
+
+
+test("Compose refuses DNS and host identity injection on all reviewed services", () => {
+  const mutations = [
+    svc => { svc.extra_hosts = ["runner-api:203.0.113.9"]; },
+    svc => { svc.extra_hosts = { "runner-api": "203.0.113.9" }; },
+    svc => { svc.links = ["runner-api:trusted"]; },
+    svc => { svc.dns = ["203.0.113.53"]; },
+    svc => { svc.dns_search = ["attacker.invalid"]; },
+    svc => { svc.dns_opt = ["ndots:0"]; },
+    svc => { svc.hostname = "runner-api"; },
+    svc => { svc.domainname = "attacker.invalid"; },
+    svc => { svc.container_name = "trusted-api"; },
+    svc => { svc.mac_address = "02:42:ac:11:00:02"; },
+    svc => { svc.network_interface_name = "host0"; },
+    svc => { svc.extra_hosts = "runner-api:203.0.113.9"; },
+  ];
+  for (const name of ["runner-api", "runner-worker", "cloudflared"]) {
+    for (const mutate of mutations) {
+      const config = composeConfig();
+      mutate(config.services[name]);
+      assert.throws(() => inspectComposeConfig(config), error => {
+        assert.match(error.message, /unapproved DNS or host identity override/);
+        assert.doesNotMatch(error.message, /203\.0\.113|attacker\.invalid/);
+        assert.doesNotMatch(error.message, new RegExp(secret));
+        return true;
+      }, name);
+    }
+    const neutral = composeConfig();
+    neutral.services[name].extra_hosts = [];
+    neutral.services[name].links = [];
+    neutral.services[name].dns = [];
+    assert.equal(inspectComposeConfig(neutral).status, "passed");
+  }
+});
+
+test("Compose cloudflared argv, user, rootfs and environment are pinned", () => {
+  assert.equal(inspectComposeConfig(composeConfig()).tunnelServiceChecked, true);
+  const mutations = [
+    svc => { svc.user = "0:0"; },
+    svc => { delete svc.user; },
+    svc => { svc.read_only = false; },
+    svc => { delete svc.read_only; },
+    svc => { svc.environment = { TUNNEL_ORIGIN_CERT: "/data/cert" }; },
+    svc => { svc.environment = ["TUNNEL_TOKEN=untrusted"]; },
+    svc => { svc.command = ["tunnel", "run", "--token", "not-a-real-token"]; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--url", "http://evil.invalid"]; },
+    svc => { svc.command = "tunnel --no-autoupdate run --token not-a-real-token"; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--token", ""]; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--token", "--url"]; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--token", "bad\nTOKEN"]; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--token", "a".repeat(4097)]; },
+    svc => { svc.command = ["tunnel", "--no-autoupdate", "run", "--token", "not-a-real-token", "extra"]; },
+    svc => { svc.command = null; },
+  ];
+  for (const mutate of mutations) {
+    const config = composeConfig();
+    mutate(config.services.cloudflared);
+    assert.throws(() => inspectComposeConfig(config), error => {
+      assert.match(error.message, /cloudflared: unapproved image, command or runtime override/);
+      assert.doesNotMatch(error.message, /evil\.invalid|bad|not-a-real-token/);
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return true;
+    });
+  }
+  const neutral = composeConfig();
+  neutral.services.cloudflared.environment = {};
+  assert.equal(inspectComposeConfig(neutral).status, "passed");
+  const noTunnel = composeConfig();
+  delete noTunnel.services.cloudflared;
+  assert.equal(inspectComposeConfig(noTunnel).tunnelServiceChecked, false);
 });
 
 test("rootless host preflight checks socket, private directories and daemon SecurityOptions", async () => {

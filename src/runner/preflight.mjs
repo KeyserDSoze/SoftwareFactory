@@ -30,6 +30,16 @@ const noExtraCapabilities = svc => [
   "group_add", "sysctls", "volumes_from", "tmpfs", "secrets", "configs",
   "expose",
 ].every(field => noExtraMounts(svc[field]));
+// Docker hosts/DNS can redirect runner-api even on the reviewed private network.
+const noResolverOverrides = svc =>
+  ["extra_hosts", "links", "dns", "dns_search", "dns_opt"].every(
+    field => noExtraMounts(svc[field])) &&
+  ["hostname", "domainname", "container_name", "mac_address",
+    "network_interface_name"].every(field => svc[field] == null);
+const trustedNameResolution = (name, svc) => {
+  if (!noResolverOverrides(svc))
+    fail(name + ": unapproved DNS or host identity override");
+};
 const unprivilegedProfile = svc =>
   svc && typeof svc === "object" && !Array.isArray(svc) &&
   (svc.privileged == null || svc.privileged === false) &&
@@ -54,11 +64,26 @@ const trustedBuild = (name, svc, dockerfile) => {
        "pre_stop", "develop", "pull_policy"].some(key => svc[key] != null))
     fail(name + ": unapproved image, build or executable override");
 };
+// A resolved Compose v2 command must be an argv array; no shell string,
+// additional flags or secret-bearing environment overrides are approved.
+// The token is deliberately opaque; syntax checking is NOT Cloudflare auth.
+const reviewedTunnelCommand = command =>
+  Array.isArray(command) && command.length === 5 &&
+  command[0] === "tunnel" && command[1] === "--no-autoupdate" &&
+  command[2] === "run" && command[3] === "--token" &&
+  typeof command[4] === "string" &&
+  command[4].length >= 16 && command[4].length <= 4096 &&
+  !command[4].startsWith("-") &&
+  /^[\x21-\x7e]+$/.test(command[4]);
 const trustedTunnelImage = svc => {
+  const env = svc.environment;
   if (svc.image !== "cloudflare/cloudflared:latest" ||
+      !isSecureUser(svc.user) || svc.read_only !== true ||
+      !reviewedTunnelCommand(svc.command) ||
+      (env != null && (!plainRecord(env) || Object.keys(env).length !== 0)) ||
       ["build", "entrypoint", "healthcheck", "post_start", "pre_stop",
        "develop"].some(key => svc[key] != null))
-    fail("cloudflared: unapproved image or executable override");
+    fail("cloudflared: unapproved image, command or runtime override");
 };
 // A reviewed Dockerfile and CMD can still be overridden by NODE_OPTIONS,
 // NODE_PATH or LD_PRELOAD. Only the environment variables explicitly used
@@ -194,6 +219,8 @@ export function inspectComposeConfig(config) {
   const api = svcs["runner-api"], worker = svcs["runner-worker"];
   safeService("runner-api", api);
   safeService("runner-worker", worker);
+  trustedNameResolution("runner-api", api);
+  trustedNameResolution("runner-worker", worker);
   trustedBuild("runner-api", api, "docker/runner/Dockerfile.api");
   trustedBuild("runner-worker", worker, "docker/runner/Dockerfile.worker");
   trustedRuntimeEnvironment("runner-api", api, apiEnvironmentKeys);
@@ -255,6 +282,7 @@ export function inspectComposeConfig(config) {
     if (!unprivilegedProfile(tunnel) || !noExtraMounts(tunnel.volumes))
       fail("cloudflared: unsafe runtime permissions or mounts");
     trustedTunnelImage(tunnel);
+    trustedNameResolution("cloudflared", tunnel);
     noPublicPorts("cloudflared", tunnel);
   }
   return { mode: "compose", status: "passed", apiLoopbackOnly: true,

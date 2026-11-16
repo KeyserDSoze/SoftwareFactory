@@ -574,3 +574,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - In `inspectComposeConfig`, ogni volume runner deve essere un bind con solo `type/source/target/read_only/bind`: `bind` ammette al massimo `create_host_path` booleano del serializzatore Compose v2. Negare propagation, SELinux, consistency, campi extra e booleani malformati; worker data/work/socket e API data devono essere RW, operator registry RO.
 - Il registro operatori montato soltanto nell'API non può essere né parent né figlio delle directory persistenti `/data` e workspace visibili al worker. Il check non sostituisce il preflight host su VM reale. Conservare controlli su socket/namespaces/reti; #2 resta aperta.
+
+## Preflight tunnel argv e DNS Compose (#72)
+
+- Per `runner-api`, `runner-worker` e `cloudflared` rifiutare `extra_hosts`, `links`, DNS personalizzati, hostname/container name e MAC: la rete `default` non basta se il service name `runner-api` può essere risolto altrove.
+- Il tunnel deve avere user 1000:1000, `read_only: true`, l'immagine ufficiale e il comando Compose v2 esatto in cinque argomenti `tunnel --no-autoupdate run --token <opaque-token>`, senza environment o flag extra. Mai stampare token, URL privati o config. Il preflight è statico e non equivale a test VM rootless/Cloudflare reale: #2 resta aperta.

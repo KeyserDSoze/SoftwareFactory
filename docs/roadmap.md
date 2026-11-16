@@ -563,3 +563,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Per ogni volume bind risolto di runner API/worker consentire soltanto `type/source/target/read_only/bind` e `bind.create_host_path` booleano: bloccare propagation, SELinux, consistency, volume/tmpfs e campi sconosciuti; proteggere read-only registry e read-write di data/work/socket.
 - Impedire che l'API operator registry abbia una source host identica, parent o child di directory data/workspace visibili al worker. Test Node positivi, negativi e controllo Compose v2 standard nella CI. ADR 0028; non sostituisce host rootless/Cloudflare e attestazione (#2).
+
+## v0.2 — Preflight DNS/hosts e comando tunnel (#72)
+
+- Rifiutare DNS, extra_hosts/links e nomi host/container/MAC personalizzati su API, worker e cloudflared, per impedire redirect del nome `runner-api` sotto la singola rete default.
+- Vincolare cloudflared al solo argv normalizzato `tunnel --no-autoupdate run --token <token>`, UID 1000, rootfs read-only e assenza di environment custom; test Node, Compose v2 reale e ADR 0029. Non prova provider Cloudflare, daemon rootless VM, fencing o attestazione off-host: epica #2 ancora aperta.

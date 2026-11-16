@@ -53,6 +53,8 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     profiles: ["tunnel"]
+    user: "1000:1000"
+    read_only: true
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set tunnel token}
     depends_on: [runner-api]

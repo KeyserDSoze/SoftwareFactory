@@ -376,3 +376,8 @@ La [#70](https://github.com/KeyserDSoze/SoftwareFactory/issues/70) chiude un byp
 ## Avanzamento #71 — opzioni bind e separazione segreti nel preflight Compose (16 novembre 2026)
 
 La [#71](https://github.com/KeyserDSoze/SoftwareFactory/issues/71) impedisce che un override `volumes` alteri il comportamento dei mount pur mantenendo sorgente e target ammessi: `bind.propagation`, relabel SELinux, `consistency`, opzioni di volume/tmpfs e campi non revisionati vengono rifiutati, mentre il normale `bind.create_host_path` booleano del JSON Docker Compose v2 rimane accettato. Il registro privato degli operatori deve essere completamente disgiunto da directory dati e workspace: non può trovarsi dentro il workspace montato dal worker, né esserne un parent. Regressioni Node e preflight sul Compose reale in CI. Questa resta una policy statica, non prova dell'isolamento VM Docker rootless o dei permessi host al deploy; #2 aperta.
+
+---
+## Avanzamento #72 — DNS e comando Cloudflare Tunnel bloccati nel preflight (16 novembre 2026)
+
+La [#72](https://github.com/KeyserDSoze/SoftwareFactory/issues/72) chiude un bypass della configurazione Compose: pur usando soltanto la rete Docker `default`, un override `extra_hosts` poteva reindirizzare `runner-api` dal tunnel verso un altro host; inoltre il comando di cloudflared non veniva validato. Il preflight ora nega opzioni DNS/hosts/link, hostname e MAC custom per API, worker e tunnel. Il servizio cloudflared è configurato con UID 1000 e rootfs read-only e può avviarsi solo con il comando token normalizzato di Docker Compose v2, senza variabili ambiente o flag extra. Test Node e Compose reale in CI; non è una verifica di route, token o rootless VM effettivi (#2).
