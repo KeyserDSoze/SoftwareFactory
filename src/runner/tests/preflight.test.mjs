@@ -86,6 +86,82 @@ test("Compose preflight rejects insecure port, privileges, mounts, socket, netwo
   });
 });
 
+test("Compose preflight rejects ANY unreviewed sidecar, including privileged rootful Docker proxy", () => {
+  for (const [name, svc] of [
+    ["debug-proxy", { privileged: true, user: "0:0", ports: [
+      { host_ip: "0.0.0.0", target: 2375, published: 2375, protocol: "tcp" }],
+      volumes: [{ type: "bind", source: "/var/run/docker.sock",
+        target: "/run/docker.sock" }] }],
+    ["metrics", { image: "busybox:latest" }],
+    ["rootless-looking", service({ ports: [{ host_ip: "0.0.0.0",
+      target: 9999, published: 9999, protocol: "tcp" }] })],
+  ]) {
+    const config = composeConfig();
+    config.services[name] = svc;
+    assert.throws(() => inspectComposeConfig(config),
+      /Unexpected Docker Compose service/, name);
+  }
+  for (const services of [[], "not-an-object", null]) {
+    const config = composeConfig();
+    config.services = services;
+    assert.throws(() => inspectComposeConfig(config), /Expected runner-api/);
+  }
+  const withoutTunnel = composeConfig();
+  delete withoutTunnel.services.cloudflared;
+  assert.equal(inspectComposeConfig(withoutTunnel).status, "passed");
+});
+
+test("Compose tunnel may not mount host secrets or join other namespaces", () => {
+  const changes = [
+    c => { c.services.cloudflared.volumes =
+      [{ type: "bind", source: "/etc", target: "/host-secrets" }]; },
+    c => { c.services.cloudflared.volumes = ["/srv/credentials:/creds:ro"]; },
+    c => { c.services.cloudflared.tmpfs = ["/run"]; },
+    c => { c.services.cloudflared.volumes_from = ["runner-worker"]; },
+    c => { c.services.cloudflared.devices = ["/dev/kvm"]; },
+    c => { c.services.cloudflared.network_mode = "service:runner-worker"; },
+    c => { c.services.cloudflared.pid = "host"; },
+    c => { c.services.cloudflared.ipc = "service:runner-worker"; },
+    c => { c.services.cloudflared.expose = ["8787"]; },
+  ];
+  for (const mutate of changes) {
+    const config = composeConfig();
+    mutate(config);
+    assert.throws(() => inspectComposeConfig(config),
+      /cloudflared: unsafe/, "unexpected tunnel host access");
+  }
+  const harmless = composeConfig();
+  harmless.services.cloudflared.volumes = [];
+  harmless.services.cloudflared.tmpfs = [];
+  assert.equal(inspectComposeConfig(harmless).tunnelServiceChecked, true);
+});
+
+test("Compose runner source mounts are canonical, non-system and disjoint", () => {
+  const cases = [
+    c => { c.services["runner-api"].volumes[0].source = "/"; },
+    c => { c.services["runner-api"].volumes[0].source = "/etc/ssh"; },
+    c => { c.services["runner-api"].volumes[0].source = "/proc/self"; },
+    c => { c.services["runner-worker"].volumes[1].source = "/srv/softwarefactory/workspaces/../other"; },
+    c => { c.services["runner-worker"].volumes[1].source = "/root/private"; },
+    c => { c.services["runner-worker"].environment.RUNNER_HOST_WORK_DIR =
+      c.services["runner-api"].volumes[0].source + "/work"; },
+    c => { c.services["runner-worker"].volumes[1].source =
+      c.services["runner-api"].volumes[0].source + "/work";
+      c.services["runner-worker"].environment.RUNNER_HOST_WORK_DIR =
+        c.services["runner-worker"].volumes[1].source; },
+    c => { c.services["runner-api"].volumes[0].source =
+      c.services["runner-worker"].volumes[1].source + "/data"; },
+  ];
+  for (const mutate of cases) {
+    const config = composeConfig();
+    mutate(config);
+    assert.throws(() => inspectComposeConfig(config),
+      /unsafe|distinct|mount/, "unsafe runner host data/work mounts");
+  }
+  const safe = composeConfig();
+  assert.equal(inspectComposeConfig(safe).dockerSocketInWorkerOnly, true);
+});
+
 test("rootless host preflight checks socket, private directories and daemon SecurityOptions", async () => {
   const calls = [];
   const stat = async name => {

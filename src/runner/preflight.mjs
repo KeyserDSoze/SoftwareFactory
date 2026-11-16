@@ -20,12 +20,22 @@ const safeService = (name, svc) => {
       svc.network_mode === "host" || svc.pid === "host" || svc.ipc === "host")
     fail(name + ": unsafe runtime permissions");
 };
+// Reject obvious host-system bind targets and noncanonical paths. An
+// operator may use /srv or /var/lib for dedicated runner data; symlink and
+// directory ownership checks still require live host preflight on the VM.
+const dangerousHostRoots = ["/", "/etc", "/proc", "/sys", "/dev", "/run",
+  "/tmp", "/root"];
+const canonicalAbsolutePath = value => typeof value === "string" &&
+  path.isAbsolute(value) && !value.includes("\0") &&
+  value === path.resolve(value);
+const safeHostMountSource = value => canonicalAbsolutePath(value) &&
+  !dangerousHostRoots.some(root => value === root || value.startsWith(root + "/"));
+const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
 const mountsFor = svc => {
   if (!Array.isArray(svc.volumes)) fail("Runner service has no explicit mounts");
   for (const volume of svc.volumes) {
-    if (volume?.type !== "bind" || typeof volume.source !== "string" ||
-        !path.isAbsolute(volume.source) || typeof volume.target !== "string" ||
-        !path.isAbsolute(volume.target))
+    if (volume?.type !== "bind" || !safeHostMountSource(volume.source) ||
+        !canonicalAbsolutePath(volume.target))
       fail("Runner service has unsafe bind mounts");
   }
   return svc.volumes;
@@ -44,8 +54,15 @@ export function inspectComposeConfig(config) {
   if (!config || typeof config !== "object" || Array.isArray(config))
     fail("Invalid Compose configuration");
   const svcs = config.services;
-  if (!svcs || typeof svcs !== "object" || !svcs["runner-api"] || !svcs["runner-worker"])
+  if (!svcs || typeof svcs !== "object" || Array.isArray(svcs) ||
+      !Object.hasOwn(svcs, "runner-api") || !Object.hasOwn(svcs, "runner-worker"))
     fail("Expected runner-api and runner-worker services");
+  // This is a security gate for the entire resolved stack, not merely for
+  // the two known services. An ignored privileged sidecar can defeat all
+  // guarantees about ports, mounts and Docker socket access.
+  const known = new Set(["runner-api", "runner-worker", "cloudflared"]);
+  if (Object.keys(svcs).some(name => !known.has(name)))
+    fail("Unexpected Docker Compose service");
   const api = svcs["runner-api"], worker = svcs["runner-worker"];
   safeService("runner-api", api);
   safeService("runner-worker", worker);
@@ -67,6 +84,11 @@ export function inspectComposeConfig(config) {
     fail("runner-api: operator file configured without private directory mount");
   }
   const workspace = worker.environment?.RUNNER_HOST_WORK_DIR;
+  // Distinct host paths prevent a workspace from being used as a mutable
+  // ancestor/child of the API report and evidence directory.
+  if (!safeHostMountSource(apiData.source) ||
+      !safeHostMountSource(workspace) || overlaps(apiData.source, workspace))
+    fail("Runner data/workspace host mounts must be distinct and private");
   if (workerMounts.length !== 3 ||
       !workerMounts.some(v => v.target === "/data" && v.source === apiData.source) ||
       !workerMounts.some(v => v.target === "/run/docker.sock" &&
@@ -92,12 +114,17 @@ export function inspectComposeConfig(config) {
     fail("runner-api: daemon access or worker ports forbidden");
   if (svcs.cloudflared) {
     const tunnel = svcs.cloudflared;
-    if (tunnel.privileged || tunnel.network_mode === "host" ||
+    if (!tunnel || typeof tunnel !== "object" || Array.isArray(tunnel) ||
+        tunnel.privileged || tunnel.network_mode || tunnel.pid || tunnel.ipc ||
         tunnel.cap_add?.length || tunnel.devices?.length ||
         !contains(tunnel.cap_drop, "ALL") ||
         !contains(tunnel.security_opt, "no-new-privileges:true") ||
-        tunnel.volumes?.some(isSocketMount))
-      fail("cloudflared: unsafe runtime permissions");
+        (tunnel.volumes != null &&
+          (!Array.isArray(tunnel.volumes) || tunnel.volumes.length !== 0)) ||
+        (tunnel.tmpfs != null &&
+          (!Array.isArray(tunnel.tmpfs) || tunnel.tmpfs.length !== 0)) ||
+        tunnel.volumes_from?.length || tunnel.expose?.length)
+      fail("cloudflared: unsafe runtime permissions or mounts");
     noPublicPorts("cloudflared", tunnel);
   }
   return { mode: "compose", status: "passed", apiLoopbackOnly: true,
