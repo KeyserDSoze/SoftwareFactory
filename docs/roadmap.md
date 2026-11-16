@@ -544,3 +544,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rifiutare modifiche a `image`, `build.context`, `build.dockerfile` e tutte le altre build options del runner: worker e API devono essere costruiti solo dal checkout e dai due Dockerfile revisionati; vietati comandi/entrypoint, healthcheck e lifecycle hooks sostitutivi.
 - Controllare le variabili di ambiente runtime tramite allowlist delle chiavi del Compose approvato e dei suoi override di credenziali, bloccando `NODE_OPTIONS`, `LD_PRELOAD` e `NODE_PATH`; `RUNNER_DATA_DIR=/data` nei servizi. Anche tunnel con immagine ufficiale e nessun build/entrypoint/hook estraneo.
 - Test Node su override maliziosi con socket montato e config normale; verificare Compose reale con registry opzionale in CI; documentare ADR 0025. Non equivalgono ad attestation di digest o alla prova reale VM Docker rootless, Cloudflare Access e fencing (#2).
+
+
+## v0.2 — Allineamento host/Compose su path e symlink (#69)
+
+- Il preflight host deve imporre path assoluti canonici e non di sistema per le directory dati e workspace, senza sovrapposizioni parent/child. Permettere prefissi simili ma non nested.
+- Verificare via `lstat` ogni componente parent dei due host path e del socket Unix Docker, negando symlink intermedi o segmenti non directory prima del probe del daemon. Controllare owner UID 1000 e permessi leaf come prima.
+- Test Node su nesting, percorsi non canonici, prefissi simili, parent symlink reali e Docker non contattato in caso di errore; ADR 0026. Corsa TOCTOU e attestazione VM/Cloudflare reali rimangono aperte in #2.
