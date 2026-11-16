@@ -25,28 +25,46 @@ export function runnerContainerIdentity(id, step) {
 export function rootlessSecurityOptions(options) {
   return Array.isArray(options) && options.some(option => option === "name=rootless");
 }
-let inspectedHost = null;
-async function defaultDocker(args) {
-  const host = process.env.DOCKER_HOST || "unix:///run/docker.sock";
-  // Never silently inspect an unrelated rootful host Docker daemon.
-  if (host !== "unix:///run/docker.sock" && !/^unix:\/\/\/run\/user\/[0-9]+\/docker\.sock$/.test(host))
+const execDocker = async (args, options) =>
+  (await execFile("docker", args, options)).stdout;
+
+/** Rootless proof is per command, never cached for the lifetime of an
+ * operator process. A daemon can be replaced after listing a container and
+ * before the subsequent inspect or destructive rm. Injected runDocker is a
+ * trusted Node-only test seam, never passed via an API or job payload.
+ */
+export async function runVerifiedRootlessOperatorDocker(args, {
+  host = process.env.DOCKER_HOST || "unix:///run/docker.sock",
+  runDocker = execDocker,
+} = {}) {
+  // Reject remote, rootful, and noncanonical local sockets before running
+  // even the read-only docker info probe.
+  if (host !== "unix:///run/docker.sock" &&
+      !/^unix:\/\/\/run\/user\/[0-9]+\/docker\.sock$/.test(host))
     throw Error("Operator command requires a dedicated rootless Docker socket");
-  const env = { PATH: process.env.PATH, HOME: "/tmp", DOCKER_HOST: host };
-  if (inspectedHost !== host) {
-    const { stdout } = await execFile("docker",
+  const env = {
+    PATH: process.env.PATH || "/usr/bin:/bin",
+    HOME: "/tmp", DOCKER_CONFIG: "/tmp", DOCKER_HOST: host,
+  };
+  try {
+    const raw = await runDocker(
       ["info", "--format", "{{json .SecurityOptions}}"],
-      { timeout: 12_000, maxBuffer: 2_000_000, env });
-    let options;
-    try { options = JSON.parse(stdout); } catch { throw Error("Invalid Docker daemon security options"); }
-    if (!rootlessSecurityOptions(options))
-      throw Error("Docker daemon is not confirmed rootless; orphan cleanup refused");
-    inspectedHost = host;
+      { timeout: 5000, maxBuffer: 4096, env });
+    if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 4096)
+      throw Error("Invalid daemon response");
+    const options = JSON.parse(raw);
+    if (!Array.isArray(options) || options.length > 32 ||
+        options.some(value => typeof value !== "string" || value.length > 256) ||
+        !rootlessSecurityOptions(options))
+      throw Error("Daemon not verified rootless");
+    return await runDocker(args, { timeout: 12_000, maxBuffer: 2_000_000, env });
+  } catch {
+    // Docker CLI stderr may contain host configuration/credentials; never
+    // propagate it into the operator CLI output or runner job evidence.
+    throw Error("Rootless Docker operator command unavailable");
   }
-  const { stdout } = await execFile("docker", args, {
-    timeout: 12_000, maxBuffer: 2_000_000, env,
-  });
-  return stdout;
 }
+const defaultDocker = args => runVerifiedRootlessOperatorDocker(args);
 async function claimExists(dataDir, jobId) {
   try { await lstat(path.join(jobDirectory(dataDir, jobId), ".claim")); return true; }
   catch (error) { if (error.code === "ENOENT") return false; throw error; }
