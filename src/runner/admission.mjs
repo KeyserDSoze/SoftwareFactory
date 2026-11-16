@@ -88,7 +88,7 @@ export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {
 export async function admitRunnerJob({
   dataDir, checked, idempotencyKey = null,
   maxQueued = 4, maxRetained = 100, waitMs = 1500,
-  maxAcceptedPerMinute = 0,
+  maxAcceptedPerMinute = 0, reauthorize = undefined,
 }) {
   if (!Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 100 ||
       !Number.isInteger(maxRetained) || maxRetained < 1 || maxRetained > 100 ||
@@ -98,6 +98,7 @@ export async function admitRunnerJob({
     throw new Error("Invalid runner admission limits");
   const fingerprint = parseIdempotencyKey(idempotencyKey ?? undefined);
   return withAdmissionLock(dataDir, async () => {
+    if (reauthorize) await reauthorize(); // A revoked key cannot use an old lock wait.
     const entries = await readdir(path.join(dataDir, "jobs"), { withFileTypes: true });
     const ids = entries.filter(entry => JOB_ID.test(entry.name)).map(entry => entry.name);
     let active = 0, matching = null;
@@ -115,6 +116,7 @@ export async function admitRunnerJob({
       if (report.state === "queued" || report.state === "running") active++;
       if (maxAcceptedPerMinute > 0) acceptedAtValues.push(report.acceptedAt);
     }
+    if (reauthorize) await reauthorize(); // Scan may take time; fence idempotent replays.
     // Retries are returned *before* capacity checks, even if the queue is full.
     if (matching) {
       if (matching.digest !== checked.digest) throw issue("IDEMPOTENCY_CONFLICT");
@@ -127,6 +129,7 @@ export async function admitRunnerJob({
       acceptedAtValues, Date.now(), maxAcceptedPerMinute);
     if (retryAfter !== null)
       throw Object.assign(issue("RATE_LIMIT"), { retryAfter });
+    if (reauthorize) await reauthorize();
     const id = jobId(), dir = jobDirectory(dataDir, id);
     await mkdir(dir, { mode: 0o700 });
     // If a write fails after mkdir, retain this directory for operator inspection:

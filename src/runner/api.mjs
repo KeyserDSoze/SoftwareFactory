@@ -7,9 +7,11 @@ import { readWorkerHeartbeatForHttp, readDockerExecutionReadinessForHttp } from 
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
+import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
+  apiKeyFile = process.env.RUNNER_API_KEY_FILE,
   allowedOrigins = (process.env.RUNNER_ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean),
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
@@ -20,7 +22,16 @@ export function createRunnerServer({
   repairOperators = process.env.RUNNER_REPAIR_OPERATORS_JSON,
   repairOperatorsFile = process.env.RUNNER_REPAIR_OPERATORS_FILE,
 } = {}) {
-  if (typeof apiKey !== "string" || apiKey.length < 32) throw new Error("RUNNER_API_KEY must contain at least 32 characters");
+  const fileMode = apiKeyFile !== undefined && apiKeyFile !== null && apiKeyFile !== "";
+  if (fileMode && apiKey !== undefined && apiKey !== null && apiKey !== "")
+    throw new Error("Configure only one runner API credential source (RUNNER_API_KEY or RUNNER_API_KEY_FILE)");
+  if (fileMode && (typeof apiKeyFile !== "string" ||
+      !path.isAbsolute(apiKeyFile) || apiKeyFile.includes("\0")))
+    throw new Error("RUNNER_API_KEY_FILE must be an absolute path");
+  if (!fileMode && (typeof apiKey !== "string" || apiKey.length < 32))
+    throw new Error("RUNNER_API_KEY must contain at least 32 characters");
+  if (fileMode && repairOperators)
+    throw new Error("File-backed runner key cannot use inline repair operator registry");
   if (!Number.isInteger(maxAcceptedPerMinute) ||
       maxAcceptedPerMinute < 0 || maxAcceptedPerMinute > 100)
     throw new Error("RUNNER_MAX_ACCEPTED_PER_MINUTE must be an integer between 0 and 100");
@@ -44,6 +55,11 @@ export function createRunnerServer({
   // on every repair request so two API instances can revoke a key immediately.
   const inlineOperatorRegistry = repairOperatorsFile ? null
     : configureRepairOperators(repairOperators, apiKey);
+  const recheckRunnerKey = fileMode ? async authorization => {
+    const latest = await loadRunnerApiKeyFile(apiKeyFile);
+    if (!authenticate(authorization, latest))
+      throw Object.assign(new Error("runner_auth_revoked"), { code: "RUNNER_AUTH_REVOKED" });
+  } : undefined;
   return httpServer(async (req, res) => {
     const origin = req.headers.origin;
     const allowed = origin && allowedOrigins.includes(origin);
@@ -61,13 +77,18 @@ export function createRunnerServer({
     const send = (status, data) => { res.writeHead(status, headers); res.end(JSON.stringify(data)); };
     if (req.method === "OPTIONS") { send(204, {}); return; }
     if (req.url === "/healthz" && req.method === "GET") { send(200, { status: "ok", version: 1 }); return; }
+    let activeRunnerKey = apiKey;
+    if (fileMode) {
+      try { activeRunnerKey = await loadRunnerApiKeyFile(apiKeyFile); }
+      catch { send(503, { error: "runner_auth_unavailable" }); return; }
+    }
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
     if (repairRoute && !repairOperatorsFile && !inlineOperatorRegistry) {
       send(503, { error: "repair_auth_unconfigured" }); return;
     }
     let operatorRegistry = inlineOperatorRegistry;
     if (repairRoute && repairOperatorsFile) {
-      try { operatorRegistry = await loadRepairOperatorsFile(repairOperatorsFile, apiKey); }
+      try { operatorRegistry = await loadRepairOperatorsFile(repairOperatorsFile, activeRunnerKey); }
       catch {
         send(503, { error: "repair_auth_unavailable" }); return;
       }
@@ -75,7 +96,7 @@ export function createRunnerServer({
     const repairOperator = repairRoute
       ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)
       : null;
-    if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, apiKey)) {
+    if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, activeRunnerKey)) {
       send(401, { error: "unauthorized" }); return;
     }
     if (req.method === "GET" && req.url === "/v1/execution-readiness") {
@@ -158,8 +179,11 @@ export function createRunnerServer({
         // Registry may rotate while this request waits for the admission lock.
         // Re-read it at the start of the locked write section, not only here.
         const reauthorize = repairOperatorsFile
-          ? () => reauthorizeRepairMutation(repairOperatorsFile, apiKey,
-            req.headers.authorization, repairOperator.id, action)
+          ? async () => {
+              const latest = fileMode ? await loadRunnerApiKeyFile(apiKeyFile) : activeRunnerKey;
+              await reauthorizeRepairMutation(repairOperatorsFile, latest,
+                req.headers.authorization, repairOperator.id, action);
+            }
           : undefined;
         const result = actionRoute
           ? await advanceRepairSession(dataDir, actionRoute[1], input,
@@ -181,6 +205,7 @@ export function createRunnerServer({
           REPAIR_AUTH_REVOKED: [401, "unauthorized"],
           REPAIR_SCOPE_REVOKED: [403, "operator_scope_denied"],
           REPAIR_AUTH_UNAVAILABLE: [503, "repair_auth_unavailable"],
+          RUNNER_AUTH_UNAVAILABLE: [503, "runner_auth_unavailable"],
         };
         if (codes[error.code]) send(codes[error.code][0], { error: codes[error.code][1] });
         else if (error.code === "ENOENT") send(404, { error: "not_found" });
@@ -212,11 +237,17 @@ export function createRunnerServer({
           const receipt = await admitRunnerJob({
             dataDir, checked, idempotencyKey: req.headers["idempotency-key"],
             maxQueued, maxRetained, waitMs: admissionWaitMs, maxAcceptedPerMinute,
+            reauthorize: recheckRunnerKey
+              ? () => recheckRunnerKey(req.headers.authorization) : undefined,
           });
           send(202, receipt);
         } catch (error) {
           if (error.code === "INVALID_IDEMPOTENCY_KEY")
             send(422, { error: "invalid_idempotency_key" });
+          else if (error.code === "RUNNER_AUTH_REVOKED")
+            send(401, { error: "unauthorized" });
+          else if (error.code === "RUNNER_AUTH_UNAVAILABLE")
+            send(503, { error: "runner_auth_unavailable" });
           else if (error.code === "IDEMPOTENCY_CONFLICT")
             send(409, { error: "idempotency_conflict" });
           else if (error.code === "QUEUE_FULL")
