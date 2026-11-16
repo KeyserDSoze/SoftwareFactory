@@ -99,6 +99,99 @@ test("rootless canary verifies create, daemon configuration, execution and targe
   assert.equal(fake.calls[2][1], "--attach");
 });
 
+test("canary probes rootless mode independently before every Docker command including rm", async () => {
+  const fake = fakeDocker();
+  const observedHosts = [];
+  const result = await runRootlessCanary({
+    image, id, confirmed: true,
+    probeDocker: async ({ host }) => { observedHosts.push(host); return true; },
+    runDocker: fake.runDocker,
+  });
+  assert.equal(result.status, "passed");
+  assert.deepEqual(fake.calls.map(x => x[0]),
+    ["create", "inspect", "start", "inspect", "inspect", "rm"]);
+  assert.deepEqual(observedHosts,
+    Array(fake.calls.length).fill("unix:///run/docker.sock"),
+    "each individual command must have its own fresh rootless proof");
+});
+
+test("rootless lost before first inspect: no start, no unverified rm, manual reconciliation", async () => {
+  const fake = fakeDocker();
+  let checks = 0;
+  await assert.rejects(runRootlessCanary({
+    image, id, confirmed: true,
+    probeDocker: async () => ++checks === 1,
+    runDocker: fake.runDocker,
+  }), /manual investigation required/);
+  assert.equal(checks, 2,
+    "do not run cleanup without first verifying this container's identity");
+  assert.deepEqual(fake.calls.map(x => x[0]), ["create"]);
+});
+
+test("rootless lost before start: no execution and no unsafe cleanup", async () => {
+  const fake = fakeDocker();
+  let checks = 0;
+  await assert.rejects(runRootlessCanary({
+    image, id, confirmed: true,
+    probeDocker: async () => ++checks <= 2,
+    runDocker: fake.runDocker,
+  }), /manual investigation required/);
+  assert.equal(checks, 4, "cleanup still checks rootless independently");
+  assert.deepEqual(fake.calls.map(x => x[0]), ["create", "inspect"]);
+  assert.ok(!fake.calls.some(x => x[0] === "start" || x[0] === "rm"));
+});
+
+test("rootless recovered after a denied start may clean its verified container, but never passes", async () => {
+  const fake = fakeDocker();
+  let checks = 0;
+  await assert.rejects(runRootlessCanary({
+    image, id, confirmed: true,
+    probeDocker: async () => ++checks !== 3,
+    runDocker: fake.runDocker,
+  }), /rootless daemon/);
+  assert.equal(checks, 5);
+  assert.deepEqual(fake.calls.map(x => x[0]),
+    ["create", "inspect", "inspect", "rm"]);
+  assert.ok(!fake.calls.some(x => x[0] === "start"));
+});
+
+test("rootless lost or probe throws immediately before rm: never delete or certify", async () => {
+  for (const denied of [
+    async () => false,
+    async () => { throw Error("Docker secret=never-print, private socket!"); },
+    async () => "true",
+  ]) {
+    const fake = fakeDocker();
+    let checks = 0;
+    await assert.rejects(runRootlessCanary({
+      image, id, confirmed: true,
+      probeDocker: async options => {
+        checks++;
+        assert.equal(options.host, "unix:///run/docker.sock");
+        return checks === 6 ? denied() : true;
+      },
+      runDocker: fake.runDocker,
+    }), err => err.message ===
+      "Rootless canary cleanup failed; manual investigation required");
+    assert.equal(checks, 6);
+    assert.deepEqual(fake.calls.map(x => x[0]),
+      ["create", "inspect", "start", "inspect", "inspect"]);
+    assert.ok(!fake.calls.some(x => x[0] === "rm"));
+  }
+});
+
+test("rootless probe errors are sanitized before first Docker spawn", async () => {
+  let calls = 0;
+  await assert.rejects(runRootlessCanary({
+    image, id, confirmed: true,
+    probeDocker: async () => {
+      throw Error("DOCKER_HOST=private; bearer=super-secret");
+    },
+    runDocker: async () => { calls++; return containerId; },
+  }), error => error.message === "Rootless canary requires a confirmed rootless daemon");
+  assert.equal(calls, 0);
+});
+
 test("canary rejects unsafe Docker inspect and never starts the container", async () => {
   const unsafe = [
     { HostConfig: { ...candidate().HostConfig, NetworkMode: "bridge" } },

@@ -71,6 +71,7 @@ export function buildRootlessCanaryArgs(image, name) {
 }
 
 /** No other command, mount, image, Docker host or code is accepted from CLI.
+ * Probe rootless mode fresh before EACH operation, including cleanup rm.
  * Docker errors are never echoed. Any cleanup failure forces an explicit
  * operator investigation instead of pretending the canary was successful.
  */
@@ -88,6 +89,14 @@ export async function runRootlessCanary({
   const env = { PATH: process.env.PATH || "/usr/bin:/bin",
     HOME: "/tmp", DOCKER_CONFIG: "/tmp", DOCKER_HOST: host };
   const command = async (argv, timeout = 8000) => {
+    // Just-in-time guard on EVERY operation: the Docker daemon behind a
+    // stable socket path can be replaced between create, inspect, start, rm.
+    // Never cache a previous rootless check, even for read-only commands or
+    // cleanup. Fail closed without copying Docker probe diagnostics.
+    let rootless = false;
+    try { rootless = (await probeDocker({ host })) === true; }
+    catch { /* A failed probe never authorizes a Docker command. */ }
+    if (!rootless) fail("requires a confirmed rootless daemon");
     try {
       const output = await runDocker(argv, { timeout, maxBuffer: MAX_STDOUT, env });
       if (typeof output !== "string" || Buffer.byteLength(output, "utf8") > MAX_STDOUT)
@@ -95,7 +104,6 @@ export async function runRootlessCanary({
       return output;
     } catch { fail("Docker operation failed"); }
   };
-  if ((await probeDocker({ host })) !== true) fail("requires a confirmed rootless daemon");
   let containerId = null, created = false, verified = false, failure = null;
   let success = false;
   const inspect = async () => {
