@@ -58,7 +58,7 @@ test("malformed, wrong-label, foreign-name and changed-ID containers cannot be r
     assert.equal(await cleanupTimedOutRunnerContainer(jobId, step, {
       probeDocker: async () => true,
       runDocker: async args => {
-        calls.push(args); return args[2] === identity.name ? snapshot() : body;
+        calls.push(args); return args.at(-1) === identity.name ? snapshot() : body;
       },
     }), false);
     assert.deepEqual(calls.map(x => x[0]), ["inspect", "inspect"]);
