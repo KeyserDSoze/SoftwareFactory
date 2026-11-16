@@ -218,3 +218,8 @@ Nel file registry della #31, la lettura all'ingresso della richiesta autorizza l
 ### Verifica di tutti i job in admission e replay corrente (#34)
 
 Le quote locali e la deduplicazione della #20 ora usano `verifyJobEvidence` per **ogni** job conservato, entro il lock POSIX: un journal sibling invalido o uno stato terminale alterato non può far passare una nuova ammissione né un replay. In caso di collisione con il breve intervallo journal fsync → report rename del worker, sono ammesse due nuove letture bounded; la corruzione persistente rende l'admission indisponibile con 503 e non provoca cleanup. Il replay dello stesso UUID+digest ritorna lo stato verificato del report esistente, senza inventare `queued`. La SPA considera la receipt solo un binding al job e richiede sempre verifica del report intero prima di affermare che un test sia passato. Il controllo è locale e non sostituisce firma off-host, fencing host o isolamento tenant (#2).
+
+
+### Budget globale di accettazione dei job (#35)
+
+La serializzazione `/data/jobs/.admission` supporta una policy opzionale di **nuove ammissioni negli ultimi 60 secondi** (`RUNNER_MAX_ACCEPTED_PER_MINUTE`, default 0). La scansione già verificata in #34 rende disponibili `acceptedAt` senza indice secondario: le repliche sul medesimo volume serializzano il conteggio, i replay idempotenti non consumano un nuovo slot e i job terminali recenti rimangono nel budget. Su soglia raggiunta HTTP 429 `rate_limited` con `Retry-After`, nessun nuovo record. Timestamp invalidi falliscono con integrità, quelli futuri contano conservativamente. Questo è un controllo globale su volume conservato, non RBAC tenant/IP né un sistema di rate limit distribuito (ancora #2).

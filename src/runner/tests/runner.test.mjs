@@ -10,7 +10,7 @@ import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
 import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport } from "../evidence.mjs";
-import { withAdmissionLock } from "../admission.mjs";
+import { withAdmissionLock, admissionRateLimitRetryAfter } from "../admission.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
 const origin = "http://localhost:5173";
@@ -224,6 +224,86 @@ test("two independent API instances never exceed maxQueued under distinct simult
   } finally {
     await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("global minute rate gate expires at 60 seconds and counts future timestamps conservatively", () => {
+  const now = Date.parse("2026-11-16T12:00:00.000Z");
+  const iso = offset => new Date(now + offset).toISOString();
+  assert.equal(admissionRateLimitRetryAfter([iso(-60_000), iso(-30_000)],
+    now, 2), null, "entry exactly one minute old expires");
+  assert.equal(admissionRateLimitRetryAfter([iso(-50_000), iso(-1_000)],
+    now, 2), 10);
+  assert.equal(admissionRateLimitRetryAfter([iso(-50_000), iso(-1_000)],
+    now + 10_000, 2), null);
+  assert.equal(admissionRateLimitRetryAfter([iso(120_000)], now, 1), 60,
+    "clock drift must not evade the limit; HTTP hint remains bounded");
+  assert.equal(admissionRateLimitRetryAfter(["garbage"], now, 0), null,
+    "opt-out preserves legacy behavior");
+  for (const bad of ["garbage", "2026-11-16T12:00:00Z",
+    "2026-13-16T12:00:00.000Z", null])
+    assert.throws(() => admissionRateLimitRetryAfter([bad], now, 1),
+      { code: "ADMISSION_INTEGRITY" });
+  for (const bad of [-1, 1.5, 101, NaN])
+    assert.throws(() => createRunnerServer({ apiKey: key, allowedOrigins: [origin],
+      maxAcceptedPerMinute: bad }), /RUNNER_MAX_ACCEPTED_PER_MINUTE/);
+});
+
+test("minute admission rate is global across two APIs, while idempotent replay is free", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-runner-rate-"));
+  const work = await mkdtemp(path.join(tmpdir(), "sf-runner-rate-work-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir,
+    maxQueued: 8, maxRetained: 10, maxAcceptedPerMinute: 2,
+  }));
+  try {
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const submit = (index, requestKey, payload = job()) => fetch(urls[index] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(payload),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json", "Idempotency-Key": requestKey },
+    });
+    const keys = Array.from({ length: 6 }, () => randomUUID());
+    const response = await Promise.all(keys.map((k, i) => submit(i % 2, k)));
+    const receipts = await Promise.all(response.map(async (r, i) =>
+      ({ status: r.status, data: await r.json(), key: keys[i], retryAfter: r.headers.get("retry-after") })));
+    const allowed = receipts.filter(r => r.status === 202);
+    const denied = receipts.filter(r => r.status === 429);
+    assert.equal(allowed.length, 2, "global cap across both API instances");
+    assert.equal(denied.length, 4);
+    for (const rejected of denied) {
+      assert.equal(rejected.data.error, "rate_limited");
+      assert.ok(Number(rejected.retryAfter) >= 1 && Number(rejected.retryAfter) <= 60);
+    }
+    assert.equal((await readdir(path.join(dataDir, "jobs"))).filter(n => !n.startsWith(".")).length, 2);
+    const first = allowed[0];
+    const replay = await submit(1, first.key);
+    assert.equal(replay.status, 202, "idempotent retry precedes minute gate");
+    assert.equal((await replay.json()).id, first.data.id);
+    const conflicting = await submit(0, first.key, { ...job(), label: "Mutated replay" });
+    assert.equal(conflicting.status, 409, "same idempotency key with altered source still conflicts");
+    assert.equal((await conflicting.json()).error, "idempotency_conflict");
+    for (const item of allowed) {
+      const complete = await executeJob(item.data.id, { dataDir, workspaceRoot: work,
+        executeStep: async plan => ({ step: "dotnet-build", state: "passed",
+          exitCode: 0, durationMs: 1, image: plan.image, stdout: "", stderr: "" }),
+      });
+      assert.equal(complete.state, "passed");
+    }
+    const limitedAfterCompletion = await submit(0, randomUUID());
+    assert.equal(limitedAfterCompletion.status, 429,
+      "recent terminal jobs still count, even though no slot is active");
+    assert.equal((await limitedAfterCompletion.json()).error, "rate_limited");
+    const again = await submit(1, first.key);
+    assert.equal(again.status, 202);
+    assert.equal((await again.json()).state, "passed");
+    assert.equal((await readdir(path.join(dataDir, "jobs"))).filter(n => !n.startsWith(".")).length,
+      2, "no new job directory on rate rejection");
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(work, { recursive: true, force: true });
   }
 });
 

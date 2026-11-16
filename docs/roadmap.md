@@ -302,3 +302,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Retry breve in caso di transizione journal→report in corso; non recuperare o cancellare automaticamente evidenze. Test con due API e journal/report falsificati/troncati, più verifica della quota.
 - Receipt idempotente con ID/digest immutati ma stato del job verificato corrente; browser accetta enum valido ma richiede comunque GET e controlli build/test prima di qualsiasi approvazione.
 - Rimangono #2: trust anchor off-host, storage transazionale vero, fencing multi-host, limiti tenant e collaudo VM rootless/Cloudflare reali.
+
+
+## v0.2 — Rate limit globale per job ammessi (#35)
+
+- Limite opzionale `RUNNER_MAX_ACCEPTED_PER_MINUTE` (default 0 disattivato, 1–100 abilitato) su rolling 60s, condiviso via lock POSIX fra due API, su job nuovi anche se i vecchi sono terminati.
+- Dopo verifica completa journal/report, conservare la precedenza di replay valido (202)/conflitto (409), poi quote di coda e rate (429 + `Retry-After` 1–60s); timestamp errati => 503; config invalida => startup fail-closed.
+- Suite Node di concorrenza su due server e scadenza deterministica della finestra; config Compose/.env e guide aggiornate.
+- Restano in #2: quota per tenant/identità, rate distributed su storage esterno, server rootless/Cloudflare reali e attestation off-host.

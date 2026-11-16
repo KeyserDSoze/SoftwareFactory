@@ -35,6 +35,28 @@ async function verifiedAdmissionReport(dataDir, id) {
   throw issue("ADMISSION_INTEGRITY");
 }
 
+/** Rate limiting uses only verified retained job timestamps. Expired jobs no
+ * longer count; a future acceptedAt is counted conservatively, never silently
+ * dropped. This is global per shared volume, not a tenant/IP rate limiter.
+ * Returns null for capacity, else bounded Retry-After seconds.
+ */
+export function admissionRateLimitRetryAfter(acceptedAtValues, nowMs, maxPerMinute) {
+  if (maxPerMinute === 0) return null;
+  const recent = [];
+  for (const acceptedAt of acceptedAtValues) {
+    if (typeof acceptedAt !== "string" ||
+        !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(acceptedAt))
+      throw issue("ADMISSION_INTEGRITY");
+    const at = Date.parse(acceptedAt);
+    if (!Number.isFinite(at) || new Date(at).toISOString() !== acceptedAt)
+      throw issue("ADMISSION_INTEGRITY");
+    if (at > nowMs - 60_000) recent.push(at);
+  }
+  if (recent.length < maxPerMinute) return null;
+  return Math.min(60, Math.max(1,
+    Math.ceil((Math.min(...recent) + 60_000 - nowMs) / 1000)));
+}
+
 export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {
   const root = path.join(dataDir, "jobs");
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -59,16 +81,20 @@ export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {
 export async function admitRunnerJob({
   dataDir, checked, idempotencyKey = null,
   maxQueued = 4, maxRetained = 100, waitMs = 1500,
+  maxAcceptedPerMinute = 0,
 }) {
   if (!Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 100 ||
       !Number.isInteger(maxRetained) || maxRetained < 1 || maxRetained > 100 ||
-      !Number.isInteger(waitMs) || waitMs < 0 || waitMs > 10000)
+      !Number.isInteger(waitMs) || waitMs < 0 || waitMs > 10000 ||
+      !Number.isInteger(maxAcceptedPerMinute) ||
+      maxAcceptedPerMinute < 0 || maxAcceptedPerMinute > 100)
     throw new Error("Invalid runner admission limits");
   const fingerprint = parseIdempotencyKey(idempotencyKey ?? undefined);
   return withAdmissionLock(dataDir, async () => {
     const entries = await readdir(path.join(dataDir, "jobs"), { withFileTypes: true });
     const ids = entries.filter(entry => JOB_ID.test(entry.name)).map(entry => entry.name);
     let active = 0, matching = null;
+    const acceptedAtValues = [];
     for (const id of ids) {
       // Every retained sibling is verified, even if a matching retry key was
       // already found. A forged terminal state must never free quota.
@@ -80,6 +106,7 @@ export async function admitRunnerJob({
         matching = report;
       }
       if (report.state === "queued" || report.state === "running") active++;
+      if (maxAcceptedPerMinute > 0) acceptedAtValues.push(report.acceptedAt);
     }
     // Retries are returned *before* capacity checks, even if the queue is full.
     if (matching) {
@@ -89,6 +116,10 @@ export async function admitRunnerJob({
       return { id: matching.id, digest: matching.digest, state: matching.state };
     }
     if (ids.length >= maxRetained || active >= maxQueued) throw issue("QUEUE_FULL");
+    const retryAfter = admissionRateLimitRetryAfter(
+      acceptedAtValues, Date.now(), maxAcceptedPerMinute);
+    if (retryAfter !== null)
+      throw Object.assign(issue("RATE_LIMIT"), { retryAfter });
     const id = jobId(), dir = jobDirectory(dataDir, id);
     await mkdir(dir, { mode: 0o700 });
     // If a write fails after mkdir, retain this directory for operator inspection:

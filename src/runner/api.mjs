@@ -12,12 +12,16 @@ export function createRunnerServer({
   allowedOrigins = (process.env.RUNNER_ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean),
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
+  maxAcceptedPerMinute = Number(process.env.RUNNER_MAX_ACCEPTED_PER_MINUTE ?? 0),
   maxRetained = 100,
   admissionWaitMs = 1500,
   repairOperators = process.env.RUNNER_REPAIR_OPERATORS_JSON,
   repairOperatorsFile = process.env.RUNNER_REPAIR_OPERATORS_FILE,
 } = {}) {
   if (typeof apiKey !== "string" || apiKey.length < 32) throw new Error("RUNNER_API_KEY must contain at least 32 characters");
+  if (!Number.isInteger(maxAcceptedPerMinute) ||
+      maxAcceptedPerMinute < 0 || maxAcceptedPerMinute > 100)
+    throw new Error("RUNNER_MAX_ACCEPTED_PER_MINUTE must be an integer between 0 and 100");
   if (!allowedOrigins.length || allowedOrigins.some(origin => !/^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/localhost(?::\d+)?$|^http:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin))) {
     throw new Error("Set explicit RUNNER_ALLOWED_ORIGINS (HTTPS or localhost), no wildcard");
   }
@@ -178,7 +182,7 @@ export function createRunnerServer({
         try {
           const receipt = await admitRunnerJob({
             dataDir, checked, idempotencyKey: req.headers["idempotency-key"],
-            maxQueued, maxRetained, waitMs: admissionWaitMs,
+            maxQueued, maxRetained, waitMs: admissionWaitMs, maxAcceptedPerMinute,
           });
           send(202, receipt);
         } catch (error) {
@@ -188,7 +192,10 @@ export function createRunnerServer({
             send(409, { error: "idempotency_conflict" });
           else if (error.code === "QUEUE_FULL")
             send(429, { error: "queue_full" });
-          else if (error.code === "ADMISSION_BUSY" || error.code === "ADMISSION_INTEGRITY") {
+          else if (error.code === "RATE_LIMIT") {
+            res.writeHead(429, { ...headers, "Retry-After": String(error.retryAfter) });
+            res.end(JSON.stringify({ error: "rate_limited" }));
+          } else if (error.code === "ADMISSION_BUSY" || error.code === "ADMISSION_INTEGRITY") {
             res.writeHead(503, { ...headers, "Retry-After": "2" });
             res.end(JSON.stringify({ error: error.code === "ADMISSION_BUSY" ?
               "admission_busy" : "admission_integrity" }));

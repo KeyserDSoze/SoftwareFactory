@@ -304,3 +304,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Prima di contare la quota o rispondere a qualsiasi replay, l'admission deve verificare il **journal completo di ciascun job UUID conservato**. Un report terminale falsificato, journal troncato/corrotto o sibling incoerente => `503 admission_integrity`, niente nuovi job e niente idempotent receipt. Non fidarsi del solo campo `report.state`.
 - Tollerare soltanto un breve retry bounded quando il worker sta fsync-ando `evidence.jsonl` prima del rename atomico `report.json`; corruzione persistente rimane fail-closed e richiede riconciliazione manuale. La verifica avviene dentro il lock POSIX e non fornisce attestation off-host.
 - La receipt di un POST nuovo ha stato `queued`; il replay con la stessa Idempotency-Key restituisce lo **stato corrente verificato** `queued/running/passed/failed/incomplete` del job già esistente. Il browser verifica UUID/digest/enum e deve sempre eseguire GET report e validazione degli step prima di affermare un pass o approvare repair.
+
+
+## Rate limit globale delle ammissioni (#35)
+
+- `RUNNER_MAX_ACCEPTED_PER_MINUTE`: intero 0–100, default 0 (disabled per compatibilità). Validare **all'avvio**; configurazione non numerica, negativa o frazionaria deve impedire il bootstrap dell'API. Compose e `.env.example` mantengono il valore per le sole API.
+- Nel lock `jobs/.admission`, prima valutare **tutte** le prove SHA-256 del job (#34), poi cercare replay della stessa chiave+digest; un replay valido restituisce 202 anche se il rate è esaurito, una chiave riusata per un payload diverso produce sempre 409.
+- Per nuove accettazioni, contare gli `acceptedAt` ISO canonici degli ultimi 60s **inclusi i job terminati** conservati; timestamp non valido (modalità rate attiva) => `503 admission_integrity`. Timestamp futuri non permettono bypass: contano conservativamente. Raggiunto il limite => `429 rate_limited` + `Retry-After` bounded 1–60s, nessun file/journal aggiunto.
+- È solo un limite **globale** sullo stesso volume POSIX, non per tenant/IP/operatore. Il cleanup manuale o volumi non condivisi possono aggirarlo; la #2 richiede auth/quotas e fencing realmente distribuiti.
