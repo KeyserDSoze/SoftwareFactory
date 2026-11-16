@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
-import { readWorkerHeartbeat, readDockerExecutionReadiness } from "./heartbeat.mjs";
+import { readWorkerHeartbeat, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -82,7 +82,7 @@ export function createRunnerServer({
       // API never opens the Docker socket. It verifies the last daemon result
       // measured by the worker, not container execution or remote attestation.
       try {
-        await readDockerExecutionReadiness(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
+        await readDockerExecutionReadinessForHttp(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
         send(200, { status: "ready", worker: "responsive", docker: "rootless" });
       } catch {
         res.writeHead(503, { ...headers, "Retry-After": "5" });

@@ -175,3 +175,6 @@ La prova richiede flag di isolamento, inspect, runtime e cleanup senza risorse r
 ## Addendum — clock post-I/O per la readiness (#43, 16 novembre 2026)
 
 Una regressione CI su due API e worker heartbeat ha mostrato che un record nuovo, pubblicato tra l'inizio del GET e la `await readFile`, poteva essere rifiutato come timestamp futuro: la execution-readiness passava al lettore un `Date.now()` acquisito troppo presto. La correzione non rilassa le policy: la prima validazione usa un clock acquisito **dopo** l'apertura/lettura e il controllo TTL dell'ultimo probe usa anch'esso un istante post-lettura. L'argomento `nowMs` resta un clock fissato esplicitamente per test negativi. La suite stressa due API mentre il worker pubblica heartbeat veri ogni 20ms; non è una prova di isolamento Docker rootless né attestation off-host (#2).
+
+
+L'endpoint HTTP della #43 impiega inoltre al massimo tre verifiche **completamente autonome** del record heartbeat con un intervallo di 15ms tra i tentativi quando una revisione viene sostituita in concorrenza. Non memorizza mai un `ready` da uno snapshot precedente e non modifica i file: l'unico 200 consentito richiede tutti i controlli su un record valido durante lo stesso tentativo; l'incoerenza persistente conserva 503.

@@ -153,8 +153,22 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
     const beforeStress = await readWorkerHeartbeat(dataDir);
     for (let attempt = 0; attempt < 80; attempt++) {
       const ready = await get(attempt % 2, "/v1/execution-readiness");
-      assert.equal(ready.status, 200,
-        "positive daemon readiness must remain valid during heartbeat renames");
+      if (ready.status !== 200) {
+        // Sanitized failure context only: no API keys, sockets or identifiers.
+        let state = null, individuallyValid = false;
+        try {
+          const value = await readWorkerHeartbeat(dataDir);
+          state = { rootless: value.docker?.rootless,
+            heartbeatAgeMs: Date.now() - Date.parse(value.updatedAt),
+            probeAgeMs: value.docker?.checkedAt === null ? null
+              : Date.now() - Date.parse(value.docker.checkedAt) };
+          individuallyValid = await readDockerExecutionReadiness(dataDir).then(
+            () => true, () => false);
+        } catch { state = { unreadable: true }; }
+        assert.fail("positive daemon readiness had transient 503: " +
+          JSON.stringify({ status: ready.status, state, individuallyValid }));
+      }
+      assert.equal(ready.status, 200);
       if (attempt % 8 === 0) await sleep(4);
     }
     const afterStress = await readWorkerHeartbeat(dataDir);

@@ -369,3 +369,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `readDockerExecutionReadiness` non deve congelare `Date.now()` prima di aprire il file heartbeat: il timer worker può fare un rename atomico durante `await readWorkerHeartbeat`. Leggere prima il file, lasciar validare `updatedAt` dal clock rilevato **dopo la read**, poi confrontare `docker.checkedAt` con `Date.now()` recente. Con `nowMs` iniettato nei test usare lo **stesso** tempo fisso per entrambe le verifiche.
 - Nessun grace che permetta timestamp futuri, manomissioni, probe rootful o scaduti. Testare molte GET concorrenti di due API mentre il worker aggiorna davvero ogni 20ms; 200 stabile per probe positivo, 503 per prova invalida. Non è attestazione della VM o sincronizzazione distribuita.
+
+
+## Riletture fail-closed dell'execution readiness HTTP (#43)
+
+- `GET /v1/execution-readiness` usa al massimo tre letture/verifiche **integrali** di heartbeat + probe daemon, separate da 15ms, se una lettura è incoerente durante un cambio revisione. Ogni tentativo deve soddisfare **da solo** tutti i check owner/permissions/schema/ISO/TTL/rootless; nessuna risposta parziale, stato cached `ready` o bypass del check Docker. Tre rifiuti consecutivi => HTTP 503 `docker_unavailable`.
+- Gli heartbeat devono essere validati contro il clock **post-I/O**; gli eventuali failure log dei test possono riportare solo rootless booleano ed età dei timestamp, non token, UUID, file path o output Docker. Una VM rootless reale rimane da verificare (#2).

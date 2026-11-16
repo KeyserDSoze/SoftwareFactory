@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { atomicWrite } from "./common.mjs";
@@ -89,6 +90,21 @@ export async function readDockerExecutionReadiness(dataDir, maxAgeMs = 30_000, n
       now - parseTime(record.docker.checkedAt) > maxAgeMs)
     throw stale();
   return true;
+}
+
+/** HTTP readiness must never accept an inconsistent snapshot. The worker
+ * periodically renames its file and publishes independent daemon probe state;
+ * a few bounded FULL re-verifications can bridge a transient revision switch.
+ * Persistent stale, rootful, missing or corrupt heartbeats still return 503.
+ */
+export async function readDockerExecutionReadinessForHttp(dataDir, maxAgeMs = 30_000) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await readDockerExecutionReadiness(dataDir, maxAgeMs); }
+    catch (error) {
+      if (attempt === 2) throw error;
+      await sleep(15);
+    }
+  }
 }
 
 /** Two non-overlapping timers independent of runWorker's long Docker await.
