@@ -7,6 +7,7 @@ import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 import { withAdmissionLock } from "./admission.mjs";
 import { startWorkerHeartbeat } from "./heartbeat.mjs";
 import { readRunnerInput } from "./input.mjs";
+import { rememberStartedJob, selectNextQueuedJob } from "./scheduler.mjs";
 
 /** Redact results before either report.json or the evidence journal sees them. */
 function safeStepResult(value) {
@@ -167,6 +168,7 @@ export async function runWorker({
     try { entries = await readdir(path.join(dataDir, "jobs")); }
     catch(e) { if(e.code !== "ENOENT") console.error("Queue read error:", e.message); }
     const queued = [];
+    const lastStartedByTenant = new Map();
     const retentionHours = Math.min(168, Math.max(1, Number(process.env.RUNNER_RETENTION_HOURS || "24") || 24));
     const expireBefore = Date.now() - retentionHours * 60 * 60 * 1000;
     for (const id of entries) {
@@ -192,8 +194,12 @@ export async function runWorker({
           }
           continue;
         }
+        // Only verified, retained reports can influence tenant fairness.
+        // Claimed/running jobs already have startedAt and count as service.
+        rememberStartedJob(lastStartedByTenant, report);
         // Claimed queued jobs must not starve ready jobs.
-        if (report.state === "queued" && !claimed) queued.push({ id, acceptedAt: report.acceptedAt });
+        if (report.state === "queued" && !claimed)
+          queued.push({ id, acceptedAt: report.acceptedAt, tenantId: report.tenantId });
         if (report.state === "running" && !claimed) {
           // The report may have completed between the first read and lock check.
           // Reacquire an exclusive claim and re-read under it before failing.
@@ -201,12 +207,12 @@ export async function runWorker({
         }
       } catch { /* malformed entry not executable */ }
     }
-    queued.sort((a, b) => a.acceptedAt.localeCompare(b.acceptedAt));
-    if (queued.length) {
-      try { await executeQueuedJob(queued[0].id, { dataDir, workspaceRoot }); }
+    const next = selectNextQueuedJob(queued, lastStartedByTenant);
+    if (next) {
+      try { await executeQueuedJob(next.id, { dataDir, workspaceRoot }); }
       catch(e) {
-        console.error("Failed to handle job " + queued[0].id + ": " + scrub(e.message));
-        try { await rejectQueuedJob(dataDir, queued[0].id); }
+        console.error("Failed to handle job " + next.id + ": " + scrub(e.message));
+        try { await rejectQueuedJob(dataDir, next.id); }
         catch { /* corrupt or incomplete ledger is never repaired silently */ }
       }
     } else await new Promise(resolve => setTimeout(resolve, pollMs));

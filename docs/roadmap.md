@@ -452,3 +452,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `executeClaimedJob` classifica come `incomplete` le eccezioni di workspace/planner/test-runner senza esito di test codice verificato, anche dopo `started`, e non salva l'errore grezzo nei report.
 - Preservare i veri `failed` da ricevute di test, journal `started → finished`, cleanup, assenza di auto retry e rifiuto del repair AI su `incomplete`. Test Node e API HTTP con eventi/receipt reali.
 - #2 rimane aperta per VM Docker rootless + Cloudflare, identità tenant federata, fencing e trust anchor indipendente.
+
+
+## v0.2 — Fair scheduling multi-tenant senza storage ulteriore (#56)
+
+- Derivare ultimo servizio per tenant dai `startedAt` dei report già verificati e conservati; scegliere prima tenant mai serviti, poi quelli serviti meno recentemente, FIFO tra job di uno stesso tenant. UUID tie break.
+- Job `queued` claimed esclusi, report terminali/running con `startedAt` validi utilizzati, rejected senza avvio non contati. Gruppo legacy FIFO globale in assenza di tenant, quote/admission/claim e classificazione esiti invariati.
+- Node test unitario e integrazione worker con giornali SHA, A-B-A-B-A, claim, legacy e no retry. ADR 0013; fairness best-effort su volume POSIX singolo, non SLA o fencing multi-host. #2 aperta per VM rootless e Cloudflare/IAM/attestazione.

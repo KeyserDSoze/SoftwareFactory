@@ -281,3 +281,9 @@ La [#54](https://github.com/KeyserDSoze/SoftwareFactory/issues/54) elimina un fa
 ## Avanzamento #55 — errori infrastrutturali dopo started (16 novembre 2026)
 
 La [#55](https://github.com/KeyserDSoze/SoftwareFactory/issues/55) estende la correzione della #54: eccezioni di workspace, piano o invocazione del runner verificatesi dopo `started` ma senza un vero fallimento di test verificato chiudono il job con `incomplete`, mai con un falso `failed`. Gli eventi append-only `accepted → started → finished` restano verificabili; report, journal e messaggi non contengono i dettagli delle eccezioni né segreti. I test di codice con un reale exit code non-zero continuano a essere `failed`. Nessun retry automatico o repair AI per `incomplete`; rimane aperta #2 per isolamento VM rootless e attestazione indipendente.
+
+
+---
+## Avanzamento #56 — fairness multi-tenant del worker (16 novembre 2026)
+
+I limiti di ammissione per tenant della #52 non garantivano una selezione equa dei job: il worker consumava una sola coda FIFO globale. La [#56](https://github.com/KeyserDSoze/SoftwareFactory/issues/56) seleziona ora un turno per il tenant meno recentemente servito fra i report conservati con evidenze hash-chain verificate; un tenant mai servito viene preferito e ogni tenant mantiene FIFO per data di accettazione. La cronologia deriva dai `startedAt` realmente registrati, non da memoria volatile né da nuovi contatori controllabili dal client. Test Node verificano A-B-A-B-A, claim, storico, assenza di retry e compatibilità con coda legacy FIFO. È scheduling best-effort sullo stesso volume POSIX, non orchestration multi-host o VM rootless attestata: #2 resta aperta.

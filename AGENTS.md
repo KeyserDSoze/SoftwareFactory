@@ -461,3 +461,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `executeClaimedJob` deve produrre `incomplete` per eccezioni non trasformate in una ricevuta di test fallito, anche se `started` è già stato scritto. Non mettere `error.message`, sorgenti, percorsi host o secret in report/evidence; summary generica, journal `finished` e cleanup `finally` obbligatori.
 - `failed` resta per la normale ricevuta di step eseguito che riporta `state=failed` e un exitCode concreto (con distinzione già esistente per gli errori infrastrutturali), non per workspace/planner/eccezioni Docker senza risposta. Job `incomplete` terminali non sono riavviati e il repair coordinator li rifiuta.
 - Test Node su errore workspace/plan/step, report e export HTTP con `started/finished`, no retry, confronto con vero test fallito. Non cambiare il recovery di `running` senza claim e non dichiarare il runner rootless/attested (#2).
+
+
+## Fair scheduling multi-tenant su report verificati (#56)
+
+- Il worker conserva FIFO per `acceptedAt` all'interno di ogni `tenantId`, ma fra tenant usa `selectNextQueuedJob`: tenant senza esecuzioni nei report conservati prima, quindi il tenant con `startedAt` più vecchia (ultimo servizio). Solo report verificati tramite `verifyJobEvidence` e non rimossi per retention alimentano `rememberStartedJob`; job con `.claim` non sono candidati, ma `running` già iniziati contribuiscono alla cronologia.
+- I job legacy senza `tenantId` sono un gruppo distinto; in assenza totale di tenant il FIFO globale preesistente rimane invariato. Pareggi per `acceptedAt` risolti per UUID. I `queued` rifiutati senza `startedAt` non contano come servizio. Non persistere nuovi contatori in RAM o file, non fidarsi di `tenantId` nel payload client e non bypassare claim o journal hash-chain.
+- Test Node unitari + polling con journal reali per ordine A-B-A-B-A, job claimed, legacy FIFO e stati terminali. È fairness best-effort sul singolo volume POSIX e solo sulla retention dei report: nessuna promessa di SLA, fencing multi-host, rootless VM, credenziali cloud o attestazione off-host (#2). ADR 0013.
