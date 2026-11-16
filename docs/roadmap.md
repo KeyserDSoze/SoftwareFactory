@@ -466,3 +466,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Invocare `probeRootlessDocker` obbligatoriamente e just-in-time in `runDockerStep` per ogni step reale, compresa preparazione npm; negare Docker senza `true` esatto. Nessun risultato `passed`, né leakage del messaggio originale quando manca il daemon.
 - Verifiche Node su no-spawn rootful/probe fallito, positivo, secondo step dopo rootless loss; job terminale `incomplete` con journal hash-chain e AI repair negato. Nessun bypass configurabile dal payload utente.
 - Gli smoke Docker/Chromium/fullstack su GitHub hosted sono rootful per definizione e usano una seam test Node esplicita nei soli script CI (CI/GITHUB_ACTIONS, uid nonroot), senza modificare il worker di produzione. ADR 0014; restano rootless VM reale e attestazione off-host nella #2.
+
+
+## v0.2 — Timeout: cleanup Docker vincolato a ID immutabile (#58)
+
+- Sostituire `rm -f <name>` con due inspect vincolate a nome completo, ID completo e tutte le label del job, seguite da secondo probe rootless e rimozione per ID verificato soltanto.
+- Se esiste un dubbio (nome riassegnato, falso container, rootful, risposta non valida, Docker non disponibile) non cancellare e richiedere la procedura operatore #21. Attendere il tentativo bounded prima di finalizzare timeout/claim anche senza evento `close`.
+- Test Node su casi positivi/negativi, perdita del daemon, SIGKILL e mancata notifica; mantenere la CI Docker rootful distinta dal test reale VM rootless. ADR 0015; #2 ancora aperta.
