@@ -35,7 +35,7 @@ function safeIdentity(container, name, id) {
   return container && container.Id === id && CONTAINER_ID.test(id) &&
     container.Name === "/" + name && container.Config?.Labels?.[LABEL] === name;
 }
-function safeConfig(container, name, id) {
+export function safeConfig(container, name, id) {
   if (!safeIdentity(container, name, id)) return false;
   const config = container.Config, host = container.HostConfig;
   return config.User === "65534:65534" &&
@@ -161,7 +161,12 @@ async function main(args) {
     fail("usage: node scripts/rootless-canary.mjs --image=node@sha256:<digest> --confirm");
   if (process.getuid?.() === 0) fail("refuses root operator identity");
   const image = args.find(x => x.startsWith("--image=")).slice("--image=".length);
-  const result = await runRootlessCanary({ image, confirmed: true });
+  // Report the non-secret UUID before Docker create. If the daemon disappears
+  // after create, this ID is the operator's recovery handle; never log Docker
+  // stderr, token material, or the entire container inspect response.
+  const runId = randomUUID();
+  process.stderr.write("ROOTLESS_CANARY_ID=" + runId + "\n");
+  const result = await runRootlessCanary({ image, confirmed: true, id: runId });
   process.stdout.write(JSON.stringify(result) + "\n");
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
