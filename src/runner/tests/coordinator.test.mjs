@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, open, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
-import { jobDirectory, readReport } from "../common.mjs";
+import { atomicWrite, jobDirectory, readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
-import { beginRepairSession, getRepairSession, verifyRepairSession } from "../coordinator.mjs";
+import { beginRepairSession, getRepairSession, verifyRepairSession,
+  isPrivateRepairSessionFile, isRotatedRepairSessionFile } from "../coordinator.mjs";
 
 const apiKey = "runner-integration-key-abcdefghijklmnopqrstuvwxyz";
 const editorKey = "editor-key-abcdefghijklmnopqrstuvwxyz1234567890";
@@ -104,6 +105,72 @@ test("first checkpoint reuses the exact session timestamp across a simulated mil
     assert.equal(stored.events[0].at, stored.createdAt);
     assert.equal(verifyRepairSession(stored).state, "awaiting_patch");
     assert.equal((await f.call(1, pathFor(started.id))).body.state, "awaiting_patch");
+  } finally { await f.close(); }
+});
+
+test("repair ledger reads verified inode, rejects symlink/hardlink/oversize and mismatched session ID", async () => {
+  const f = await fixture();
+  try {
+    const failed = await f.submit();
+    await f.complete(failed, "failed");
+    const created = await f.call(0, "/v1/repair-sessions", begin(failed.id));
+    assert.equal(created.status, 201);
+    const id = created.body.id;
+    const file = path.join(f.dataDir, "repair-sessions", id + ".json");
+    const original = await readFile(file);
+    const info = await stat(file);
+    assert.equal(isPrivateRepairSessionFile(info, info.uid), true);
+    assert.equal(isPrivateRepairSessionFile(info, info.uid + 1), false);
+    assert.equal(isRotatedRepairSessionFile(info), false);
+    const check = async () => {
+      for (let i = 0; i < 2; i++) {
+        const got = await f.call(i, pathFor(id));
+        assert.equal(got.status, 409);
+        assert.deepEqual(got.body, { error: "repair_integrity" });
+      }
+      const admitted = await f.call(0, "/v1/repair-sessions", begin(failed.id));
+      assert.equal(admitted.status, 409,
+        "a corrupt ledger cannot be bypassed by idempotent session creation");
+    };
+    const backup = path.join(f.dataDir, "backup-ledger.json");
+    await rename(file, backup);
+    await symlink(backup, file);
+    await check();
+    await rm(file);
+    await rename(backup, file);
+    const hardlink = path.join(f.dataDir, "ledger-hardlink.json");
+    await link(file, hardlink);
+    await check();
+    await rm(hardlink);
+    await writeFile(file, Buffer.alloc(64_001, 0x20));
+    await check();
+    await writeFile(file, original);
+    // A fully valid local hash chain for B must not be exposed on A's
+    // endpoint, nor used as the basis for an operator checkpoint.
+    const swapped = JSON.parse(original.toString("utf8"));
+    swapped.id = randomUUID();
+    assert.equal(verifyRepairSession(swapped).id, swapped.id);
+    await writeFile(file, JSON.stringify(swapped));
+    await check();
+    const deniedCheckpoint = await f.call(1, next(id),
+      patch("f".repeat(64)));
+    assert.equal(deniedCheckpoint.status, 409);
+    assert.deepEqual(deniedCheckpoint.body, { error: "repair_integrity" });
+    // Real POSIX rename: the old already-open FD becomes unlinked (nlink=0).
+    await writeFile(file, original);
+    const fd = await open(file, "r");
+    try {
+      assert.equal((await fd.stat()).nlink, 1);
+      await atomicWrite(file, JSON.parse(original.toString("utf8")));
+      const rotated = await fd.stat();
+      assert.equal(rotated.nlink, 0);
+      assert.equal(isRotatedRepairSessionFile(rotated), true);
+      assert.equal(isPrivateRepairSessionFile(rotated), false);
+    } finally { await fd.close(); }
+    for (let i = 0; i < 2; i++)
+      assert.equal((await f.call(i, pathFor(id))).status, 200);
+    assert.equal((await f.call(1, "/v1/repair-sessions", begin(failed.id))).status,
+      201, "restoring an intact snapshot must recover safe idempotent replay");
   } finally { await f.close(); }
 });
 

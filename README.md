@@ -243,3 +243,8 @@ Sui filesystem POSIX un'API può aprire il vecchio heartbeat poco prima che il w
 ## Attestazione offline con letture sicure della chiave (#48)
 
 Il comando `src/runner/attest.mjs` per firmare e verificare le prove con Ed25519 legge ora export, ricevuta, chiave privata e chiave pubblica **dallo stesso file descriptor che ha verificato**, senza seguire symlink. Impone dimensioni limitate, rifiuta hardlink e controlla proprietario/permessi dei file-chiave; la chiave pubblica di fiducia non può essere scrivibile da altri. Eventuali modifiche o sostituzioni del file durante la lettura provocano un errore, senza esporre materiale sensibile nei log. Le firme precedenti restano compatibili: questo hardening non equivale a firma remota automatica o prova di isolamento rootless, ancora nella #2.
+
+
+## Integrità dei ledger repair contro swap di file e ID errati (#49)
+
+La API del runner legge ora i checkpoint repair attraverso un unico file descriptor `O_NOFOLLOW`, con controlli su inode, proprietario, numero di link, dimensione e modifiche concorrenti. Un symlink, hardlink, ledger troppo grande o sostituito non può aggirare i controlli con una modifica fra verifica e lettura. Il server impone inoltre che l'ID interno verificato nel journal coincida con quello richiesto dall'endpoint: uno storico repair valido, ma copiato sotto un ID diverso, viene rifiutato con HTTP 409. Snapshot legacy restano leggibili, mentre test Node su due API verificano il fail-closed e il recupero dopo ripristino. Le prove locali non equivalgono a una firma indipendente off-host (#2).

@@ -3,7 +3,8 @@
  * Serialized on the same shared POSIX volume as admission; no TTL lock takeover.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, open, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
@@ -16,6 +17,7 @@ const DIGEST = /^[a-f0-9]{64}$/;
 const ACTOR = /^[a-z][a-z0-9_-]{1,31}$/;
 const ZERO = "0".repeat(64);
 const MAX_SESSIONS = 100;
+const MAX_SESSION_BYTES = 64_000;
 const issue = code => Object.assign(new Error(code), { code });
 const digest = data => createHash("sha256").update(JSON.stringify(data)).digest("hex");
 const exact = (object, keys) => object && typeof object === "object" && !Array.isArray(object) &&
@@ -193,15 +195,71 @@ function enforceActorSeparation(events, failureCode) {
   }
 }
 
+/** Validate the OPENED inode, never a pathname checked before a second open.
+ * Existing legacy (#25) ledgers can be 0644: preserve their read-only
+ * compatibility, but still require an owner-controlled regular single-link
+ * file. New writer snapshots stay 0600 via atomicWrite.
+ */
+export function isPrivateRepairSessionFile(stat, effectiveUid = process.geteuid?.()) {
+  return Number.isSafeInteger(effectiveUid) && effectiveUid >= 0 &&
+    stat?.isFile?.() === true && stat.uid === effectiveUid &&
+    stat.nlink === 1 && Number.isSafeInteger(stat.size) &&
+    stat.size >= 1 && stat.size <= MAX_SESSION_BYTES;
+}
+/** A descriptor opened before an atomic rename can reference the now-unlinked
+ * OLD inode (nlink=0). Never accept that inode as authoritative: reopen the
+ * path a bounded number of times. Hardlinks (nlink>1) are never retried.
+ */
+export function isRotatedRepairSessionFile(stat) {
+  return stat?.isFile?.() === true && stat.nlink === 0;
+}
 async function readSession(dataDir, id) {
   const file = sessionFile(dataDir, id);
-  const info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 64_000)
-    throw issue("REPAIR_INTEGRITY");
-  let parsed;
-  try { parsed = JSON.parse(await readFile(file, "utf8")); }
-  catch { throw issue("REPAIR_INTEGRITY"); }
-  return verifyRepairSession(parsed);
+  if (typeof constants.O_NOFOLLOW !== "number") throw issue("REPAIR_INTEGRITY");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let fd;
+    try {
+      fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const before = await fd.stat();
+      if (isRotatedRepairSessionFile(before)) throw issue("REPAIR_SNAPSHOT_ROTATED");
+      if (!isPrivateRepairSessionFile(before)) throw issue("REPAIR_INTEGRITY");
+      const chunks = [];
+      let total = 0;
+      // Read a maximum of MAX_SESSION_BYTES + 1 from the validated FD, not
+      // an unbounded readFile(path) which can follow a swapped symlink.
+      while (total <= MAX_SESSION_BYTES) {
+        const chunk = Buffer.alloc(Math.min(8192, MAX_SESSION_BYTES + 1 - total));
+        const { bytesRead } = await fd.read(chunk, 0, chunk.length, total);
+        if (!bytesRead) break;
+        chunks.push(chunk.subarray(0, bytesRead));
+        total += bytesRead;
+      }
+      if (total !== before.size || total > MAX_SESSION_BYTES)
+        throw issue("REPAIR_INTEGRITY");
+      const after = await fd.stat();
+      if (isRotatedRepairSessionFile(after)) throw issue("REPAIR_SNAPSHOT_ROTATED");
+      if (!isPrivateRepairSessionFile(after) ||
+          before.dev !== after.dev || before.ino !== after.ino ||
+          before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
+          before.ctimeMs !== after.ctimeMs)
+        throw issue("REPAIR_INTEGRITY");
+      let parsed;
+      try { parsed = JSON.parse(Buffer.concat(chunks, total).toString("utf8")); }
+      catch { throw issue("REPAIR_INTEGRITY"); }
+      // A valid hash-chain for session B must never be served or mutated
+      // through the filename and API endpoint belonging to session A.
+      if (parsed?.id !== id) throw issue("REPAIR_INTEGRITY");
+      return verifyRepairSession(parsed);
+    } catch (error) {
+      if (error.code === "ENOENT") throw error; // Preserve GET 404.
+      if (error.code !== "REPAIR_SNAPSHOT_ROTATED" || attempt === 2)
+        throw issue("REPAIR_INTEGRITY");
+    } finally {
+      await fd?.close().catch(() => {});
+    }
+    await sleep(15);
+  }
+  throw issue("REPAIR_INTEGRITY");
 }
 const overview = r => ({
   version: r.version, id: r.id, rootJobId: r.rootJobId, rootDigest: r.rootDigest,
