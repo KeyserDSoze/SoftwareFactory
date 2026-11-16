@@ -555,6 +555,6 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 ## v0.2 — Preflight dei network attachment Docker Compose (#70)
 
-- Limitare il JSON Compose risolto a una sola rete top-level `default`, non external, senza driver/IPAM/nomi custom, nominata come `<project>_default` con sintassi progetto ammessa.
+- Limitare il JSON Compose risolto a una sola rete top-level `default`, non external, senza driver/IPAM configurato o nomi custom (ammesso solo `ipam: {}` vuoto emesso da Compose v2), nominata come `<project>_default` con sintassi progetto ammessa.
 - Per runner API, worker e tunnel opzionale consentire soltanto la default implicita o esplicita senza alias, priority, IP statici o reti aggiuntive. Vietare reti condivise/external pur quando `network_mode` non è impostato.
 - Test Node parametrizzati e controllo del Compose reale CI con override; documentare ADR 0027. Resta da attestare isolamento della rete/daemon su VM Docker rootless vera, insieme a Cloudflare Access e fencing (#2).

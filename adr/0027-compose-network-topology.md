@@ -11,7 +11,7 @@
 
 ## Decisione
 
-1. Richiedere `config.name` con la sintassi limitata di un project name Compose e una sola rete in `config.networks`, la `default`. Il nome deve essere esattamente `<project>_default`; non ammettere `external: true`, `driver`, `ipam`, `internal`/altre opzioni o una seconda rete, anche quando la seconda non è ancora usata da un servizio.
+1. Richiedere `config.name` con la sintassi limitata di un project name Compose e una sola rete in `config.networks`, la `default`. Il nome deve essere esattamente `<project>_default`; non ammettere `external: true`, `driver`, `internal`/altre opzioni, configurazioni IPAM di subnet/driver o una seconda rete; accettare esclusivamente `ipam: {}` vuoto che il serializzatore Docker Compose JSON v2 emette anche per la rete implicita, anche quando la seconda non è ancora usata da un servizio.
 2. Per ogni servizio presente (`runner-api`, `runner-worker`, `cloudflared` opzionale), accettare solo la default implicita oppure `["default"]`, `{default: null}` e `{default: {}}`, senza alias, IP espliciti, priority, MAC, link-local IP o altri campi. Rifiutare array/mapping anomali o riferimenti external.
 3. Non riportare config, network URL o token nei messaggi d'errore. Test Node su rappresentazioni accettate, override malformed, rinomina/external/driver/IPAM e rete supplementare per tutti i servizi. Conservare la prova sul Compose reale Docker in GitHub Actions con registry override.
 
