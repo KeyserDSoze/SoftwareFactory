@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, chmod, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, chmod, link, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   inspectComposeConfig, inspectHost, probeEndpoint, readPrivateEnv, validateHostEnvironment,
+  isPrivateEnvFile, isStablePrivateEnvSnapshot,
 } from "../preflight.mjs";
 
 const secret = "s".repeat(48);
@@ -227,4 +228,124 @@ test("optional directory-mounted private registry is API-only, read-only and req
     assert.throws(() => inspectComposeConfig(c),
       /runner-api|runner-worker|unsafe|mount/i);
   }
+});
+
+
+test("preflight env loader pins O_NOFOLLOW descriptor, strict owner/mode/link and bounded size", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-preflight-env-fd-"));
+  const file = path.join(dir, "runner.env"), hardlink = path.join(dir, "hardlink");
+  try {
+    await writeFile(file, "RUNNER_API_KEY=" + secret + "\n", { mode: 0o600 });
+    const before = await (await import("node:fs/promises")).stat(file);
+    assert.equal(isPrivateEnvFile(before), true);
+    assert.equal(isStablePrivateEnvSnapshot(before, before), true);
+    const fake = { ...before, isFile: () => true };
+    for (const mutation of [
+      { ino: before.ino + 1 }, { dev: before.dev + 1 },
+      { uid: before.uid + 1 }, { gid: before.gid + 1 },
+      { mode: before.mode | 0o020 }, { nlink: 2 },
+      { size: before.size + 1 }, { ctimeMs: before.ctimeMs + 1 },
+      { mtimeMs: before.mtimeMs + 1 },
+    ]) {
+      assert.equal(isStablePrivateEnvSnapshot(before, { ...fake, ...mutation }), false);
+    }
+    assert.equal(isPrivateEnvFile({ ...fake, size: 0 }), false);
+    assert.equal(isPrivateEnvFile({ ...fake, size: 32_769 }), false);
+    assert.equal(isPrivateEnvFile({ ...fake, uid: before.uid + 1 }), false);
+    assert.equal(isPrivateEnvFile({ ...fake, mode: before.mode | 0o040 }), false);
+    assert.equal((await readPrivateEnv(file)).RUNNER_API_KEY, secret);
+    await link(file, hardlink);
+    await assert.rejects(readPrivateEnv(file), /stable private inode/);
+    await rm(hardlink);
+    await writeFile(file, "x".repeat(32_769));
+    await assert.rejects(readPrivateEnv(file), /stable private inode/);
+    await writeFile(file, "");
+    await assert.rejects(readPrivateEnv(file), /stable private inode/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("preflight env loading refuses modifications during read, including same-size credential replacement", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-preflight-env-mutations-"));
+  const file = path.join(dir, "runner.env"), alias = path.join(dir, "alias");
+  const original = "RUNNER_API_KEY=" + "a".repeat(48) + "\n";
+  const replacement = "RUNNER_API_KEY=" + "b".repeat(48) + "\n";
+  try {
+    for (const fault of ["rewrite", "truncate", "append", "chmod", "link", "early-eof"]) {
+      await rm(alias, { force: true });
+      await rm(file, { force: true });
+      await writeFile(file, original, { mode: 0o600 });
+      let injected = false;
+      const openFile = async (name, flags) => {
+        const descriptor = await open(name, flags);
+        let stats = 0;
+        return {
+          stat: async () => {
+            const snapshot = await descriptor.stat();
+            if (++stats === 2 && fault === "rewrite") {
+              // Filesystems may coarsen timestamp resolution: simulate the
+              // observed ctime change to make same-length race deterministic.
+              return { ...snapshot, isFile: () => true,
+                ctimeMs: snapshot.ctimeMs + 1 };
+            }
+            return snapshot;
+          },
+          read: async (...args) => {
+            if (!injected) {
+              injected = true;
+              if (fault === "rewrite") {
+                const writer = await open(file, "r+");
+                try { await writer.writeFile(replacement); }
+                finally { await writer.close(); }
+              }
+              if (fault === "truncate") await writeFile(file, "", { flag: "w" });
+              if (fault === "append") await writeFile(file, "extra", { flag: "a" });
+              if (fault === "chmod") await chmod(file, 0o644);
+              if (fault === "link") await link(file, alias);
+              if (fault === "early-eof") return { bytesRead: 0 };
+            }
+            return descriptor.read(...args);
+          },
+          close: () => descriptor.close(),
+        };
+      };
+      await assert.rejects(readPrivateEnv(file, { openFile }),
+        error => error.message.includes("stable private inode"), fault);
+      assert.equal(injected, true, fault);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("preflight env rejects interrupted read, fake fstat and missing O_NOFOLLOW without secret exposure", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-preflight-env-corruption-"));
+  const file = path.join(dir, "runner.env");
+  try {
+    await writeFile(file, "RUNNER_API_KEY=" + secret, { mode: 0o600 });
+    for (const issue of ["bad-length", "changed-inode", "short-read"]) {
+      let closeCount = 0;
+      const openFile = async (name, flags) => {
+        assert.equal(name, file);
+        assert.ok(flags & (await import("node:fs")).constants.O_NOFOLLOW);
+        const descriptor = await open(name, flags);
+        let call = 0;
+        return {
+          stat: async () => {
+            const snapshot = await descriptor.stat();
+            if (++call === 2 && issue === "changed-inode")
+              return { ...snapshot, isFile: () => true, ino: snapshot.ino + 1 };
+            return snapshot;
+          },
+          read: async (buffer, offset, length, position) => {
+            if (issue === "short-read") return { bytesRead: 0 };
+            if (issue === "bad-length") return { bytesRead: length + 1 };
+            return descriptor.read(buffer, offset, length, position);
+          },
+          close: async () => { closeCount++; await descriptor.close(); },
+        };
+      };
+      await assert.rejects(readPrivateEnv(file, { openFile }), error =>
+        error.message.includes("stable private inode") &&
+        !error.message.includes(secret));
+      assert.equal(closeCount, 1, "file descriptors must always be closed");
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

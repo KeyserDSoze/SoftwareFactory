@@ -1,7 +1,8 @@
 /** Read-only operational readiness checks. Never log Docker Compose JSON, secrets, or request bodies. */
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { rootlessSecurityOptions } from "./orphans.mjs";
@@ -220,20 +221,58 @@ export async function probeEndpoint({
     bearerAuthRequired: true, corsPreflightPassed: true, networkDefaultNone: true };
 }
 
-export async function readPrivateEnv(filePath, stat = lstat, read = readFile) {
-  let info;
-  try { info = await stat(filePath); } catch { fail("Private runner env file unavailable"); }
-  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0)
-    fail("Private runner env file must have mode 0600 and not be a symlink");
-  let source;
-  try { source = await read(filePath, "utf8"); }
-  catch { fail("Private runner env file unreadable"); }
-  const env = {};
+// The private env holds bearer credentials and is consulted before deploy.
+// Never validate a pathname and then reopen it: that accepts a different inode.
+// Exactly 0600, one link, current euid and a bounded, stable single-FD read.
+const MAX_PRIVATE_ENV_BYTES = 32_768;
+const envUnavailable = () => fail(
+  "Private runner env file must have mode 0600, no symlink and a stable private inode");
+export function isPrivateEnvFile(stat, uid = process.geteuid?.()) {
+  return stat?.isFile?.() === true &&
+    Number.isSafeInteger(uid) && stat.uid === uid && stat.nlink === 1 &&
+    (stat.mode & 0o777) === 0o600 &&
+    Number.isSafeInteger(stat.size) && stat.size >= 1 &&
+    stat.size <= MAX_PRIVATE_ENV_BYTES;
+}
+export function isStablePrivateEnvSnapshot(before, after,
+  uid = process.geteuid?.()) {
+  return isPrivateEnvFile(before, uid) && isPrivateEnvFile(after, uid) &&
+    ["dev", "ino", "uid", "gid", "nlink", "mode", "size", "mtimeMs", "ctimeMs"]
+      .every(key => before[key] === after[key]);
+}
+/** openFile is strictly a Node unit-test seam, not an HTTP or job option. */
+export async function readPrivateEnv(filePath, { openFile = open } = {}) {
+  if (typeof constants.O_NOFOLLOW !== "number" ||
+      typeof filePath !== "string" || !path.isAbsolute(filePath) ||
+      filePath.includes("\0")) envUnavailable();
+  let fd, source;
+  try {
+    fd = await openFile(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = await fd.stat();
+    if (!isPrivateEnvFile(before)) envUnavailable();
+    // fstat size bounds memory and prevents an appended file being trusted.
+    const bytes = Buffer.alloc(before.size);
+    let position = 0;
+    while (position < bytes.length) {
+      const length = Math.min(2048, bytes.length - position);
+      const result = await fd.read(bytes, position, length, position);
+      const read = result?.bytesRead;
+      if (!Number.isSafeInteger(read) || read < 1 || read > length)
+        envUnavailable();
+      position += read;
+    }
+    const after = await fd.stat();
+    if (!isStablePrivateEnvSnapshot(before, after)) envUnavailable();
+    source = bytes.toString("utf8");
+  } catch { envUnavailable(); }
+  finally { await fd?.close().catch(() => {}); }
+  const env = Object.create(null);
   for (const line of source.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const found = line.match(/^([A-Z][A-Z0-9_]*)=([^\r\n]*)$/);
-    if (!found || found[1] in env) fail("Private runner env file has unsupported syntax");
+    if (!found || Object.hasOwn(env, found[1]))
+      fail("Private runner env file has unsupported syntax");
     env[found[1]] = found[2].replace(/^(['"])(.*)\1$/, "$2");
   }
   return env;
