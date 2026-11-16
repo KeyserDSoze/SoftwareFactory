@@ -78,8 +78,10 @@ describe("application scaffold", () => {
     expect(smoke).toContain('request.get(api + "/api/info")');
     expect(smoke).toContain('test.skip(!integration');
     expect(smoke).toContain('status: "scaffold"');
-    expect(backend).toContain('"http://web:4173"');
-    expect(backend).toContain('"http://127.0.0.1:4173"');
+    const browserCors = files["src/backend/applications/Api/BrowserCorsStartup.cs"];
+    expect(backend).toContain("builder.AddBrowserCors();");
+    expect(browserCors).toContain('"http://web:4173"');
+    expect(browserCors).toContain('"http://127.0.0.1:4173"');
     expect(workflow).toContain("Verify browser, real ASP.NET Core API and PostgreSQL");
     expect(workflow).toContain("E2E_DATABASE=postgresql");
     expect(workflow).toContain("docker exec");
