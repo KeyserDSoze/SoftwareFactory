@@ -568,3 +568,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Rifiutare DNS, extra_hosts/links e nomi host/container/MAC personalizzati su API, worker e cloudflared, per impedire redirect del nome `runner-api` sotto la singola rete default.
 - Vincolare cloudflared al solo argv normalizzato `tunnel --no-autoupdate run --token <token>`, UID 1000, rootfs read-only e assenza di environment custom; test Node, Compose v2 reale e ADR 0029. Non prova provider Cloudflare, daemon rootless VM, fencing o attestazione off-host: epica #2 ancora aperta.
+
+## v0.2 — Preflight Compose delle modalità auth file/tenant (#73)
+
+- Supportare `--runner-key-file` e `--tenants` mutuamente esclusivi, e operator registry solo in modalità global-inline/file. Selezione esatta degli override approvati, senza bypass del check dell'intero Compose.
+- Mount API di `runner-key`, `tenants.json` e `operators.json` read-only, path host canonici disgiunti da dati/workspace e tra di loro, ambiente e target file coerenti, nessuna credenziale sul worker. Suite Node negativa e positiva + Compose v2 reali in CI. ADR 0030.
+- Non sostituisce verifica UID/mode di file e directory host, runtime Docker rootless VM, Cloudflare Access o attestazione off-host: #2 resta aperta.

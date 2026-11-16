@@ -49,6 +49,14 @@ jobs:
         run: |
           docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml -f docker/runner/compose.repair-operators.yml config --quiet
           node src/runner/preflight.mjs compose --operator-registry --env-file=docker/runner/.env.example
+      - name: Validate all reviewed secret-backed authentication Compose profiles
+        run: |
+          docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml -f docker/runner/compose.runner-key-file.yml config --quiet
+          node src/runner/preflight.mjs compose --runner-key-file --env-file=docker/runner/.env.example
+          docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml -f docker/runner/compose.tenants.yml config --quiet
+          node src/runner/preflight.mjs compose --tenants --env-file=docker/runner/.env.example
+          docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml -f docker/runner/compose.runner-key-file.yml -f docker/runner/compose.repair-operators.yml config --quiet
+          node src/runner/preflight.mjs compose --runner-key-file --operator-registry --env-file=docker/runner/.env.example
       - name: Build remote runner API container
         run: docker build -f docker/runner/Dockerfile.api -t softwarefactory-runner-api:ci .
       - name: Build remote runner worker container

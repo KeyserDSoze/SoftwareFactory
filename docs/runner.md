@@ -741,3 +741,17 @@ Il preflight del Compose analizza **tutte le proprietà** di ciascun bind di API
 Il controllo della rete `default` non previene una sostituzione DNS: con `extra_hosts: ["runner-api:203.0.113.9"]` il tunnel potrebbe inoltrare richieste a un host diverso da `runner-api` senza reti supplementari. Il preflight nega ora `extra_hosts`, `dns`, `dns_search`, `dns_opt`, `links`, hostname, domainname, container_name, MAC e network_interface_name per tutti e tre i servizi (liste vuote neutre sono accettate). Gli errori non includono la configurazione, hostname, credenziali o indirizzi.
 
 `cloudflared` nel Compose approvato usa `user: "1000:1000"`, `read_only: true`, cap_drop ALL e no-new-privileges. Il comando risolto Docker Compose v2 deve essere un array esatto `["tunnel", "--no-autoupdate", "run", "--token", "<token>"]`, senza environment custom. Il token è opaco, formato da 16–4096 caratteri ASCII stampabili senza spazi o prefisso `-`; il preflight non ne verifica la validità Cloudflare e non lo stampa. Configurarlo soltanto nel file privato `.env`; l'esempio segnaposto serve esclusivamente per controllare la forma del Compose. Il collaudo su VM rootless e Access/Tunnel veri rimane necessario (#2, ADR 0029).
+
+### Preflight Compose per credenziali globali da file e multi-tenant (#73)
+
+Il preflight della configurazione Compose risolta offre ora tre modalità **esclusive**: (1) chiave globale inline (`preflight.mjs compose`), (2) chiave globale file-backed (`preflight.mjs compose --runner-key-file`), (3) tenant registry (`preflight.mjs compose --tenants`). Per la modalità globale è anche consentito `--operator-registry`, incluso assieme a `--runner-key-file`; la modalità tenant **non** può usare operatori repair né chiavi globali. Un flag ripetuto o combinazione incompatibile viene rifiutata prima di invocare Docker.
+
+Esempio con env privato preparato e gli override già versionati:
+```sh
+node src/runner/preflight.mjs compose --runner-key-file --operator-registry --env-file=/percorso/runner.env
+node src/runner/preflight.mjs compose --tenants --env-file=/percorso/runner.env
+```
+
+Il comando seleziona esattamente `compose.runner-key-file.yml`, `compose.tenants.yml` e/o `compose.repair-operators.yml`. Il validatore richiede il match fra ciascun mount API-only, il path `RUNNER_API_KEY_FILE=/run/secrets/runner-api/runner-key`, `RUNNER_TENANTS_FILE=/run/secrets/runner-tenants/tenants.json` o `RUNNER_REPAIR_OPERATORS_FILE=/run/secrets/runner-operators/operators.json` e la modalità selezionata. Tutte le sorgenti devono essere path host canonici non di sistema, bind read-only e disgiunti da `RUNNER_DATA_DIR`, `RUNNER_HOST_WORK_DIR` e dalle altre directory di credenziali; worker e tunnel non possono montarle. È vietato dichiarare due fonti auth contemporaneamente o usare operatori inline con la chiave file-backed. Il JSON di input e i secret non compaiono nell'output.
+
+**Limitazione:** questo preflight verifica il Compose risolto, non i file JSON/chiavi ospitati o i loro permessi euid/nlink/mode. Il comando distinto `preflight host` mantiene al momento una validazione della chiave globale inline da env; la verifica di host con mode file/tenant richiede un adattamento dedicato e NON va aggirata con segreti fittizi per simulare un attestato di VM. È necessaria verifica separata del daemon rootless reale su VM, delle directory montate e dell'endpoint Cloudflare Access (#2, ADR 0030).

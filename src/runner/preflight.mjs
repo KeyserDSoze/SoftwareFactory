@@ -227,33 +227,77 @@ export function inspectComposeConfig(config) {
   trustedRuntimeEnvironment("runner-worker", worker, workerEnvironmentKeys);
   const apiMounts = mountsFor(api), workerMounts = mountsFor(worker, true);
   const apiData = apiMounts.find(v => v.target === "/data");
-  const registry = apiMounts.find(v => v.target === "/run/secrets/runner-operators");
-  const apiRegistryEnv = api.environment?.RUNNER_REPAIR_OPERATORS_FILE;
-  if (!apiData || apiData.read_only === true ||
-      apiMounts.length !== (registry ? 2 : 1) ||
-      apiMounts.some(isSocketMount))
-    fail("runner-api: unexpected mounts or Docker socket");
-  if (registry) {
-    if (registry.read_only !== true || registry.source === apiData.source ||
-        ["/", "/etc", "/tmp", "/run", "/var", "/root"].includes(registry.source) ||
-        apiRegistryEnv !== "/run/secrets/runner-operators/operators.json" ||
-        api.environment?.RUNNER_REPAIR_OPERATORS_JSON)
-      fail("runner-api: unsafe operator registry mount or configuration");
-  } else if (apiRegistryEnv) {
-    fail("runner-api: operator file configured without private directory mount");
-  }
   const workspace = worker.environment?.RUNNER_HOST_WORK_DIR;
-  // Distinct host paths prevent a workspace from being used as a mutable
-  // ancestor/child of the API report and evidence directory.
-  if (!safeHostMountSource(apiData.source) ||
+  if (!apiData || apiData.read_only === true || apiMounts.some(isSocketMount))
+    fail("runner-api: unexpected mounts or Docker socket");
+  // Credential directories are mounted read-only into the API only. The source
+  // must be outside every worker bind and every other credential directory.
+  const credentialTargets = {
+    "/run/secrets/runner-api": {
+      variable: "RUNNER_API_KEY_FILE",
+      file: "/run/secrets/runner-api/runner-key",
+    },
+    "/run/secrets/runner-tenants": {
+      variable: "RUNNER_TENANTS_FILE",
+      file: "/run/secrets/runner-tenants/tenants.json",
+    },
+    "/run/secrets/runner-operators": {
+      variable: "RUNNER_REPAIR_OPERATORS_FILE",
+      file: "/run/secrets/runner-operators/operators.json",
+    },
+  };
+  const credentialMounts = apiMounts.filter(v => v.target !== "/data");
+  if (apiMounts.length !== credentialMounts.length + 1 ||
+      new Set(credentialMounts.map(v => v.target)).size !== credentialMounts.length ||
+      !safeHostMountSource(apiData.source) ||
       !safeHostMountSource(workspace) || overlaps(apiData.source, workspace))
-    fail("Runner data/workspace host mounts must be distinct and private");
-  // A private operator registry mounted only into the API must also be
-  // disjoint from the worker's host workspace. Equality alone is insufficient:
-  // a worker mount of an ancestor would expose the supposedly API-only keys.
-  if (registry && (overlaps(registry.source, apiData.source) ||
-                   overlaps(registry.source, workspace)))
-    fail("runner-api: private operator registry overlaps runner mounts");
+    fail("runner-api: unsafe data or credential mount topology");
+  const credentials = api.environment;
+  const authFields = [
+    "RUNNER_API_KEY", "RUNNER_API_KEY_FILE", "RUNNER_TENANTS_FILE",
+    "RUNNER_REPAIR_OPERATORS_FILE", "RUNNER_REPAIR_OPERATORS_JSON",
+  ];
+  if (authFields.some(key => credentials[key] != null &&
+      typeof credentials[key] !== "string"))
+    fail("runner-api: invalid credential configuration");
+  const enabled = {
+    inline: typeof credentials.RUNNER_API_KEY === "string" &&
+      credentials.RUNNER_API_KEY.length >= 32,
+    file: Boolean(credentials.RUNNER_API_KEY_FILE),
+    tenants: Boolean(credentials.RUNNER_TENANTS_FILE),
+  };
+  if (Object.values(enabled).filter(Boolean).length !== 1 ||
+      (enabled.file && credentials.RUNNER_REPAIR_OPERATORS_JSON) ||
+      (credentials.RUNNER_REPAIR_OPERATORS_FILE &&
+       credentials.RUNNER_REPAIR_OPERATORS_JSON) ||
+      (enabled.tenants && (credentials.RUNNER_REPAIR_OPERATORS_FILE ||
+                           credentials.RUNNER_REPAIR_OPERATORS_JSON)))
+    fail("runner-api: ambiguous or unsupported credential mode");
+  const requiredTargets = new Set();
+  if (enabled.file) requiredTargets.add("/run/secrets/runner-api");
+  if (enabled.tenants) requiredTargets.add("/run/secrets/runner-tenants");
+  if (credentials.RUNNER_REPAIR_OPERATORS_FILE)
+    requiredTargets.add("/run/secrets/runner-operators");
+  if (credentialMounts.length !== requiredTargets.size)
+    fail("runner-api: missing or unexpected private credential mount");
+  for (const mount of credentialMounts) {
+    const policy = credentialTargets[mount.target];
+    if (!policy || !requiredTargets.has(mount.target) ||
+        mount.read_only !== true ||
+        credentials[policy.variable] !== policy.file ||
+        !safeHostMountSource(mount.source) ||
+        overlaps(mount.source, apiData.source) ||
+        overlaps(mount.source, workspace) ||
+        credentialMounts.some(other => other !== mount &&
+          overlaps(other.source, mount.source)))
+      fail("runner-api: unsafe private credential mount or configuration");
+  }
+  if (enabled.file && (credentials.RUNNER_API_KEY !== "" ||
+                       credentials.RUNNER_TENANTS_FILE))
+    fail("runner-api: file credentials require exclusive source");
+  if (enabled.tenants && (credentials.RUNNER_API_KEY !== "" ||
+                          credentials.RUNNER_API_KEY_FILE))
+    fail("runner-api: tenant credentials require exclusive source");
   if (workerMounts.length !== 3 ||
       !workerMounts.some(v => v.target === "/data" && v.source === apiData.source) ||
       !workerMounts.some(v => v.target === "/run/docker.sock" &&
@@ -263,7 +307,7 @@ export function inspectComposeConfig(config) {
       !workerMounts.some(v => v.target === workspace && v.source === workspace) ||
       workerMounts.filter(isSocketMount).length !== 1 ||
       workerMounts.some(v => v.read_only === true ||
-        (registry && v.source === registry.source)))
+        credentialMounts.some(secret => v.source === secret.source)))
     fail("runner-worker: expected isolated rootless Docker socket and shared data/work mounts");
   if (worker.environment?.DOCKER_HOST !== "unix:///run/docker.sock")
     fail("runner-worker: DOCKER_HOST must point to mounted private socket");
@@ -521,12 +565,15 @@ export async function readPrivateEnv(filePath, { openFile = open } = {}) {
   return env;
 }
 
-async function executeCompose(envFile, operatorRegistry = false) {
+async function executeCompose(envFile, { operatorRegistry = false,
+  runnerKeyFile = false, tenants = false } = {}) {
   let json;
   try {
     const { stdout } = await execFile("docker", [
       "compose", "--env-file", envFile,
       "-f", path.join(root, "docker/runner/compose.yml"),
+      ...(runnerKeyFile ? ["-f", path.join(root, "docker/runner/compose.runner-key-file.yml")] : []),
+      ...(tenants ? ["-f", path.join(root, "docker/runner/compose.tenants.yml")] : []),
       ...(operatorRegistry ? ["-f", path.join(root, "docker/runner/compose.repair-operators.yml")] : []),
       "--profile", "tunnel", "config", "--format", "json",
     ], { cwd: root, timeout: 15000, maxBuffer: 2000000,
@@ -543,22 +590,27 @@ export async function main(argv = process.argv.slice(2), {
 } = {}) {
   const [mode, ...options] = argv;
   if (!["compose", "host", "endpoint"].includes(mode) ||
-      options.some(x => x !== "--operator-registry" &&
+      options.some(x => !["--operator-registry", "--runner-key-file", "--tenants"].includes(x) &&
         !/^--(?:env-file|url|origin)=[^\r\n]+$/.test(x)) ||
       new Set(options.map(x => x.split("=")[0])).size !== options.length)
-    fail("Usage: preflight.mjs compose|host|endpoint [--env-file=PATH] [--operator-registry] [--url=HTTPS_ORIGIN --origin=HTTPS_ORIGIN]");
+    fail("Usage: preflight.mjs compose|host|endpoint [--env-file=PATH] [--operator-registry] [--runner-key-file|--tenants] [--url=HTTPS_ORIGIN --origin=HTTPS_ORIGIN]");
   const flags = Object.fromEntries(options.map(x => {
     const i = x.indexOf("=");
     return i === -1 ? [x.slice(2), true] : [x.slice(2, i), x.slice(i + 1)];
   }));
   if (mode !== "endpoint" && (flags.url || flags.origin) ||
       mode === "endpoint" && (!flags.url || !flags.origin) ||
-      mode !== "compose" && flags["operator-registry"])
+      mode !== "compose" && (flags["operator-registry"] ||
+        flags["runner-key-file"] || flags.tenants) ||
+      flags.tenants && (flags["runner-key-file"] || flags["operator-registry"]))
     fail("Invalid flags for preflight mode");
   let result;
   if (mode === "compose") result = await executeCompose(
-    path.resolve(root, flags["env-file"] || "docker/runner/.env.example"),
-    flags["operator-registry"] === true);
+    path.resolve(root, flags["env-file"] || "docker/runner/.env.example"), {
+      operatorRegistry: flags["operator-registry"] === true,
+      runnerKeyFile: flags["runner-key-file"] === true,
+      tenants: flags.tenants === true,
+    });
   else {
     const env = flags["env-file"] ? await readPrivateEnv(path.resolve(flags["env-file"])) : process.env;
     result = mode === "host" ? await inspectHost({ env }) :

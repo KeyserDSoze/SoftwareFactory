@@ -930,7 +930,7 @@ test("operator-only registry cannot live inside or above runner data or worker w
     const c = structuredClone(valid);
     c.services["runner-api"].volumes[1].source = source;
     assert.throws(() => inspectComposeConfig(c), error => {
-      assert.match(error.message, /runner-api: (unsafe operator registry|private operator registry)/);
+      assert.match(error.message, /runner-api: (unsafe private credential|missing or unexpected private credential|ambiguous or unsupported credential)/);
       assert.doesNotMatch(error.message, /s{48}/);
       assert.doesNotMatch(error.message, /\/srv\/softwarefactory/);
       return true;
@@ -938,7 +938,155 @@ test("operator-only registry cannot live inside or above runner data or worker w
   }
   const writable = structuredClone(valid);
   writable.services["runner-api"].volumes[1].read_only = false;
-  assert.throws(() => inspectComposeConfig(writable), /unsafe operator registry/);
+  assert.throws(() => inspectComposeConfig(writable), /unsafe private credential/);
+});
+
+
+function withCredentialMount(conf, target, source) {
+  conf.services["runner-api"].volumes.push({
+    type: "bind", target, source, read_only: true,
+    bind: { create_host_path: false },
+  });
+  return conf;
+}
+function authCompose(mode) {
+  const conf = composeConfig();
+  const api = conf.services["runner-api"];
+  if (mode === "key-file" || mode === "key-file-operators") {
+    api.environment.RUNNER_API_KEY = "";
+    api.environment.RUNNER_API_KEY_FILE = "/run/secrets/runner-api/runner-key";
+    withCredentialMount(conf, "/run/secrets/runner-api",
+      "/srv/softwarefactory/runner-api-key");
+  }
+  if (mode === "tenants") {
+    api.environment.RUNNER_API_KEY = "";
+    api.environment.RUNNER_API_KEY_FILE = "";
+    api.environment.RUNNER_TENANTS_FILE =
+      "/run/secrets/runner-tenants/tenants.json";
+    api.environment.RUNNER_REPAIR_OPERATORS_JSON = "";
+    withCredentialMount(conf, "/run/secrets/runner-tenants",
+      "/srv/softwarefactory/tenant-registry");
+  }
+  if (mode === "inline-operators" || mode === "key-file-operators") {
+    api.environment.RUNNER_REPAIR_OPERATORS_JSON = "";
+    api.environment.RUNNER_REPAIR_OPERATORS_FILE =
+      "/run/secrets/runner-operators/operators.json";
+    withCredentialMount(conf, "/run/secrets/runner-operators",
+      "/srv/softwarefactory/repair-operators");
+  }
+  return conf;
+}
+
+test("Compose accepts the supported exclusive inline, file and tenant credentials", () => {
+  for (const mode of ["inline", "inline-operators", "key-file",
+                      "key-file-operators", "tenants"]) {
+    const result = inspectComposeConfig(authCompose(mode));
+    assert.equal(result.status, "passed", mode);
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+  }
+});
+
+test("Compose credential mounts must be private, disjoint, read-only and env-bound", () => {
+  for (const mode of ["inline-operators", "key-file",
+                      "key-file-operators", "tenants"]) {
+    const valid = authCompose(mode);
+    const api = valid.services["runner-api"];
+    const last = api.volumes.length - 1;
+    for (let i = 1; i <= last; i++) {
+      const source = api.volumes[i].source;
+      const mutations = [
+        c => { c.services["runner-api"].volumes[i].read_only = false; },
+        c => { delete c.services["runner-api"].volumes[i].read_only; },
+        c => { c.services["runner-api"].volumes[i].source = apiEnv.RUNNER_DATA_DIR; },
+        c => { c.services["runner-api"].volumes[i].source = apiEnv.RUNNER_HOST_WORK_DIR; },
+        c => { c.services["runner-api"].volumes[i].source = "/srv/softwarefactory"; },
+        c => { c.services["runner-api"].volumes[i].source = apiEnv.RUNNER_DATA_DIR + "/keys"; },
+        c => { c.services["runner-api"].volumes[i].source = apiEnv.RUNNER_HOST_WORK_DIR + "/keys"; },
+        c => { c.services["runner-api"].volumes[i].source = "/etc/secret"; },
+        c => { c.services["runner-api"].volumes[i].source = source + "/../keys"; },
+        c => { c.services["runner-api"].volumes[i].target = "/run/secrets/unknown"; },
+        c => { c.services["runner-api"].volumes[i].bind = { propagation: "rshared" }; },
+        c => { c.services["runner-api"].volumes.splice(i, 1); },
+        c => { c.services["runner-worker"].volumes.push(
+          structuredClone(c.services["runner-api"].volumes[i])); },
+      ];
+      for (const change of mutations) {
+        const c = structuredClone(valid);
+        change(c);
+        assert.throws(() => inspectComposeConfig(c), error => {
+          assert.match(error.message, /credential|mount|runner-worker/);
+          assert.doesNotMatch(error.message, /\/srv\/softwarefactory/);
+          assert.doesNotMatch(error.message, new RegExp(secret));
+          return true;
+        }, mode + " secret " + i);
+      }
+    }
+  }
+  const shared = authCompose("key-file-operators");
+  shared.services["runner-api"].volumes[2].source =
+    shared.services["runner-api"].volumes[1].source;
+  assert.throws(() => inspectComposeConfig(shared), /unsafe private credential/);
+  const nested = authCompose("key-file-operators");
+  nested.services["runner-api"].volumes[2].source =
+    nested.services["runner-api"].volumes[1].source + "/operators";
+  assert.throws(() => inspectComposeConfig(nested), /unsafe private credential/);
+});
+
+test("Compose denies mismatched, combined or missing auth source and rogue mounts", () => {
+  const mutations = [
+    c => { c.services["runner-api"].environment.RUNNER_API_KEY = ""; },
+    c => { c.services["runner-api"].environment.RUNNER_API_KEY = "short"; },
+    c => { c.services["runner-api"].environment.RUNNER_API_KEY_FILE =
+      "/run/secrets/runner-api/runner-key"; },
+    c => { c.services["runner-api"].environment.RUNNER_TENANTS_FILE =
+      "/run/secrets/runner-tenants/tenants.json"; },
+    c => { c.services["runner-api"].volumes.push({
+      type: "bind", source: "/srv/softwarefactory/rogue",
+      target: "/run/secrets/runner-api", read_only: true }); },
+  ];
+  for (const change of mutations) {
+    const c = composeConfig();
+    change(c);
+    assert.throws(() => inspectComposeConfig(c), /credential|mount/);
+  }
+  for (const [mode, change] of [
+    ["key-file", c => { c.services["runner-api"].environment.RUNNER_API_KEY = secret; }],
+    ["key-file", c => { c.services["runner-api"].environment.RUNNER_API_KEY_FILE = "/data/key"; }],
+    ["key-file", c => { c.services["runner-api"].environment.RUNNER_TENANTS_FILE = "/data/tenants"; }],
+    ["key-file", c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON = "[]"; }],
+    ["key-file", c => { c.services["runner-api"].environment.RUNNER_API_KEY_FILE = null; }],
+    ["tenants", c => { c.services["runner-api"].environment.RUNNER_API_KEY = secret; }],
+    ["tenants", c => { c.services["runner-api"].environment.RUNNER_API_KEY_FILE = "/data/key"; }],
+    ["tenants", c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON = "[]"; }],
+    ["tenants", c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_FILE =
+      "/run/secrets/runner-operators/operators.json"; }],
+    ["tenants", c => { c.services["runner-api"].environment.RUNNER_TENANTS_FILE = "/data/tenants"; }],
+    ["inline-operators", c => { c.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_FILE = "/data/secret"; }],
+    ["key-file-operators", c => { c.services["runner-api"].volumes[2].target = "/run/secrets/runner-api"; }],
+    ["key-file-operators", c => { c.services["runner-api"].volumes[2].source = "/srv/softwarefactory/runner-api-key/ops"; }],
+  ]) {
+    const c = authCompose(mode);
+    change(c);
+    assert.throws(() => inspectComposeConfig(c), /credential|mount/, mode);
+  }
+});
+
+test("preflight mode flags reject conflicting credential profiles before Docker invocation", async () => {
+  for (const args of [
+    ["compose", "--tenants", "--runner-key-file"],
+    ["compose", "--tenants", "--operator-registry"],
+    ["compose", "--tenants", "--tenants"],
+    ["compose", "--runner-key-file", "--runner-key-file"],
+    ["compose", "--runner-key-file=true"],
+    ["host", "--runner-key-file"],
+    ["host", "--tenants"],
+    ["endpoint", "--operator-registry",
+      "--url=https://runner.example.org", "--origin=https://factory.example.org"],
+  ]) {
+    await assert.rejects(main(args, { write: () => {
+      assert.fail("invalid flags must not produce success");
+    } }), /Invalid flags|Usage:/);
+  }
 });
 
 test("preflight env loader pins O_NOFOLLOW descriptor, strict owner/mode/link and bounded size", async () => {

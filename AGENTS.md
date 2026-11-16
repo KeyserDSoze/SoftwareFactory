@@ -579,3 +579,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - Per `runner-api`, `runner-worker` e `cloudflared` rifiutare `extra_hosts`, `links`, DNS personalizzati, hostname/container name e MAC: la rete `default` non basta se il service name `runner-api` può essere risolto altrove.
 - Il tunnel deve avere user 1000:1000, `read_only: true`, l'immagine ufficiale e il comando Compose v2 esatto in cinque argomenti `tunnel --no-autoupdate run --token <opaque-token>`, senza environment o flag extra. Mai stampare token, URL privati o config. Il preflight è statico e non equivale a test VM rootless/Cloudflare reale: #2 resta aperta.
+
+## Preflight autenticazione file e tenant (#73)
+
+- `preflight compose` ammette le modalità global-inline, `--runner-key-file` e `--tenants` esclusive. `--operator-registry` può essere combinato con inline o key-file, MAI con tenant. Il preflight usa i file Compose revisionati, non override arbitrari.
+- Credenziali API in directory bind read-only soltanto `runner-api`, con percorsi esatti (`runner-key`, `tenants.json`, `operators.json`), host path canonici disgiunti sia dal data/work del worker sia tra segreti. L'API deve rifiutare env non coerenti col profilo e mount assenti/addizionali. Non esporre path o chiavi nei log. `preflight host` resta un controllo distinto del filesystem/daemon, non un attestato VM (#2).
