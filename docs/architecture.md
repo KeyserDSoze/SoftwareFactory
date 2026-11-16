@@ -320,3 +320,8 @@ Le evidenze del job (#50) e il payload sorgenti non devono avere modelli di lett
 ### Preflight del worker e classificazione probatoria degli esiti (#54)
 
 Un job con report validato ma input non caricabile, symlink, permessi insicuri o digest diverso non ha eseguito nemmeno uno step di codice: trasformarlo da `queued` a `failed` avrebbe confuso un guasto del runner con un difetto del programma e avviato un possibile repair AI non giustificato. Il worker registra invece una sola transizione `queued → incomplete` con evento `rejected`, summary generica e `finishedAt`, sotto claim atomica e su report/journal verificati; nessun retry automatico o `started` artificiale. La verifica API conferma `accepted,rejected` e il coordinatore richiede `failed` con step fallito realmente eseguito. Restano invariati recovery `running → failed`, audit, quote, rate e idempotenza (#2).
+
+
+### Separazione tra eccezione del worker e fallimento reale di un test (#55)
+
+Anche dopo `started`, il worker può fallire durante preparazione del filesystem o pianificazione/esecuzione dei passi senza aver ricevuto un risultato di test. In `executeClaimedJob`, un'eccezione inattesa determina `incomplete`, non `failed`, e il summary resta generico per non riversare potenziali segreti di host nel journal hash-chain. `finishedAt`, evento `finished` e cleanup del workspace restano in `finally`; il branch normale conserva `failed` per una ricevuta effettiva di test fallito e `passed` solo con tutti gli step superati. I report `incomplete` non autorizzano AI repair né una riesecuzione automatica. Restano invariati policy di `running` orfano, quote/idempotenza e confini di fiducia rootless/IAM/attestation (#2).

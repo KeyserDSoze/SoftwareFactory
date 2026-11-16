@@ -445,3 +445,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `rejectQueuedJob` chiude in `incomplete` i `queued` non eseguibili, con evento journal `rejected` e senza inventare codice testato o esito `failed`.
 - Prove Node di polling su symlink, permessi, digest mismatch, mancata esecuzione Docker e mancata ripresa dopo ripristino; GET API report/evidence continua a verificare il journal; repair AI rifiuta `incomplete`.
 - No cambiamenti alla recovery di `running`, né alle quote, idempotency e ai limiti #2: Docker rootless VM, Cloudflare Access, identità e attestation off-host ancora da verificare.
+
+
+## v0.2 — False failure su eccezioni worker dopo avvio (#55)
+
+- `executeClaimedJob` classifica come `incomplete` le eccezioni di workspace/planner/test-runner senza esito di test codice verificato, anche dopo `started`, e non salva l'errore grezzo nei report.
+- Preservare i veri `failed` da ricevute di test, journal `started → finished`, cleanup, assenza di auto retry e rifiuto del repair AI su `incomplete`. Test Node e API HTTP con eventi/receipt reali.
+- #2 rimane aperta per VM Docker rootless + Cloudflare, identità tenant federata, fencing e trust anchor indipendente.

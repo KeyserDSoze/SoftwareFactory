@@ -139,9 +139,12 @@ async function executeClaimedJob(id, {
     report.summary = failed ? "At least one executed code test failed" :
       skipped ? "Some checks were skipped due to missing tests or infrastructure setup; NOT a pass" :
         "All requested steps executed and passed";
-  } catch (error) {
-    report.state = "failed";
-    report.summary = "Worker error: " + scrub(error instanceof Error ? error.message : String(error));
+  } catch {
+    // A thrown workspace/planner/Docker infrastructure exception is not a
+    // verified failed code test. Do not leak host paths or exception contents
+    // into report.json or the append-only evidence chain.
+    report.state = "incomplete";
+    report.summary = "Worker could not complete checks; no code-test failure was verified";
   } finally {
     report.finishedAt = new Date().toISOString();
     try { await recordJobEvidence(dataDir, id, report, "finished"); }

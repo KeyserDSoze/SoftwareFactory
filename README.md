@@ -275,3 +275,9 @@ L'hardening del runner prosegue con la [#53](https://github.com/KeyserDSoze/Soft
 ## Avanzamento #54 — rifiuto del job prima dei test (16 novembre 2026)
 
 La [#54](https://github.com/KeyserDSoze/SoftwareFactory/issues/54) elimina un falso `failed`: se il worker rifiuta il job quando è ancora `queued` per input symlink/permessi non sicuri, digest differente o configurazione invalidata, salva l'esito terminale `incomplete`, il timestamp di chiusura e l'evento hash-chain `rejected`, **senza affermare che un test di codice sia fallito**. Il runner non rilancia automaticamente il job, continua a verificare API/evidenze e il coordinatore repair non accetta questi esiti come origine di AI repair. Restano separati l'esito di test di codice realmente fallito e la recovery di un `running` orfano; #2 rimane aperta per VM rootless e attestazione indipendente.
+
+
+---
+## Avanzamento #55 — errori infrastrutturali dopo started (16 novembre 2026)
+
+La [#55](https://github.com/KeyserDSoze/SoftwareFactory/issues/55) estende la correzione della #54: eccezioni di workspace, piano o invocazione del runner verificatesi dopo `started` ma senza un vero fallimento di test verificato chiudono il job con `incomplete`, mai con un falso `failed`. Gli eventi append-only `accepted → started → finished` restano verificabili; report, journal e messaggi non contengono i dettagli delle eccezioni né segreti. I test di codice con un reale exit code non-zero continuano a essere `failed`. Nessun retry automatico o repair AI per `incomplete`; rimane aperta #2 per isolamento VM rootless e attestazione indipendente.

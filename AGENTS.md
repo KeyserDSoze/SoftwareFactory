@@ -454,3 +454,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `rejectQueuedJob` usa lo stato terminale `incomplete` e il checkpoint journal `rejected`, con summary generica senza sorgenti o path, soltanto se un report verificato è ancora `queued` sotto claim atomica. `failed` resta riservato a fallimenti di test di codice effettivamente avviati (la recovery legacy di un `running` orfano rimane invariata).
 - I job `incomplete` non vengono ripresi automaticamente e non sbloccano AI repair; il coordinatore richiede `failed` più uno step di codice eseguito con exit code non-zero. Test Node su polling reale e input symlink, permessi, digest mismatch, lettura report/evidence via API e rifiuto del repair.
 - Le verifiche hash-chain restano obbligatorie: non trasformare un input corrotto in report `passed`, né saltare i controlli per quota, idempotency o retention. #2 resta aperta per host/VM rootless, IAM, attestation, network e multi-host.
+
+
+## Eccezioni worker dopo started: nessun false failed (#55)
+
+- `executeClaimedJob` deve produrre `incomplete` per eccezioni non trasformate in una ricevuta di test fallito, anche se `started` è già stato scritto. Non mettere `error.message`, sorgenti, percorsi host o secret in report/evidence; summary generica, journal `finished` e cleanup `finally` obbligatori.
+- `failed` resta per la normale ricevuta di step eseguito che riporta `state=failed` e un exitCode concreto (con distinzione già esistente per gli errori infrastrutturali), non per workspace/planner/eccezioni Docker senza risposta. Job `incomplete` terminali non sono riavviati e il repair coordinator li rifiuta.
+- Test Node su errore workspace/plan/step, report e export HTTP con `started/finished`, no retry, confronto con vero test fallito. Non cambiare il recovery di `running` senza claim e non dichiarare il runner rootless/attested (#2).
