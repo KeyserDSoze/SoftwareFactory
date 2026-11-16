@@ -423,3 +423,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `RUNNER_API_KEY_FILE` privato, mutuamente esclusivo con la chiave inline, con O_NOFOLLOW/fstat pre/post, owner UID, nlink=1, mode owner-only e lunghezza bounded. Reload per ogni richiesta su due repliche API: dopo rename, vecchia chiave 401; file unsafe/missing 503.
 - Sotto lock di ammissione, nuova verifica della chiave prima di idempotent replay e directory job: revoca durante l'attesa non autorizza nuove esecuzioni. Compose override API-only read-only directory bind mount, worker senza secret.
 - Test HTTP su due processi/repliche, rotazione, negative file e revoca durante lock. Restano IAM tenant, Cloudflare Access, Docker rootless reale e firma indipendente in #2.
+
+
+## v0.2 — Primo isolamento credenziali/job e quote per tenant (#52)
+
+- Registry `RUNNER_TENANTS_FILE` opt-in O_NOFOLLOW, owner-only, univocità tenant/chiavi con prefisso e quote bounded, hot rename senza restart delle repliche; esclusivo rispetto alla API key globale.
+- Il bearer determina `tenantId` hash-chained del report; GET di ID altrui 404, replay idempotente per tenant, quota queued/retained/minuto tenant-specific in aggiunta al tetto globale, reauthorization e reload quote sotto lock POSIX.
+- Test Node con due API e due tenant dimostrano isolamento JSON/evidence, rifiuto letture incrociate, quote separate, chiave revocata, rate 429, replay e rifiuto del registro non sicuro. Route repair disabilitate in modalità tenant, in attesa di ruolo operator approver specifico.
+- Mancano IAM di utenti e organizzazioni, scheduling/fairness per tenant, multi-host fencing, VM rootless, Cloudflare Access e attestazioni remote indipendenti: #2 resta aperta.

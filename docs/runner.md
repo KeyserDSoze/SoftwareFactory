@@ -565,3 +565,24 @@ La verifica dell'evidenza è il fondamento di accesso ai risultati, dei conteggi
 La runner API può usare **esclusivamente una** tra la variabile `RUNNER_API_KEY` e `RUNNER_API_KEY_FILE`. Per la modalità file, usare `docker compose -f docker/runner/compose.yml -f docker/runner/compose.runner-key-file.yml up -d`, configurare `RUNNER_API_KEY_DIR` come directory host assoluta privata e **`RUNNER_API_KEY=` vuoto**. La directory viene montata read-only solo in `runner-api` a `/run/secrets/runner-api` e deve contenere `runner-key` come file regolare dell'UID 1000, mode 0600 (o owner-read-only), un solo hardlink, 32..256 caratteri ASCII stampabili; è accettato un singolo LF finale (ad esempio prodotto da `openssl rand -hex 32`).
 
 Ruotare creando un `runner-key.new` nella **stessa directory e sullo stesso filesystem**, con owner 1000 e 0600, poi fare rename atomico a `runner-key`; **non** usare file bind-mount diretto perché pinna l'inode vecchio, né inserire chiavi in Git, log o output pubblico. Ogni GET/POST rilegge il file via FD `O_NOFOLLOW` con fstat pre/post e lettura bounded: file mancante/unsafe => 503 `runner_auth_unavailable`, bearer precedente => 401. `/healthz` rimane disponibile, mentre l'accesso a job, readiness e capabilities richiede la nuova chiave. L'ammissione POST verifica nuovamente il bearer sotto lock POSIX anche in caso di replay idempotente, senza creare directory se il token è revocato. Se sono necessari operatori repair, usare il registro file separato (`compose.repair-operators.yml`), non il registro inline con file-backed runner key. Non sostituisce TLS, Cloudflare Tunnel/Access, quote tenant e attestazioni indipendenti: #2 rimane aperta.
+
+
+### Tenant IAM: primo confine di proprietà, quote e revoca (#52)
+
+La modalità `RUNNER_TENANTS_FILE` è una **opzione separata** dalla API key globale: impostare `RUNNER_API_KEY=` e `RUNNER_API_KEY_FILE=` vuoti e usare `docker compose -f docker/runner/compose.yml -f docker/runner/compose.tenants.yml up -d`. La variabile host `RUNNER_TENANTS_DIR` deve puntare a una directory privata posseduta dall'utente UID 1000; nel solo container API sarà montata read-only su `/run/secrets/runner-tenants` e dovrà contenere `tenants.json` con UID 1000, permessi 0600 e un solo link. Il worker Docker e cloudflared non ricevono il mount, e il file viene riaperto con `O_NOFOLLOW` e `fstat` prima/dopo lettura, fino a 16KB. I nomi sono minusc-ASCII, 3–32 caratteri, con lettera iniziale.
+
+Schema esempio *senza secret reali*:
+```json
+{
+  "version": 1,
+  "tenants": [
+    { "id": "alpha", "key": "alpha.<32-o-piu-caratteri-casuali>", "maxQueued": 2, "maxRetained": 10, "maxAcceptedPerMinute": 5 },
+    { "id": "bravo", "key": "bravo.<32-o-piu-caratteri-casuali>", "maxQueued": 2, "maxRetained": 10, "maxAcceptedPerMinute": 5 }
+  ]
+}
+```
+I placeholder NON sono chiavi valide: usare un generatore casuale CSPRNG con almeno 32 caratteri ASCII alfanumerici/underscore/trattino per tenant e prefissarli con il suo `id.`. Non riutilizzare mai una chiave di un tenant diverso, neppure durante rotazione. Scrivere un nuovo file con mode 0600 nello **stesso filesystem**, validarlo localmente e sostituire atomicamente `tenants.json` tramite rename; un file bind-mount diretto resta bloccato sul vecchio inode e non consente rotazione. File mancante/symlink/hardlink/scrittura per gruppo o altri/JSON errato causa 503 senza fallback; chiave invalida 401.
+
+Ogni richiesta job richiede bearer del tenant. `POST /v1/jobs` ignora qualsiasi campo tenant del payload ed etichetta il report e l'intera hash-chain con il tenant autenticato. Condividendo lo stesso POSIX volume e lock, tutte le API verificano i job conservati; la quota globale su queued/retained/rate limita l'intero runner, e i limiti nel registry limitano **separatamente** ciascun tenant. Una nuova quota viene riletta nel lock anche mentre un POST è in attesa e prima della creazione. Replay idempotenti sono tenant-bound e non assegnano job al tenant sbagliato. `GET /v1/jobs/:id` e `/evidence` restituiscono 404 su ID che non appartengono al tenant, senza includere report. Per evitare un oracle su job altrui, in modalità tenant anche prove corrotte restituiscono 404 nelle GET; continuano tuttavia a **bloccare tutte le nuove ammissioni** per integrità. I vecchi job senza `tenantId` restano non leggibili ai client tenant; la modalità legacy globale resta compatibile.
+
+**Limitazione di sicurezza esplicita:** in modalità tenant le route `/v1/repair-sessions` sono disabilitate e il server rifiuta la configurazione di un registry operatore repair, perché il flusso approvazioni attuale non è tenant-aware. Servono ancora IAM/ruoli utenti e approvazioni per tenant, audit identità, isolamento compute per tenant, fencing multi-host, Cloudflare Tunnel/Access e prova firmata indipendente. La modalità non certifica un deploy produzione.

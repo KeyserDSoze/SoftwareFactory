@@ -1,0 +1,15 @@
+# Optional API-only multi-tenant key registry. Compose with compose.yml.
+# Bind-mount the DIRECTORY: a file bind mount pins an inode across renames.
+# Worker/cloudflared must never see the tenant credentials.
+services:
+  runner-api:
+    environment:
+      RUNNER_API_KEY: ""
+      RUNNER_API_KEY_FILE: ""
+      RUNNER_TENANTS_FILE: /run/secrets/runner-tenants/tenants.json
+      RUNNER_REPAIR_OPERATORS_JSON: ""
+    volumes:
+      - type: bind
+        source: "${RUNNER_TENANTS_DIR:?Set a private host tenants directory}"
+        target: /run/secrets/runner-tenants
+        read_only: true
