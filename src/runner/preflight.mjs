@@ -31,10 +31,16 @@ const canonicalAbsolutePath = value => typeof value === "string" &&
 const safeHostMountSource = value => canonicalAbsolutePath(value) &&
   !dangerousHostRoots.some(root => value === root || value.startsWith(root + "/"));
 const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
-const mountsFor = svc => {
+const mountsFor = (svc, allowWorkerSocket = false) => {
   if (!Array.isArray(svc.volumes)) fail("Runner service has no explicit mounts");
   for (const volume of svc.volumes) {
-    if (volume?.type !== "bind" || !safeHostMountSource(volume.source) ||
+    // Only the worker may mount the exact rootless UID 1000 socket. A
+    // generic /run bind remains forbidden, even if mounted read-only.
+    const dedicatedSocket = allowWorkerSocket &&
+      volume?.source === "/run/user/1000/docker.sock" &&
+      volume.target === "/run/docker.sock";
+    if (volume?.type !== "bind" ||
+        (!safeHostMountSource(volume.source) && !dedicatedSocket) ||
         !canonicalAbsolutePath(volume.target))
       fail("Runner service has unsafe bind mounts");
   }
@@ -66,7 +72,7 @@ export function inspectComposeConfig(config) {
   const api = svcs["runner-api"], worker = svcs["runner-worker"];
   safeService("runner-api", api);
   safeService("runner-worker", worker);
-  const apiMounts = mountsFor(api), workerMounts = mountsFor(worker);
+  const apiMounts = mountsFor(api), workerMounts = mountsFor(worker, true);
   const apiData = apiMounts.find(v => v.target === "/data");
   const registry = apiMounts.find(v => v.target === "/run/secrets/runner-operators");
   const apiRegistryEnv = api.environment?.RUNNER_REPAIR_OPERATORS_FILE;
