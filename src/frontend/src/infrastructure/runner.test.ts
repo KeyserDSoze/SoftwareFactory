@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
-  RunnerRequestError, runnerPollDecision } from "./runner";
+  RunnerRequestError, runnerPollDecision, probeRunnerConnector } from "./runner";
 
 describe("remote runner browser client", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -104,5 +104,83 @@ describe("remote runner browser client", () => {
     } };
     expect(runnerSourceFiles(p, true)["src/backend/domain/Invoice.cs"]).toBe(source);
     expect(runnerSourceFiles(p, false)["src/backend/domain/Invoice.cs"]).toBeUndefined();
+  });
+});
+
+describe("runner connector read-only onboarding probe (#87)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const url = "https://runner.example.com";
+  const key = "a".repeat(40);
+  const capabilities = { protocol: 1, steps: ["dotnet-build", "playwright"],
+    execution: "remote-docker", networkDefault: "none" };
+  const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+  const unavailable = (error: string) => ({
+    ok: false, status: 503, json: async () => ({ error }),
+  });
+  it("checks authenticated capabilities, worker heartbeat and rootless Docker without POST or source upload", async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(ok(capabilities))
+      .mockResolvedValueOnce(ok({ status: "ready", worker: "responsive" }))
+      .mockResolvedValueOnce(ok({ status: "ready", worker: "responsive", docker: "rootless" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(probeRunnerConnector(url, key)).resolves.toMatchObject({
+      state: "ready", steps: ["dotnet-build", "playwright"],
+    });
+    expect(fetchSpy.mock.calls.map(c => c[0])).toEqual([
+      url + "/v1/capabilities", url + "/v1/readiness", url + "/v1/execution-readiness",
+    ]);
+    for (const [, config] of fetchSpy.mock.calls) {
+      expect(config.method).toBeUndefined();
+      expect(config.body).toBeUndefined();
+      expect(config.headers.Authorization).toBe("Bearer " + key);
+      expect(config.redirect).toBe("error");
+      expect(config.cache).toBe("no-store");
+    }
+  });
+  it("fails closed for an unauthenticated connector, without probing health or Docker", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: false, status: 401, json: async () => ({ error: "unauthorized" }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("auth-failed");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+  it("rejects incompatible capabilities without reporting a successful connection", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(ok({ ...capabilities, networkDefault: "bridge" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("unsupported");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+  it("distinguishes a missing worker heartbeat from an unready rootless daemon", async () => {
+    const workerSpy = vi.fn().mockResolvedValueOnce(ok(capabilities))
+      .mockResolvedValueOnce(unavailable("worker_unavailable"));
+    vi.stubGlobal("fetch", workerSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("worker-offline");
+    expect(workerSpy).toHaveBeenCalledTimes(2);
+
+    const dockerSpy = vi.fn().mockResolvedValueOnce(ok(capabilities))
+      .mockResolvedValueOnce(ok({ status: "ready", worker: "responsive" }))
+      .mockResolvedValueOnce(unavailable("docker_unavailable"));
+    vi.stubGlobal("fetch", dockerSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("docker-unavailable");
+    expect(dockerSpy).toHaveBeenCalledTimes(3);
+  });
+  it("does not trust malformed readiness responses or extra executable steps", async () => {
+    const extraStepSpy = vi.fn().mockResolvedValue(ok({
+      ...capabilities, steps: ["playwright", "arbitrary-shell"],
+    }));
+    vi.stubGlobal("fetch", extraStepSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("unsupported");
+    expect(extraStepSpy).toHaveBeenCalledTimes(1);
+
+    const readinessSpy = vi.fn().mockResolvedValueOnce(ok(capabilities))
+      .mockResolvedValueOnce(ok({ status: "ok", worker: "responsive" }));
+    vi.stubGlobal("fetch", readinessSpy);
+    expect((await probeRunnerConnector(url, key)).state).toBe("unsupported");
+    expect(readinessSpy).toHaveBeenCalledTimes(2);
+  });
+  it("does not classify network errors as a ready runner", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    expect((await probeRunnerConnector(url, key)).state).toBe("api-unavailable");
   });
 });
