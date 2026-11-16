@@ -365,3 +365,9 @@ La [#68](https://github.com/KeyserDSoze/SoftwareFactory/issues/68) chiude un byp
 ## Avanzamento #69 — preflight host coerente con i mount del Compose (16 novembre 2026)
 
 La [#69](https://github.com/KeyserDSoze/SoftwareFactory/issues/69) corregge un'incoerenza fra il preflight del Compose e quello della VM: il primo negava directory dati/workspace sovrapposte, il secondo controllava soltanto l'uguaglianza dei path. Ora anche `preflight host` rifiuta directory annidate in entrambe le direzioni, percorsi non canonici o di sistema e symlink in qualunque componente parent del path. Prima del probe Docker, ogni segmento viene verificato con `lstat`, mantenendo controlli UID/permessi delle directory e del socket rootless. Tre test Node riproducono nesting, prefix simili, path traversal e parent symlink reali; documentati con ADR 0026. Il controllo non è un lock atomico sul filesystem né sostituisce un collaudo su VM rootless reale (#2).
+
+
+---
+## Avanzamento #70 — preflight delle reti Docker Compose (16 novembre 2026)
+
+La [#70](https://github.com/KeyserDSoze/SoftwareFactory/issues/70) chiude un bypass del controllo di rete: `network_mode: host` era già vietato, ma gli override Compose potevano aggiungere `networks: [external]` al runner API/worker o al tunnel mantenendo `status: passed`. Adesso il preflight del JSON Compose risolto ammette soltanto una rete `default` nominata secondo il progetto (`<project>_default`), senza flag external/driver/IPAM, e ogni servizio può collegarsi soltanto a tale rete senza alias o opzioni aggiuntive. Nuovi test Node coprono extra network, rete rinominata, external, alias/priority e configurazioni malformed. La CI esegue anche il preflight sul vero Compose risolto, compreso l'override del registro operatori. Questa è una policy statica: la presenza di container estranei sulla rete o il reale daemon rootless non sono provati; #2 resta aperta.

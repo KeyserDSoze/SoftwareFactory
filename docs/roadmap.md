@@ -551,3 +551,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Il preflight host deve imporre path assoluti canonici e non di sistema per le directory dati e workspace, senza sovrapposizioni parent/child. Permettere prefissi simili ma non nested.
 - Verificare via `lstat` ogni componente parent dei due host path e del socket Unix Docker, negando symlink intermedi o segmenti non directory prima del probe del daemon. Controllare owner UID 1000 e permessi leaf come prima.
 - Test Node su nesting, percorsi non canonici, prefissi simili, parent symlink reali e Docker non contattato in caso di errore; ADR 0026. Corsa TOCTOU e attestazione VM/Cloudflare reali rimangono aperte in #2.
+
+
+## v0.2 — Preflight dei network attachment Docker Compose (#70)
+
+- Limitare il JSON Compose risolto a una sola rete top-level `default`, non external, senza driver/IPAM/nomi custom, nominata come `<project>_default` con sintassi progetto ammessa.
+- Per runner API, worker e tunnel opzionale consentire soltanto la default implicita o esplicita senza alias, priority, IP statici o reti aggiuntive. Vietare reti condivise/external pur quando `network_mode` non è impostato.
+- Test Node parametrizzati e controllo del Compose reale CI con override; documentare ADR 0027. Resta da attestare isolamento della rete/daemon su VM Docker rootless vera, insieme a Cloudflare Access e fencing (#2).
