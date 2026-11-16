@@ -30,7 +30,11 @@ export async function probeRootlessDocker({
       });
     if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 4096)
       return false;
-    return rootlessSecurityOptions(JSON.parse(raw));
+    const options = JSON.parse(raw);
+    if (!Array.isArray(options) || options.length > 32 ||
+        options.some(value => typeof value !== "string" || value.length > 256))
+      return false;
+    return rootlessSecurityOptions(options);
   } catch {
     // Never leak daemon errors, socket paths, or Docker client environment.
     return false;
