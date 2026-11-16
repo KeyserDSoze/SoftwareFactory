@@ -558,3 +558,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Limitare il JSON Compose risolto a una sola rete top-level `default`, non external, senza driver/IPAM configurato o nomi custom (ammesso solo `ipam: {}` vuoto emesso da Compose v2), nominata come `<project>_default` con sintassi progetto ammessa.
 - Per runner API, worker e tunnel opzionale consentire soltanto la default implicita o esplicita senza alias, priority, IP statici o reti aggiuntive. Vietare reti condivise/external pur quando `network_mode` non è impostato.
 - Test Node parametrizzati e controllo del Compose reale CI con override; documentare ADR 0027. Resta da attestare isolamento della rete/daemon su VM Docker rootless vera, insieme a Cloudflare Access e fencing (#2).
+
+## v0.2 — Bind mount Compose opzioni e isolamento registry operatori (#71)
+
+- Per ogni volume bind risolto di runner API/worker consentire soltanto `type/source/target/read_only/bind` e `bind.create_host_path` booleano: bloccare propagation, SELinux, consistency, volume/tmpfs e campi sconosciuti; proteggere read-only registry e read-write di data/work/socket.
+- Impedire che l'API operator registry abbia una source host identica, parent o child di directory data/workspace visibili al worker. Test Node positivi, negativi e controllo Compose v2 standard nella CI. ADR 0028; non sostituisce host rootless/Cloudflare e attestazione (#2).

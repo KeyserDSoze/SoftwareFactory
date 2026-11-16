@@ -790,6 +790,84 @@ test("optional directory-mounted private registry is API-only, read-only and req
 });
 
 
+
+test("Compose accepts neutral Compose v2 bind serializer fields but rejects unreviewed bind options", () => {
+  const neutral = composeConfig();
+  neutral.services["runner-api"].volumes[0].bind = { create_host_path: true };
+  neutral.services["runner-worker"].volumes[0].bind = {};
+  neutral.services["runner-worker"].volumes[1].bind = { create_host_path: false };
+  neutral.services["runner-worker"].volumes[2].bind = { create_host_path: true };
+  assert.equal(inspectComposeConfig(neutral).status, "passed");
+
+  const mutations = [
+    v => { v.bind = { propagation: "rshared" }; },
+    v => { v.bind = { create_host_path: true, propagation: "shared" }; },
+    v => { v.bind = { selinux: "z" }; },
+    v => { v.bind = { create_host_path: "true" }; },
+    v => { v.bind = { create_host_path: null }; },
+    v => { v.bind = ["create_host_path"]; },
+    v => { v.bind = "rw"; },
+    v => { v.consistency = "cached"; },
+    v => { v.volume = { nocopy: false }; },
+    v => { v.tmpfs = { size: 1024 }; },
+    v => { v.read_only = "false"; },
+    v => { v.read_only = {}; },
+    v => { v.unreviewed = true; },
+  ];
+  for (const name of ["runner-api", "runner-worker"]) {
+    const size = composeConfig().services[name].volumes.length;
+    for (let index = 0; index < size; index++) {
+      for (const mutate of mutations) {
+        const c = composeConfig();
+        mutate(c.services[name].volumes[index]);
+        assert.throws(() => inspectComposeConfig(c), error => {
+          assert.match(error.message, /unsafe bind mounts/);
+          assert.doesNotMatch(error.message, new RegExp(secret));
+          return true;
+        }, name + " mount " + index);
+      }
+    }
+  }
+  for (const name of ["runner-api", "runner-worker"]) {
+    const c = composeConfig();
+    c.services[name].volumes[0].read_only = true;
+    assert.throws(() => inspectComposeConfig(c), /runner-api: unexpected mounts|runner-worker: expected/);
+  }
+});
+
+test("operator-only registry cannot live inside or above runner data or worker workspace", () => {
+  const valid = composeConfig();
+  valid.services["runner-api"].volumes.push({
+    type: "bind", source: "/srv/softwarefactory/private-operators",
+    target: "/run/secrets/runner-operators", read_only: true,
+    bind: { create_host_path: false },
+  });
+  valid.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_FILE =
+    "/run/secrets/runner-operators/operators.json";
+  valid.services["runner-api"].environment.RUNNER_REPAIR_OPERATORS_JSON = "";
+  assert.equal(inspectComposeConfig(valid).status, "passed");
+
+  for (const source of [
+    apiEnv.RUNNER_DATA_DIR,
+    apiEnv.RUNNER_DATA_DIR + "/secrets",
+    apiEnv.RUNNER_HOST_WORK_DIR,
+    apiEnv.RUNNER_HOST_WORK_DIR + "/operators",
+    "/srv/softwarefactory",
+  ]) {
+    const c = structuredClone(valid);
+    c.services["runner-api"].volumes[1].source = source;
+    assert.throws(() => inspectComposeConfig(c), error => {
+      assert.match(error.message, /runner-api: (unsafe operator registry|private operator registry)/);
+      assert.doesNotMatch(error.message, /s{48}/);
+      assert.doesNotMatch(error.message, /\/srv\/softwarefactory/);
+      return true;
+    }, source);
+  }
+  const writable = structuredClone(valid);
+  writable.services["runner-api"].volumes[1].read_only = false;
+  assert.throws(() => inspectComposeConfig(writable), /unsafe operator registry/);
+});
+
 test("preflight env loader pins O_NOFOLLOW descriptor, strict owner/mode/link and bounded size", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "sf-preflight-env-fd-"));
   const file = path.join(dir, "runner.env"), hardlink = path.join(dir, "hardlink");

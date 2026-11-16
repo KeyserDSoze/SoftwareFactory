@@ -92,6 +92,15 @@ const canonicalAbsolutePath = value => typeof value === "string" &&
 const safeHostMountSource = value => canonicalAbsolutePath(value) &&
   !dangerousHostRoots.some(root => value === root || value.startsWith(root + "/"));
 const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+// Docker Compose v2 emits bind.create_host_path for normal short-form binds.
+ // Only this neutral serializer field is allowed: propagation, SELinux relabel,
+ // consistency and unknown mount options change the audited trust boundary.
+const safeBindOptions = bind => bind == null ||
+  (bind && typeof bind === "object" && !Array.isArray(bind) &&
+   Object.keys(bind).every(key => key === "create_host_path") &&
+   (!Object.hasOwn(bind, "create_host_path") ||
+    typeof bind.create_host_path === "boolean"));
+const reviewedMountKeys = new Set(["type", "source", "target", "read_only", "bind"]);
 const mountsFor = (svc, allowWorkerSocket = false) => {
   if (!Array.isArray(svc.volumes)) fail("Runner service has no explicit mounts");
   for (const volume of svc.volumes) {
@@ -100,7 +109,11 @@ const mountsFor = (svc, allowWorkerSocket = false) => {
     const dedicatedSocket = allowWorkerSocket &&
       volume?.source === "/run/user/1000/docker.sock" &&
       volume.target === "/run/docker.sock";
-    if (volume?.type !== "bind" ||
+    if (!volume || typeof volume !== "object" || Array.isArray(volume) ||
+        volume.type !== "bind" ||
+        Object.keys(volume).some(key => !reviewedMountKeys.has(key)) ||
+        (volume.read_only != null && typeof volume.read_only !== "boolean") ||
+        !safeBindOptions(volume.bind) ||
         (!safeHostMountSource(volume.source) && !dedicatedSocket) ||
         !canonicalAbsolutePath(volume.target))
       fail("Runner service has unsafe bind mounts");
@@ -208,6 +221,12 @@ export function inspectComposeConfig(config) {
   if (!safeHostMountSource(apiData.source) ||
       !safeHostMountSource(workspace) || overlaps(apiData.source, workspace))
     fail("Runner data/workspace host mounts must be distinct and private");
+  // A private operator registry mounted only into the API must also be
+  // disjoint from the worker's host workspace. Equality alone is insufficient:
+  // a worker mount of an ancestor would expose the supposedly API-only keys.
+  if (registry && (overlaps(registry.source, apiData.source) ||
+                   overlaps(registry.source, workspace)))
+    fail("runner-api: private operator registry overlaps runner mounts");
   if (workerMounts.length !== 3 ||
       !workerMounts.some(v => v.target === "/data" && v.source === apiData.source) ||
       !workerMounts.some(v => v.target === "/run/docker.sock" &&
