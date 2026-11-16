@@ -77,6 +77,9 @@ export function verifyEvidenceExport(bundle) {
         !HEX.test(bundle.head) || !Number.isSafeInteger(bundle.count) ||
         !bundle.report || Array.isArray(bundle.report) ||
         bundle.report.id !== bundle.id || !HEX.test(bundle.report.digest) ||
+        (bundle.report.tenantId !== undefined &&
+          (typeof bundle.report.tenantId !== "string" ||
+            !/^[a-z][a-z0-9-]{2,31}$/.test(bundle.report.tenantId))) ||
         !Array.isArray(bundle.entries) || bundle.entries.length !== bundle.count ||
         bundle.entries.length < 1 || bundle.entries.length > 48 ||
         Buffer.byteLength(JSON.stringify(bundle)) > 4_000_000) throw invalid();
@@ -91,6 +94,7 @@ export function verifyEvidenceExport(bundle) {
           typeof record.at !== "string" || !Number.isFinite(Date.parse(record.at)) ||
           !record.report || Array.isArray(record.report) ||
           record.report.id !== bundle.id || record.report.digest !== bundle.report.digest ||
+          record.report.tenantId !== bundle.report.tenantId ||
           !HEX.test(hash) || sha(record) !== hash) throw invalid();
       previousHash = hash;
     }

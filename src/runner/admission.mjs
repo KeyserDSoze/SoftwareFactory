@@ -88,7 +88,7 @@ export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {
 export async function admitRunnerJob({
   dataDir, checked, idempotencyKey = null,
   maxQueued = 4, maxRetained = 100, waitMs = 1500,
-  maxAcceptedPerMinute = 0, reauthorize = undefined,
+  maxAcceptedPerMinute = 0, reauthorize = undefined, tenant = null,
 }) {
   if (!Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 100 ||
       !Number.isInteger(maxRetained) || maxRetained < 1 || maxRetained > 100 ||
@@ -98,25 +98,43 @@ export async function admitRunnerJob({
     throw new Error("Invalid runner admission limits");
   const fingerprint = parseIdempotencyKey(idempotencyKey ?? undefined);
   return withAdmissionLock(dataDir, async () => {
-    if (reauthorize) await reauthorize(); // A revoked key cannot use an old lock wait.
+    let currentTenant = tenant;
+    const refreshAuth = async () => {
+      if (!reauthorize) return;
+      const next = await reauthorize();
+      if (tenant) {
+        if (!next || next.id !== tenant.id) throw issue("TENANT_AUTH_REVOKED");
+        currentTenant = next; // Quota changes must take effect under the lock.
+      }
+    };
+    await refreshAuth();
     const entries = await readdir(path.join(dataDir, "jobs"), { withFileTypes: true });
     const ids = entries.filter(entry => JOB_ID.test(entry.name)).map(entry => entry.name);
-    let active = 0, matching = null;
-    const acceptedAtValues = [];
+    let active = 0, matching = null, tenantActive = 0, tenantRetained = 0;
+    const acceptedAtValues = [], tenantAcceptedAt = [];
     for (const id of ids) {
       // Every retained sibling is verified, even if a matching retry key was
       // already found. A forged terminal state must never free quota.
       const report = await verifiedAdmissionReport(dataDir, id);
       if (report.id !== id || !["queued", "running", "passed", "failed", "incomplete"].includes(report.state))
         throw issue("ADMISSION_INTEGRITY");
-      if (fingerprint && report.idempotencyKeyHash === fingerprint) {
+      // A copied idempotency key from another tenant must not reveal its job,
+      // nor block the original tenant with a false collision.
+      const owned = tenant ? report.tenantId === tenant.id : report.tenantId === undefined;
+      if (fingerprint && owned && report.idempotencyKeyHash === fingerprint) {
         if (matching) throw issue("ADMISSION_INTEGRITY");
         matching = report;
       }
-      if (report.state === "queued" || report.state === "running") active++;
+      const activeState = report.state === "queued" || report.state === "running";
+      if (activeState) active++;
       if (maxAcceptedPerMinute > 0) acceptedAtValues.push(report.acceptedAt);
+      if (tenant && owned) {
+        tenantRetained++;
+        if (activeState) tenantActive++;
+        tenantAcceptedAt.push(report.acceptedAt);
+      }
     }
-    if (reauthorize) await reauthorize(); // Scan may take time; fence idempotent replays.
+    await refreshAuth(); // Scan may take time; fence idempotent replays.
     // Retries are returned *before* capacity checks, even if the queue is full.
     if (matching) {
       if (matching.digest !== checked.digest) throw issue("IDEMPOTENCY_CONFLICT");
@@ -124,12 +142,24 @@ export async function admitRunnerJob({
       // state, not a fictitious new queued job. This is not test attestation.
       return { id: matching.id, digest: matching.digest, state: matching.state };
     }
-    if (ids.length >= maxRetained || active >= maxQueued) throw issue("QUEUE_FULL");
-    const retryAfter = admissionRateLimitRetryAfter(
-      acceptedAtValues, Date.now(), maxAcceptedPerMinute);
-    if (retryAfter !== null)
-      throw Object.assign(issue("RATE_LIMIT"), { retryAfter });
-    if (reauthorize) await reauthorize();
+    const enforceQuotas = () => {
+      if (ids.length >= maxRetained || active >= maxQueued ||
+          (tenant && (tenantRetained >= currentTenant.maxRetained ||
+            tenantActive >= currentTenant.maxQueued))) throw issue("QUEUE_FULL");
+      const now = Date.now();
+      const globalRetry = admissionRateLimitRetryAfter(
+        acceptedAtValues, now, maxAcceptedPerMinute);
+      const tenantRetry = tenant
+        ? admissionRateLimitRetryAfter(
+          tenantAcceptedAt, now, currentTenant.maxAcceptedPerMinute) : null;
+      if (globalRetry !== null || tenantRetry !== null)
+        throw Object.assign(issue("RATE_LIMIT"), {
+          retryAfter: Math.max(globalRetry ?? 0, tenantRetry ?? 0),
+        });
+    };
+    enforceQuotas();
+    await refreshAuth(); // Revalidate current key and current quota before mkdir.
+    enforceQuotas();
     const id = jobId(), dir = jobDirectory(dataDir, id);
     await mkdir(dir, { mode: 0o700 });
     // If a write fails after mkdir, retain this directory for operator inspection:
@@ -140,6 +170,7 @@ export async function admitRunnerJob({
       state: "queued", acceptedAt: new Date().toISOString(),
       startedAt: null, finishedAt: null, fileCount: checked.fileCount, bytes: checked.bytes,
       steps: checked.request.steps, results: [], summary: "In attesa del worker",
+      ...(tenant ? { tenantId: tenant.id } : {}),
       ...(fingerprint ? { idempotencyKeyHash: fingerprint } : {}),
     };
     await atomicWrite(path.join(dir, "report.json"), report);
