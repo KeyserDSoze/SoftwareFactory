@@ -258,3 +258,8 @@ La CLI canary della #40 era verificata con stub: la CI ora chiama un test separa
 ### Fence di sessione per CRUD React OIDC (#42)
 
 Il componente `WorkItems` dell'app generata conserva un `sessionEpoch` monotono oltre al token attivo. Ogni cambio login/token/refresh/logout, 401 corrente o BroadcastChannel di logout incrementa l'epoch sincronicamente e libera lo stato busy della sessione precedente. Ogni GET e mutazione POST/PUT/DELETE cattura coppia (accessToken,epoch) e verifica entrambe prima di aggiornare dati, errori, editing o disponibilità form; anche i finally obsoleti e i 401 vecchi sono scartati. Non si cerca di revocare o annullare operazioni già accettate dal server: il perimetro protetto è la **UI di un'identità diversa**. Test fullstack Chromium + provider OIDC effimero + ASP.NET/PostgreSQL trattiene una vera risposta POST prima della consegna, emette logout cross-tab, rilascia e verifica assenza di contaminazione. BFF/cookie HttpOnly e revoca off-tab restano fuori e nella #9.
+
+
+### Coerenza tra clock e rename heartbeat (#43)
+
+Il file heartbeat viene aggiornato da un writer atomico indipendente dai GET. Un `Date.now()` catturato **prima** dell'I/O del lettore, riusato per la verifica del JSON letto dopo un rename, può far apparire un record fresco come proveniente dal futuro. Il controllo execution-readiness ora lascia che il parser misuri il clock dopo la lettura e verifica il TTL del probe con un nuovo clock post-I/O; un clock di test iniettato mantiene invarianti deterministici. Nessuna modifica al contenuto o alla fiducia del segnale: timestamp futuri reali e compromissioni restano errori, la #2 richiede ancora controlli off-host e VM dedicata.

@@ -78,8 +78,12 @@ export async function readWorkerHeartbeat(dataDir, maxAgeMs = 30_000, nowMs = un
  * must be fresh. Version 1 remains worker-only, never Docker-ready.
  */
 export async function readDockerExecutionReadiness(dataDir, maxAgeMs = 30_000, nowMs = undefined) {
+  // Do not freeze the wall clock before the asynchronous file read. A worker
+  // may atomically publish a newer heartbeat while this GET is in progress;
+  // comparing it to a pre-I/O timestamp would falsely reject it as "future".
+  // Explicit injected clocks remain fixed for deterministic negative tests.
+  const record = await readWorkerHeartbeat(dataDir, maxAgeMs, nowMs);
   const now = nowMs ?? Date.now();
-  const record = await readWorkerHeartbeat(dataDir, maxAgeMs, now);
   if (record.version !== 2 || record.docker.rootless !== true ||
       record.docker.checkedAt === null ||
       now - parseTime(record.docker.checkedAt) > maxAgeMs)

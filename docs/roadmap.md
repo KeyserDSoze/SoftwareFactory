@@ -363,3 +363,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `WorkItems.tsx` generato: token + generazione incrementale a ogni sostituzione/invalidazione di sessione, guard su GET e POST/PUT/DELETE dopo await, catch, finally e 401. Logout e sostituzioni svuotano immediatamente busy e i dati della sessione precedente.
 - Test Vitest di copertura per tre mutazioni e 401; Chromium con due tab OIDC e PostgreSQL reale per response POST trattenuta dal browser dopo commit, logout remote e rilascio senza ripopolamento della UI. Nessuna sostituzione delle policy lato API.
 - Mancano IdP HTTPS reale, revoca JWT distribuita, BFF e cookie HttpOnly/XSS hardening completo: #9 resta aperta.
+
+
+## v0.2 — Fix della finestra di lettura del timestamp readiness (#43)
+
+- Elimina false 503 quando `readDockerExecutionReadiness` confronta un heartbeat aggiornato durante il GET con un `now` catturato prima dell'I/O. Usa due clock post-read, oppure clock iniettato coerente per i test.
+- Test con due API e 80 GET in parallelo agli heartbeat periodici reali: nessun falso stato future quando il probe è rootless fresco; resta il rifiuto fail-closed per file malformati, vecchi o rootful. Lo stato operativo VM rootless reale resta nella #2.

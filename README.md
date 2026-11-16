@@ -213,3 +213,8 @@ La CI, dopo lo smoke dei job, esegue ora **anche** il ciclo Docker del canary `#
 ## Protezione dalle risposte HTTP tardive dopo logout OIDC (#42)
 
 Le app PostgreSQL generate ora legano le risposte delle letture e delle **mutazioni crea/modifica/elimina** al token e alla generazione di sessione che le ha avviate. Logout, cambio account, rinnovo credenziali o invalidazione da un'altra scheda annullano immediatamente l'autorizzazione delle vecchie risposte a modificare l'interfaccia, gli errori o lo stato dei form. Anche un vecchio 401 non può cancellare un login successivo. La CI verifica con Chromium, OIDC temporaneo, ASP.NET Core e PostgreSQL che un POST già completato dal server ma consegnato al browser **dopo** il logout cross-tab non faccia ricomparire dati privati. Questo non revoca token né annulla transazioni già autorizzate sul server; restano aperti BFF/cookie HttpOnly e IdP di produzione nella #9.
+
+
+## Readiness Docker stabile durante gli aggiornamenti heartbeat (#43)
+
+La readiness del runner è stata corretta per evitare falsi **503 `docker_unavailable`** quando un heartbeat viene sostituito mentre l'API lo legge: il tempo di confronto viene rilevato dopo la lettura asincrona del file, non prima. Resta obbligatorio rifiutare timestamp realmente futuri, probe scaduti o non-rootless. Test Node eseguono molte GET su due API mentre il worker aggiorna il file, senza alterare la sicurezza né le limitazioni del deployment remoto sperimentale (#2).

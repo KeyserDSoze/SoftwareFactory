@@ -147,6 +147,19 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
       assert.equal(ready.status, 200);
       assert.deepEqual(await ready.json(), { status: "ready", worker: "responsive", docker: "rootless" });
     }
+    // The worker continues to replace its heartbeat atomically every 20ms.
+    // Concurrent GETs must not compare a freshly renamed file to a clock
+    // frozen BEFORE their asynchronous filesystem read (false HTTP 503).
+    const beforeStress = await readWorkerHeartbeat(dataDir);
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const ready = await get(attempt % 2, "/v1/execution-readiness");
+      assert.equal(ready.status, 200,
+        "positive daemon readiness must remain valid during heartbeat renames");
+      if (attempt % 8 === 0) await sleep(4);
+    }
+    const afterStress = await readWorkerHeartbeat(dataDir);
+    assert.ok(Date.parse(afterStress.updatedAt) > Date.parse(beforeStress.updatedAt),
+      "stress must overlap actual worker heartbeat updates");
     mode = "rootful";
     await heartbeat.checkDockerNow();
     for (let i = 0; i < 2; i++) {
