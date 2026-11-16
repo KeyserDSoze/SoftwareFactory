@@ -174,3 +174,64 @@ export async function verifyCurrentRunnerReport(
   }
   return verifyRunnerResultShape(report, evidence);
 }
+
+/**
+ * Read-only connector onboarding probe. Never submits source snapshots or
+ * starts a Docker container. Only a worker's recent daemon observation is
+ * checked; this is not a successful SDK build, security attestation or VM audit.
+ */
+export type RunnerConnectorProbe =
+  | { state: "ready"; detail: string; steps: RunnerStep[] }
+  | { state: "auth-failed" | "api-unavailable" | "unsupported" | "worker-offline" | "docker-unavailable";
+      detail: string; steps?: RunnerStep[] };
+
+function connectorFailure(error: unknown): RunnerConnectorProbe {
+  if (error instanceof RunnerRequestError && (error.status === 401 || error.status === 403))
+    return { state: "auth-failed", detail: "Credenziale rifiutata oppure origin browser non autorizzato (401/403)." };
+  return { state: "api-unavailable", detail: "API non raggiungibile o risposta inattesa. Verifica HTTPS/localhost, tunnel, CORS e credenziale." };
+}
+
+function connectorObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const CONNECTOR_STEPS: RunnerStep[] = ["dotnet-build", "dotnet-test", "web-build", "web-test", "playwright"];
+
+export async function probeRunnerConnector(baseUrl: string, key: string,
+  signal?: AbortSignal): Promise<RunnerConnectorProbe> {
+  let payload: unknown;
+  try { payload = await runnerRequest<unknown>(baseUrl, key, "/v1/capabilities", { signal }); }
+  catch (error) { if (signal?.aborted) throw error; return connectorFailure(error); }
+  if (!connectorObject(payload) || payload.protocol !== 1 ||
+      payload.execution !== "remote-docker" || payload.networkDefault !== "none" ||
+      !Array.isArray(payload.steps) || payload.steps.length === 0 ||
+      payload.steps.length > CONNECTOR_STEPS.length ||
+      payload.steps.some((step: unknown) => !CONNECTOR_STEPS.includes(step as RunnerStep)) ||
+      new Set(payload.steps).size !== payload.steps.length)
+    return { state: "unsupported", detail: "Il runner non dichiara il protocollo 1 e la policy Docker/network attesi." };
+  const steps = payload.steps as RunnerStep[];
+
+  let readiness: unknown;
+  try { readiness = await runnerRequest<unknown>(baseUrl, key, "/v1/readiness", { signal }); }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof RunnerRequestError && error.status === 503)
+      return { state: "worker-offline", detail: "API autenticata, ma heartbeat del worker assente o scaduto. Nessun test eseguito.", steps };
+    return connectorFailure(error);
+  }
+  if (!connectorObject(readiness) || readiness.status !== "ready" || readiness.worker !== "responsive")
+    return { state: "unsupported", detail: "Heartbeat worker non verificabile: nessuna esecuzione confermata.", steps };
+
+  let execution: unknown;
+  try { execution = await runnerRequest<unknown>(baseUrl, key, "/v1/execution-readiness", { signal }); }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof RunnerRequestError && error.status === 503)
+      return { state: "docker-unavailable", detail: "Worker presente, ma prova recente del daemon Docker rootless indisponibile.", steps };
+    return connectorFailure(error);
+  }
+  if (!connectorObject(execution) || execution.status !== "ready" ||
+      execution.worker !== "responsive" || execution.docker !== "rootless")
+    return { state: "unsupported", detail: "Il runner non conferma il daemon Docker rootless.", steps };
+  return { state: "ready", detail: "API autenticata, worker attivo e daemon rootless osservato recentemente. Nessuna build o esecuzione sandbox è stata verificata.", steps };
+}
