@@ -537,3 +537,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rafforzare `inspectComposeConfig` rifiutando namespace personalizzati per API, worker e tunnel: network, PID, IPC, UTS, userns, cgroup e isolation, inclusi riferimenti `service:`/`container:`.
 - Validare `security_opt` `["no-new-privileges:true"]` e `cap_drop` `["ALL"]` **esatti**, non come inclusione; rifiutare ulteriori profili seccomp/AppArmor, device/GPU/extra group/sysctls, privilegi non-boolean e mount già vietati.
 - Test Node positivi e negativi su tutti i servizi, mantenendo il Compose preflight reale e override operator-registry. ADR 0024; mancano VM rootless/Access reali, IAM/fencing e attestazione off-host (#2).
+
+
+## v0.2 — Preflight del codice runtime Compose e build provenance (#68)
+
+- Rifiutare modifiche a `image`, `build.context`, `build.dockerfile` e tutte le altre build options del runner: worker e API devono essere costruiti solo dal checkout e dai due Dockerfile revisionati; vietati comandi/entrypoint, healthcheck e lifecycle hooks sostitutivi.
+- Controllare le variabili di ambiente runtime tramite allowlist delle chiavi del Compose approvato e dei suoi override di credenziali, bloccando `NODE_OPTIONS`, `LD_PRELOAD` e `NODE_PATH`; `RUNNER_DATA_DIR=/data` nei servizi. Anche tunnel con immagine ufficiale e nessun build/entrypoint/hook estraneo.
+- Test Node su override maliziosi con socket montato e config normale; verificare Compose reale con registry opzionale in CI; documentare ADR 0025. Non equivalgono ad attestation di digest o alla prova reale VM Docker rootless, Cloudflare Access e fencing (#2).
