@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { createProject } from "../domain/defaults";
 import { generateFiles } from "./scaffold";
 
@@ -294,6 +298,90 @@ describe("application scaffold", () => {
     expect(files[".github/workflows/ci.yml"]).toContain("Auth__Mode=legacy");
     expect(oidc).not.toContain("Auth__SigningKey");
     expect(ui).not.toContain("VITE_OIDC_CLIENT_SECRET");
+  });
+  it("generates no-store OIDC callback with inherited CSP and rejects incomplete origins", () => {
+    const files = generateFiles(example());
+    const stock = files["src/frontend/web/nginx.conf"];
+    const builder = files["src/frontend/web/scripts/build-nginx.mjs"];
+    expect(stock).toContain('add_header Cache-Control "no-store" always;');
+    expect(stock).toContain("add_header Content-Security-Policy");
+    expect(stock).toContain("location / { try_files $uri $uri/ /index.html; }");
+    expect(stock).not.toContain("location = /auth/callback");
+    expect(builder).toContain("configuredOidc !== 0 && configuredOidc !== 3");
+    expect(files["src/frontend/web/e2e/smoke.spec.ts"])
+      .toContain('expect(callback.headers()["cache-control"]).toContain("no-store")');
+
+    // Execute the generated build script in an isolated local directory:
+    // this tests the resulting real nginx.conf, not just a string template.
+    const directory = mkdtempSync(path.join(tmpdir(), "sf-oidc-csp-"));
+    const scripts = path.join(directory, "scripts");
+    mkdirSync(scripts);
+    const scriptPath = path.join(scripts, "build-nginx.mjs");
+    const outputPath = path.join(directory, "nginx.conf");
+    writeFileSync(scriptPath, builder, { mode: 0o600 });
+    const run = (vars: Record<string, string>) => {
+      rmSync(outputPath, { force: true });
+      return spawnSync(process.execPath, [scriptPath], {
+        encoding: "utf8", timeout: 6000, maxBuffer: 65536,
+        env: { PATH: process.env.PATH || "/usr/bin:/bin",
+          HOME: process.env.HOME || "/tmp", ...vars },
+      });
+    };
+    try {
+      const local = run({});
+      expect(local.status).toBe(0);
+      expect(local.stdout).toContain("CSP_NGINX_BUILD_PASS");
+      const localNginx = readFileSync(outputPath, "utf8");
+      expect(localNginx).toContain('add_header Cache-Control "no-store" always;');
+      expect(localNginx).toContain("add_header Content-Security-Policy");
+      expect(localNginx).toContain("connect-src 'self' http://localhost:8080");
+      expect(localNginx).not.toMatch(/script-src[^;]*unsafe-eval/);
+
+      const production = run({
+        VITE_API_URL: "https://api.example.test",
+        VITE_OIDC_AUTHORITY: "https://login.example.test",
+        VITE_OIDC_CLIENT_ID: "public-browser",
+        VITE_OIDC_AUDIENCE: "https://api.example.test",
+      });
+      expect(production.status).toBe(0);
+      const nginx = readFileSync(outputPath, "utf8");
+      expect(nginx).toContain("connect-src 'self' https://api.example.test https://login.example.test");
+      expect(nginx).toContain("frame-src https://login.example.test");
+      expect(nginx).toContain("form-action 'self' https://login.example.test");
+      expect(nginx).toContain('add_header Cache-Control "no-store" always;');
+      expect(nginx).not.toContain("http://localhost:8080");
+
+      const config = {
+        VITE_OIDC_AUTHORITY: "https://login.example.test",
+        VITE_OIDC_CLIENT_ID: "public-browser",
+        VITE_OIDC_AUDIENCE: "https://api.example.test",
+      };
+      for (const missing of Object.keys(config)) {
+        const vars: Record<string, string> = { ...config };
+        delete vars[missing];
+        const failed = run(vars);
+        expect(failed.status).not.toBe(0);
+        expect(failed.stderr).toContain("OIDC public configuration is incomplete");
+        expect(() => readFileSync(outputPath, "utf8")).toThrow();
+      }
+      for (const key of Object.keys(config)) {
+        const failed = run({ [key]: config[key as keyof typeof config] });
+        expect(failed.status).not.toBe(0);
+        expect(failed.stderr).toContain("OIDC public configuration is incomplete");
+      }
+      const whitespace = run({ ...config, VITE_OIDC_CLIENT_ID: "   " });
+      expect(whitespace.status).not.toBe(0);
+      expect(whitespace.stderr).toContain("OIDC public configuration is incomplete");
+      for (const invalid of [
+        "http://idp.example.test",
+        "https://idp.example.test/\r\nInjected:yes",
+        "https://login.example.test/?query=bad",
+      ]) {
+        const rejected = run({ ...config, VITE_OIDC_AUTHORITY: invalid });
+        expect(rejected.status).not.toBe(0);
+        expect(() => readFileSync(outputPath, "utf8")).toThrow();
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";

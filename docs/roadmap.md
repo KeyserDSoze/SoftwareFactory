@@ -610,3 +610,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Claim POSIX esclusiva per ogni cleanup applicata; `--finalize` richiede `--apply --confirm-job`, rimozione per full Docker ID e conferma finale zero container etichettati tramite daemon rootless.
 - Nuovo evento append-only `reconciled` nella chain con stato e output di test immutati; repair continua a rifiutare qualunque job recuperato storicamente. I journal vecchi e finalizzati possono tornare alla retention normale dopo esportazione dell'audit necessario.
 - Test Node per concorrenza, idempotenza, integrità, report falliti non promossi, retention, e smoke Docker CI reale, ADR 0037. Da fare: prova VM rootless e Cloudflare live, fencing/attestazione off-host, job autonomy reali (#2).
+
+## v0.3 — Anti-cache e validazione pubblica OIDC nello scaffold (#81)
+
+- Nginx statico e generato applicano `Cache-Control: no-store` con CSP e referrer policy su tutte le risposte, compresa la callback PKCE; trade-off esplicito: cache asset statici disabilitata.
+- Build fail-closed se `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID`, `VITE_OIDC_AUDIENCE` sono parziali o whitespace-only; restano i vincoli URL HTTPS già presenti e l'eccezione soltanto per CI privata.
+- Test Vitest sul vero script Nginx generato e Chromium sul vero header HTTP per `/` e `/auth/callback`; ADR 0038. Epica #9 aperta per federazione con IdP esterno, revisione threat model browser/CSP/BFF, CDN/TLS e rollout operativo.
