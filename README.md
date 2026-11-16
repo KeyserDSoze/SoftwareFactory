@@ -438,3 +438,15 @@ Il nuovo test CORS (#84) ha portato la suite fullstack da 17 a 18 test Chromium;
 ## Avanzamento #86 — JWKS OIDC HTTPS verificato con CA di CI (16 novembre 2026)
 
 La Factory ora esercita **due modalità distinte** nel fullstack Docker privato: il browser Chromium continua a verificare login PKCE, refresh, logout e isolamento PostgreSQL col provider HTTP effimero (solo CI); dopo gli E2E avvia **un secondo issuer TLS** `https://identity-tls:9443` con CA e certificato server con SAN `identity-tls` generati sul momento. Una API ASP.NET Core **Production** che conosce solo la CA testata deve accettare RS256/JWKS, gestire il rollover del `kid`, validare firma/ruoli e applicare RBAC; una seconda API Production identica **senza** la CA deve rifiutare lo stesso JWT. Anche un client Node senza CA deve rifiutare l'issuer TLS; non viene mai usato `NODE_TLS_REJECT_UNAUTHORIZED=0`. Certificati e chiavi sono effimeri e cancellati dopo il test, CA privata mai montata nei container, nessuna porta pubblicata sull'host. La CI resta Docker rootful su host GitHub: **non certifica** un IdP HTTPS commerciale esterno, una PKI pubblica, revoca certificati, TLS edge/reverse proxy, Cloudflare o VM rootless. Sottoissue [#86](https://github.com/KeyserDSoze/SoftwareFactory/issues/86) dell'epica #9.
+
+
+## Installazione guidata del connector Docker (#87)
+
+In **Settings → Runner Docker remoto** è disponibile un onboarding per PC Linux o VM/server
+Linux dedicati: istruzioni di installazione del runner esistente e controllo autenticato in
+sola lettura di API, heartbeat worker e osservazione recente del daemon Docker rootless.
+Non richiede di mettere SDK o Docker nel browser, ma **non** è ancora un installer
+one-click e non prova che un build/test sia riuscito. I test rimangono job espliciti con
+report firmati da digest. I container multi-servizio orchestrati dal worker e il pairing
+sicuro host↔app sono previsti nell'[issue #87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87);
+vedi [guida runner](docs/runner.md) e [ADR 0044](adr/0044-runner-connector-onboarding-and-container-orchestration.md).
