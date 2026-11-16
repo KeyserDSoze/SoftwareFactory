@@ -230,7 +230,7 @@ export async function probeEndpoint({
     // Accept both legacy 64-hex and new cfast_ Cloudflare Access secrets.
     // Do not require a fixed token syntax, but reject CR/LF, controls,
     // whitespace and unbounded values before any HTTP request.
-    const printable = /^[\\x21-\\x7e]+$/;
+    const printable = /^[!-~]+$/;
     if (typeof accessClientId !== "string" ||
         accessClientId.length < 8 || accessClientId.length > 256 ||
         !printable.test(accessClientId) ||
