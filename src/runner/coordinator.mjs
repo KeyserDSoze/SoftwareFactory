@@ -335,7 +335,7 @@ export async function beginRepairSession(
     // Older workers could record a crash-recovered job as "failed" even
     // though the final code-test verdict was never committed. Recovered is
     // an interrupted execution, NOT repairable, including legacy reports.
-    if (rootEvidence.entries.at(-1)?.kind === "recovered" ||
+    if (rootEvidence.entries.some(entry => entry.kind === "recovered") ||
         !legitimateFailure(rootEvidence.report)) throw issue("REPAIR_NOT_FAILED");
     const report = rootEvidence.report;
     const id = randomUUID();
@@ -380,8 +380,12 @@ export async function advanceRepairSession(dataDir, id, input, actorId, reauthor
         throw issue("REPAIR_INVALID");
       if (current.state !== "awaiting_retest")
         throw issue("REPAIR_TRANSITION");
-      let test;
-      try { test = (await verifyJobEvidence(dataDir, input.jobId)).report; }
+      let test, testEntries;
+      try {
+        const verified = await verifyJobEvidence(dataDir, input.jobId);
+        test = verified.report;
+        testEntries = verified.entries;
+      }
       catch (error) {
         if (error.code === "EVIDENCE_INVALID" || error.code === "ENOENT")
           throw issue("REPAIR_EVIDENCE");
@@ -394,7 +398,8 @@ export async function advanceRepairSession(dataDir, id, input, actorId, reauthor
           test.steps?.some(step => !ALLOWED_STEPS.includes(step)))
         throw issue("REPAIR_EVIDENCE");
       const passed = legitimatePass(test, target.digest, current.requiredSteps);
-      const failed = legitimateFailure(test) &&
+      const failed = !testEntries.some(entry => entry.kind === "recovered") &&
+        legitimateFailure(test) &&
         current.requiredSteps.every(step => test.steps?.includes(step)) &&
         test.results.every((r, i) => r.step === test.steps[i] &&
           r.state !== "skipped" && r.timedOut !== true);

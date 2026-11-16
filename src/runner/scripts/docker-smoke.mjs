@@ -126,9 +126,19 @@ try {
     assert.equal(preview.containers[0].name, identity.name);
     await docker(["inspect", identity.name]); // no deletion during dry-run
     const applied = await reconcileRunnerContainers({
-      dataDir, jobId: orphanId, apply: true, confirmJob: orphanId, runDocker: docker,
+      dataDir, jobId: orphanId, apply: true, confirmJob: orphanId,
+      finalize: true, runDocker: docker,
     });
     assert.equal(applied.removed.length, 1);
+    assert.equal(applied.finalized, true);
+    const operatorEvidence = await verifyJobEvidence(dataDir, orphanId);
+    assert.equal(operatorEvidence.report.state, "failed");
+    assert.equal(operatorEvidence.entries.at(-1).kind, "reconciled");
+    assert.deepEqual(operatorEvidence.report.reconciliation && {
+      version: operatorEvidence.report.reconciliation.version,
+      removedCount: operatorEvidence.report.reconciliation.removedCount,
+      noRemaining: operatorEvidence.report.reconciliation.noRemaining,
+    }, { version: 1, removedCount: 1, noRemaining: true });
     await assert.rejects(docker(["inspect", identity.name]));
     await docker(["inspect", foreignName]); // foreign container must survive
     assert.equal((await verifyJobEvidence(dataDir, orphanId)).report.state, "failed");

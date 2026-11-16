@@ -1,11 +1,11 @@
 /** Operator-only Docker job reconciliation. No automatic prune and no secret labels. */
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat } from "node:fs/promises";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { jobDirectory } from "./common.mjs";
-import { verifyJobEvidence } from "./evidence.mjs";
+import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 
 const execFile = promisify(execFileCallback);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -84,67 +84,123 @@ async function verifiedCandidate(runDocker, shortId, jobId) {
   return { id: container.Id, name: container.Name.slice(1), step, state: container.State.Status };
 }
 
-/** Dry run is the default. Only a terminal failed/incomplete verified job without
- * a .claim may be cleaned, and each Docker ID is re-inspected before deletion.
- * Docker backend is injectable only for deterministic tests and isolated CI.
+/** Strictly parse a bounded, targeted Docker ps result. Never accept a
+ * truncated, malformed or non-string response as an empty container list.
  */
-export async function reconcileRunnerContainers({
-  dataDir = process.env.RUNNER_DATA_DIR || "/data",
-  jobId, apply = false, confirmJob = null, runDocker = defaultDocker,
-} = {}) {
-  if (typeof jobId !== "string" || !UUID.test(jobId))
-    throw Error("A full runner job UUID is required");
-  if (apply && confirmJob !== jobId)
-    throw Error("Cleanup requires --confirm-job with the same complete UUID");
-  const { report } = await verifyJobEvidence(dataDir, jobId);
-  const claimed = await claimExists(dataDir, jobId);
-  const eligible = !claimed && ["failed", "incomplete"].includes(report.state);
-  // Never take action based on a partial, corrupt or stale job report.
-  if (apply && !eligible)
-    throw Error("Cleanup denied: job must be failed/incomplete and have no active claim");
-  const raw = await runDocker(["ps", "-a",
-    "--filter", "label=" + RUNNER_LABEL + "=job",
-    "--filter", "label=" + JOB_LABEL + "=" + jobId,
-    "--format", "{{.ID}}"]);
+function jobContainerIds(raw) {
+  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 4096)
+    throw Error("Unexpected Docker container IDs");
   const ids = raw.trim() ? raw.trim().split(/\r?\n/) : [];
   if (ids.length > 16 || new Set(ids).size !== ids.length ||
       ids.some(id => !CONTAINER_ID.test(id)))
     throw Error("Unexpected Docker container IDs");
-  const containers = [];
-  for (const id of ids) containers.push(await verifiedCandidate(runDocker, id, jobId));
+  return ids;
+}
+const listJobArgs = jobId => ["ps", "-a",
+  "--filter", "label=" + RUNNER_LABEL + "=job",
+  "--filter", "label=" + JOB_LABEL + "=" + jobId,
+  "--format", "{{.ID}}"];
+
+/** Dry-run by default. For apply, acquire an exclusive .claim before
+ * touching Docker; this also protects verified evidence from retention.
+ * --finalize is additional operator consent, recording ONE reconciled event
+ * only after a new Docker ps shows zero matching job containers.
+ * Node callbacks are test seams only; not available through the runner API.
+ */
+export async function reconcileRunnerContainers({
+  dataDir = process.env.RUNNER_DATA_DIR || "/data",
+  jobId, apply = false, confirmJob = null, finalize = false,
+  runDocker = defaultDocker,
+} = {}) {
+  if (typeof jobId !== "string" || !UUID.test(jobId))
+    throw Error("A full runner job UUID is required");
+  if (finalize && !apply)
+    throw Error("Finalization requires --apply with explicit job confirmation");
+  if (apply && confirmJob !== jobId)
+    throw Error("Cleanup requires --confirm-job with the same complete UUID");
+  const initial = await verifyJobEvidence(dataDir, jobId);
+  const claimed = await claimExists(dataDir, jobId);
+  const eligible = !claimed && ["failed", "incomplete"].includes(initial.report.state) &&
+    initial.entries.at(-1)?.kind !== "reconciled";
+  if (apply && !eligible)
+    throw Error("Cleanup denied: job must be unclaimed, terminal and not yet reconciled");
+  const claim = path.join(jobDirectory(dataDir, jobId), ".claim");
+  let ownsClaim = false;
   if (apply) {
-    for (const container of containers) {
-      const latest = await verifyJobEvidence(dataDir, jobId);
-      if (!["failed", "incomplete"].includes(latest.report.state) ||
-          await claimExists(dataDir, jobId))
-        throw Error("Cleanup aborted: job state or claim changed");
-      const confirmed = await verifiedCandidate(runDocker, container.id, jobId);
-      if (confirmed.id !== container.id || confirmed.name !== container.name ||
-          confirmed.step !== container.step)
-        throw Error("Cleanup aborted: Docker identity changed");
-      await runDocker(["rm", "-f", confirmed.id]);
+    try { await mkdir(claim, { mode: 0o700 }); ownsClaim = true; }
+    catch (error) {
+      if (error.code === "EEXIST")
+        throw Error("Cleanup denied: active operator or worker claim");
+      throw error;
     }
   }
-  return { jobId, reportState: report.state, claimed, eligible, applied: apply,
-    containers, removed: apply ? containers.map(c => c.id) : [] };
+  try {
+    if (apply) {
+      const check = await verifyJobEvidence(dataDir, jobId);
+      if (!["failed", "incomplete"].includes(check.report.state) ||
+          check.entries.at(-1)?.kind === "reconciled")
+        throw Error("Cleanup aborted: job state changed");
+    }
+    const ids = jobContainerIds(await runDocker(listJobArgs(jobId)));
+    const containers = [];
+    for (const id of ids)
+      containers.push(await verifiedCandidate(runDocker, id, jobId));
+    if (apply) {
+      for (const container of containers) {
+        const latest = await verifyJobEvidence(dataDir, jobId);
+        if (!["failed", "incomplete"].includes(latest.report.state) ||
+            latest.entries.at(-1)?.kind === "reconciled")
+          throw Error("Cleanup aborted: job state changed");
+        const confirmed = await verifiedCandidate(runDocker, container.id, jobId);
+        if (confirmed.id !== container.id || confirmed.name !== container.name ||
+            confirmed.step !== container.step)
+          throw Error("Cleanup aborted: Docker identity changed");
+        await runDocker(["rm", "-f", confirmed.id]);
+      }
+    }
+    if (finalize) {
+      // This is one fresh rootless-probed command in production. A Docker
+      // failure or even ONE remaining labelled container blocks the event.
+      const remaining = jobContainerIds(await runDocker(listJobArgs(jobId)));
+      if (remaining.length)
+        throw Error("Finalization denied: matching job containers remain");
+      const latest = await verifyJobEvidence(dataDir, jobId);
+      if (!["failed", "incomplete"].includes(latest.report.state) ||
+          !["finished", "recovered"].includes(latest.entries.at(-1)?.kind))
+        throw Error("Finalization denied: job evidence changed");
+      await recordJobEvidence(dataDir, jobId, {
+        ...latest.report,
+        reconciliation: { version: 1, at: new Date().toISOString(),
+          removedCount: containers.length, noRemaining: true },
+      }, "reconciled");
+    }
+    return { jobId, reportState: initial.report.state, claimed,
+      eligible, applied: apply, finalized: finalize,
+      containers, removed: apply ? containers.map(c => c.id) : [] };
+  } finally {
+    if (ownsClaim) await rm(claim, { recursive: true, force: true });
+  }
 }
 function help() {
-  return "Usage: node orphans.mjs --job=<UUID> [--apply --confirm-job=<same UUID>]\n" +
+  return "Usage: node orphans.mjs --job=<UUID> [--apply --confirm-job=<same UUID> [--finalize]]\n" +
     "Default: dry-run. Requires rootless DOCKER_HOST, verified terminal job and no .claim to remove.\n";
 }
 async function main(argv) {
   if (argv.length === 1 && argv[0] === "--help") { process.stdout.write(help()); return; }
-  const allowed = /^--(?:job|confirm-job)=[a-f0-9-]{36}$|^--apply$/;
+  const allowed = /^--(?:job|confirm-job)=[a-f0-9-]{36}$|^--(?:apply|finalize)$/;
   if (!argv.length || argv.some(arg => !allowed.test(arg)) ||
       argv.filter(arg => arg.startsWith("--job=")).length !== 1 ||
       argv.filter(arg => arg === "--apply").length > 1 ||
+      argv.filter(arg => arg === "--finalize").length > 1 ||
       argv.filter(arg => arg.startsWith("--confirm-job=")).length > 1)
     throw Error("Invalid arguments. " + help().trim());
   const jobId = argv.find(s => s.startsWith("--job=")).slice(6);
   const apply = argv.includes("--apply");
+  const finalize = argv.includes("--finalize");
   const confirmJob = argv.find(s => s.startsWith("--confirm-job="))?.slice(14) || null;
-  if (!apply && confirmJob) throw Error("--confirm-job requires --apply");
-  const result = await reconcileRunnerContainers({ jobId, apply, confirmJob });
+  if (!apply && (confirmJob || finalize))
+    throw Error("--confirm-job and --finalize require --apply");
+  const result = await reconcileRunnerContainers({ jobId, apply, confirmJob, finalize });
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))

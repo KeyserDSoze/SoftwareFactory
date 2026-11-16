@@ -191,8 +191,9 @@ export async function runWorker({
         // A recovered worker may have left a live container. Preserve its
         // verified journal for operator-only reconciliation irrespective of
         // retention age; never silently erase the only cleanup authority.
-        const needsReconciliation = evidenceEntries.at(-1)?.kind === "recovered" ||
-          needsTimeoutReconciliation(report);
+        const needsReconciliation = evidenceEntries.at(-1)?.kind !== "reconciled" &&
+          (evidenceEntries.at(-1)?.kind === "recovered" ||
+            needsTimeoutReconciliation(report));
         if (!claimed && !needsReconciliation &&
             ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
@@ -205,8 +206,9 @@ export async function runWorker({
                 await verifyJobEvidence(dataDir, id);
               // Recheck the recovered marker UNDER admission lock: a scan
               // must not delete proof of a job just recovered by a worker.
-              if (latestEntries.at(-1)?.kind !== "recovered" &&
-                  !needsTimeoutReconciliation(latest) &&
+              if ((latestEntries.at(-1)?.kind === "reconciled" ||
+                    latestEntries.at(-1)?.kind !== "recovered" &&
+                    !needsTimeoutReconciliation(latest)) &&
                   ["passed", "failed", "incomplete"].includes(latest.state) &&
                   Number.isFinite(Date.parse(latest.finishedAt)) &&
                   Date.parse(latest.finishedAt) < expireBefore)

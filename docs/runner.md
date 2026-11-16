@@ -829,3 +829,27 @@ Prima della #79 il worker attendeva il tentativo di `cleanupTimedOutRunnerContai
 Il report dello step conserva ora `timedOut:true`, `exitCode:null` e `cleanupVerified:true|false`, dove **solo** il booleano `true` da rimozione Docker d'identità verificata è prova di cleanup. `false`, eccezioni, assenza del container o risultati precedenti senza `cleanupVerified` sono **incerti**, mai successi. Il worker li presenta come `incomplete`, conserva il journal hash-chain, include un summary che richiede un controllo operatore e ne blocca la cancellazione automatica sia nello scanner sia nel ricontrollo sotto il lock `.admission`. La stessa policy vale per timeout di `npm-prepare`, non soltanto per test/build. I job con cleanup confermata possono scadere normalmente; nessun timeout autorizza un AI repair come se avesse fallito un test reale.
 
 Per recuperare il volume e la quota: **fermare prima worker/API** e assicurarsi che nessun processo stia usando il job, poi eseguire `node src/runner/orphans.mjs --job=<UUID>` in modalità dry-run; confrontare identità e report e, solo se appropriato, `--apply --confirm-job=<UUID>`. Non fare `docker prune` e non cancellare automaticamente il journal per età. Dopo verifica e cancellazione sicura del container, la rimozione dei journal conservati è una decisione manuale dell'amministratore. La rootless probe, l'identity check e gli smoke Docker CI rootful non sostituiscono test VM rootless reali né attestazione off-host (ADR 0036, #2).
+
+### Finalizzazione controllata dei job con Docker orphan (#80)
+
+I journal di job `recovered` o con `timedOut:true` e `cleanupVerified !== true` vengono conservati anche oltre il TTL normale per permettere il recupero. Dopo aver **fermato API e tutti i worker** che condividono il volume e aver verificato che nessun altro processo o nodo lo usa, l'operatore può controllare la situazione e completare l'intervento:
+
+```sh
+# Non modifica Docker, report o journal
+node src/runner/orphans.mjs --job=<UUID>
+
+# Rimuove solo i full ID Docker identificati dalle label del job,
+# ma NON rilascia la retention protetta
+node src/runner/orphans.mjs --job=<UUID> --apply --confirm-job=<UUID>
+
+# Dopo la verifica manuale, finalizza nello stesso processo:
+# fa cleanup con claim esclusiva e controlla ancora docker ps -a;
+# solo con ZERO container residui aggiunge la voce audit reconciled
+node src/runner/orphans.mjs --job=<UUID> --apply --confirm-job=<UUID> --finalize
+```
+
+`--finalize` non è consentito nel dry-run, richiede la stessa conferma UUID dell'apply e non è esposto al browser/worker/API. Ogni apply usa `mkdir .claim` con esclusività POSIX e verifiche ripetute del journal; non toglie una claim già presente. La rimozione avviene **soltanto per full-ID** dopo nuove `docker inspect` di nome/label/ID e nuovo probe del daemon rootless per ogni comando. La finalizzazione esegue un **ulteriore `docker ps -a` filtrato sulle label del job**, che deve restituire un elenco vuoto e valido; errori e container ancora presenti impediscono l'evento e preservano l'evidenza. È valida anche in assenza di container: conferma l'ispezione al momento dell'operazione, non l'avvenuta esecuzione di un test.
+
+L'evento `kind:"reconciled"` in `evidence.jsonl` contiene una fotografia dell'ultimo report con lo **stesso** `state` terminale, `finishedAt`, digest, risultati/test e tenant; aggiunge solo `reconciliation:{version:1,at,removedCount,noRemaining:true}`. È append-only e ha un hash SHA-256 legato all'evento precedente; non è firmato off-host e non può essere duplicato. Il coordinatore repair considera l'intera storia per distinguere un vecchio `recovered` da un autentico test fallito. In presenza di `reconciled` come ultimo evento verificato, la retention può cancellare il journal secondo la data `finishedAt` **originale**: se il job era già più vecchio del TTL, può scomparire alla prossima scansione. Per conservare a lungo termine il verbale, **esportare il bundle di evidenze prima** della successiva retention. Senza finalizzazione restano le protezioni della #61/#79.
+
+**Limiti:** le verifiche Docker sono point-in-time sul daemon locale e su label, non attestano l'assenza di container senza label, processi cross-host o compromissione del nodo. La CI Factory verifica lo smoke con Docker **rootful** in ambiente effimero; non dimostra un vero daemon rootless su VM dedicata, né Cloudflare Tunnel/Access reale (#2, ADR 0037).

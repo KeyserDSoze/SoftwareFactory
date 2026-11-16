@@ -616,3 +616,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Ogni timeout `runDockerStep` deve riportare `timedOut:true`, `exitCode:null`, `cleanupVerified:true` **solo** se il cleanup d'identità restituisce il booleano `true`; altrimenti false. Un timeout non è un fallimento del codice verificato né autorizza AI repair.
 - La retention del worker deve conservare per sempre fino a intervento operatore i journal con `results[].timedOut` o `preparation.timedOut` e `cleanupVerified !== true`, inclusi i formati legacy. Ripetere il gate sotto `.admission` prima di `rm`; non fare cleanup automatico per nome, per età o senza prova rootless.
 - Documentare e testare l'uso di `orphans.mjs` dry-run e apply su ID job specifico dopo aver fermato i worker. I journal conservati contengono prove verificabili, non sono garanzia che il container sia ancora in esecuzione (ADR 0036, #2).
+
+## Riconciliazione finale manuale con evento audit (#80)
+
+- `orphans.mjs --job=<UUID> --apply --confirm-job=<UUID> --finalize` è solo operator CLI, non HTTP; acquisire atomica `.claim` prima di qualunque cleanup applicata, rileggerne il journal verificato e ispezionare **per full Docker ID**. Nessun `prune`, nessuna cancellazione per nome o tempo; il dry-run resta senza effetti.
+- Emettere `kind:reconciled` nel journal append-only esclusivamente dopo nuovo `docker ps -a` rootless-probed con **zero container etichettati**; mantenere immutati `digest`, `tenantId`, `state`, `finishedAt`, risultati e preparazione. Vietare doppio evento o ogni altro append dopo terminale, sanitizzare errori/secret.
+- La retention protegge `recovered`/timeout incerti **fino** all'ultimo evento `reconciled` verificato, ricontrollando sotto `.admission`. Il coordinatore repair deve controllare la **storia** degli eventi `recovered`, non soltanto l'ultimo (legacy recovered=failed non diventa riparabile).
+- Questa è una prova Docker **locale point-in-time**, non firma/attestazione indipendente: mantenere operatore e worker fermati secondo la runbook; esportare bundle evidence prima della successiva scadenza standard per conservazione lunga. ADR 0037, issue #2.

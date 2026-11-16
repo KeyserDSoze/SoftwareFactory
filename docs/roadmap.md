@@ -604,3 +604,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Registrazione del risultato di cleanup sui timeout; `cleanupVerified:true` soltanto dopo esito positivo verificato. Report `incomplete` e summary di riconciliazione se cleanup incerto.
 - Retention fail-closed su step Docker e preparazione npm scaduti con `timedOut:true` e `cleanupVerified !== true` (anche legacy), più check dentro il lock admission. Test Node di timeout, eccezioni e journal TTL, ADR 0036. L'epica #2 mantiene VM rootless live, Cloudflare Access/Tunnel e fencing/attestazione distribuiti come attività aperte.
+
+## v0.2 — Finalizzazione operator-only dei journal Docker orfani (#80)
+
+- Claim POSIX esclusiva per ogni cleanup applicata; `--finalize` richiede `--apply --confirm-job`, rimozione per full Docker ID e conferma finale zero container etichettati tramite daemon rootless.
+- Nuovo evento append-only `reconciled` nella chain con stato e output di test immutati; repair continua a rifiutare qualunque job recuperato storicamente. I journal vecchi e finalizzati possono tornare alla retention normale dopo esportazione dell'audit necessario.
+- Test Node per concorrenza, idempotenza, integrità, report falliti non promossi, retention, e smoke Docker CI reale, ADR 0037. Da fare: prova VM rootless e Cloudflare live, fencing/attestazione off-host, job autonomy reali (#2).

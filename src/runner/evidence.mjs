@@ -9,13 +9,34 @@ import { atomicWrite, jobDirectory } from "./common.mjs";
 
 const ZERO = "0".repeat(64);
 const HEX = /^[a-f0-9]{64}$/;
-const KINDS = new Set(["accepted", "started", "preparation", "step", "finished", "recovered", "rejected"]);
+const KINDS = new Set(["accepted", "started", "preparation", "step", "finished", "recovered", "rejected", "reconciled"]);
 const sha = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const snapshot = value => { const copy = { ...value }; delete copy.evidence; return copy; };
 const invalid = () => Object.assign(new Error("Runner evidence integrity check failed"), { code: "EVIDENCE_INVALID" });
 const journalPath = (dataDir, id) => path.join(jobDirectory(dataDir, id), "evidence.jsonl");
 const reportPath = (dataDir, id) => path.join(jobDirectory(dataDir, id), "report.json");
 const MAX_EVIDENCE_FILE_BYTES = 4_000_000;
+
+/** Terminal verdict and code-test evidence remain immutable after local
+ * operator reconciliation. This is a *local* Docker inspection record, not
+ * off-host attestation. No secrets, Docker output or container IDs stored.
+ */
+function validReconciliation(next, previous) {
+  if (!next || !previous || !["failed", "incomplete"].includes(previous.state))
+    return false;
+  const { reconciliation, ...unchanged } = next;
+  if (!isDeepStrictEqual(unchanged, previous) ||
+      !reconciliation || typeof reconciliation !== "object" ||
+      Array.isArray(reconciliation) ||
+      Object.keys(reconciliation).sort().join(",") !==
+        "at,noRemaining,removedCount,version" ||
+      reconciliation.version !== 1 || reconciliation.noRemaining !== true ||
+      !Number.isSafeInteger(reconciliation.removedCount) ||
+      reconciliation.removedCount < 0 || reconciliation.removedCount > 16 ||
+      typeof reconciliation.at !== "string" ||
+      !Number.isFinite(Date.parse(reconciliation.at))) return false;
+  return true;
+}
 
 /** The local evidence hash chain is only useful when both inputs come from
  * regular, owned, singly-linked files. The API and worker must share UID.
@@ -96,6 +117,13 @@ export function verifyEvidenceExport(bundle) {
           record.report.id !== bundle.id || record.report.digest !== bundle.report.digest ||
           record.report.tenantId !== bundle.report.tenantId ||
           !HEX.test(hash) || sha(record) !== hash) throw invalid();
+      if (record.kind === "reconciled") {
+        const previous = bundle.entries[i - 1];
+        if (i !== bundle.entries.length - 1 ||
+            !["finished", "recovered"].includes(previous?.kind) ||
+            !validReconciliation(record.report, previous.report))
+          throw invalid();
+      }
       previousHash = hash;
     }
     if (bundle.entries[0].kind !== "accepted" ||
@@ -169,7 +197,13 @@ export async function recordJobEvidence(dataDir, id, report, kind) {
     if (report.state !== "queued" || report.evidence) throw invalid();
   } else {
     const previous = await verifyJobEvidence(dataDir, id);
-    if (["passed", "failed", "incomplete"].includes(previous.report.state)) throw invalid();
+    const terminal = ["passed", "failed", "incomplete"].includes(previous.report.state);
+    if (kind === "reconciled") {
+      if (!terminal ||
+          !["finished", "recovered"].includes(previous.entries.at(-1)?.kind) ||
+          !validReconciliation(snapshot(report), snapshot(previous.report)))
+        throw invalid();
+    } else if (terminal) throw invalid();
     previousHash = previous.head;
     count = previous.entries.length;
   }
