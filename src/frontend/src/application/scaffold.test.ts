@@ -84,6 +84,22 @@ describe("application scaffold", () => {
     expect(workflow).toContain("E2E_API_ORIGIN=http://127.0.0.1:8080");
     expect(workflow).toContain("curl -fsS http://127.0.0.1:8080/health");
   });
+  it("fences every generated PostgreSQL mutation and 401 to the active OIDC session", () => {
+    const files = generateFiles(example());
+    const component = files["src/frontend/web/src/WorkItems.tsx"];
+    const browser = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(component).toContain("const sessionEpoch = useRef(0)");
+    expect(component).toContain("sessionEpoch.current++");
+    expect(component).toContain("sessionEpoch.current === expectedEpoch");
+    expect(component).toContain("clearUnauthorizedSession(token, expectedEpoch)");
+    expect(component.match(/const mutationIsCurrent = \(\) => sessionMatches\(token, expectedEpoch\)/g)).toHaveLength(3);
+    expect(component.match(/if \(!mutationIsCurrent\(\)\) return;/g)).toHaveLength(6);
+    expect(component.match(/if \(mutationIsCurrent\(\)\) setBusy\(false\)/g)).toHaveLength(3);
+    expect(component.match(/if \(mutationIsCurrent\(\)\) setError\(/g)).toHaveLength(3);
+    expect(browser).toContain("late OIDC POST response after cross-tab logout cannot restore private items");
+    expect(browser).toContain("const response = await route.fetch()");
+    expect(browser).toContain("await releaseGate");
+  });
   it("generates real PostgreSQL repository, migrations and a browser CRUD journey", () => {
     const files = generateFiles(example());
     const infrastructure = files["src/backend/infrastructure/Infrastructure.csproj"];

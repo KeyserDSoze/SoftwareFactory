@@ -68,3 +68,12 @@ Decisione: mantenere `sessionStorage` distinto per scheda e sincronizzare solo l
 
 
 Nota di validazione #17: la prima implementazione usava un canale temporaneo per la pubblicazione e uno diverso per l'ascolto nella stessa pagina; Chromium ha verificato che la pagina mittente riceveva anche il proprio evento, sovrascrivendo l'errore locale 401. La decisione correttiva è **un solo oggetto BroadcastChannel per documento**, condiviso e gestito con conteggio delle subscription; questo preserva il messaggio di errore 401 originario e la sincronizzazione degli altri tab senza token nel payload.
+
+
+## Addendum — fence per risposte CRUD dopo cambio sessione (#42, 16 novembre 2026)
+
+L'originaria protezione della GET dei WorkItems confrontava soltanto il token corrente prima di aggiornare la UI; le risposte POST/PUT/DELETE invece aggiornavano `items`, editing e errori anche dopo un logout BroadcastChannel, invalida 401 o rinnovo che cambia il token. In un browser con più tab, un'operazione già autorizzata dal server prima del logout può concludersi tardi, ripopolando la schermata anonima o del successivo account.
+
+Decisione: usare un contatore `sessionEpoch` locale monotono per ogni transizione di sessione e una referenza sincrona al token attivo. Ogni fetch CRUD cattura (token,epoch) prima della rete, ricontrolla la coppia dopo gli await e nei catch/finally, e scarta risposte obsolete senza toccare lo stato React. Un 401 della sessione A non può rimuovere credenziali della B. Lo switch libera subito `busy` e le schermate protette vengono pulite dall'invalidation già implementata. Una prova Chromium fullstack con IdP fittizio, due schede e PostgreSQL vero ritarda la consegna al browser del risultato di un POST già eseguito, verifica il logout broadcast e controlla che il risultato vecchio non riappaia.
+
+Il meccanismo non annulla una scrittura PostgreSQL già autorizzata dal server né impedisce l'uso del vecchio JWT sul lato rete finché resta valido; nessuna revoca federata o cross-device è stata introdotta. Per una protezione complessiva rimangono necessari BFF HttpOnly, CSRF/XSS e IdP HTTPS in #9.

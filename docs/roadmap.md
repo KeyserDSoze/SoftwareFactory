@@ -356,3 +356,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Aggiungere nella Factory CI uno step reale `docker create/inspect/start/inspect/rm` per il canary #40, usando immagine Node già pullata e digest locale, senza pull né prune; fallire su esito invalido o risorse residue.
 - Il codice di smoke CI è esclusivamente per runner GitHub effimero, controlla ambiente CI non root e daemon effettivamente rootful e bypassa la verifica rootless **solo** tramite dipendenza locale iniettata; la CLI operator-only rimane fail-closed su rootful.
 - Verifiche Node per selezione digest, guardia di lancio e rifiuto modalità daemon diversa; doc/ADR aggiornati. Lo smoke reale CI **non sostituisce** il collaudo su VM rootless (#2).
+
+
+## v0.3 — Fence delle risposte stale tra sessioni OIDC (#42)
+
+- `WorkItems.tsx` generato: token + generazione incrementale a ogni sostituzione/invalidazione di sessione, guard su GET e POST/PUT/DELETE dopo await, catch, finally e 401. Logout e sostituzioni svuotano immediatamente busy e i dati della sessione precedente.
+- Test Vitest di copertura per tre mutazioni e 401; Chromium con due tab OIDC e PostgreSQL reale per response POST trattenuta dal browser dopo commit, logout remote e rilascio senza ripopolamento della UI. Nessuna sostituzione delle policy lato API.
+- Mancano IdP HTTPS reale, revoca JWT distribuita, BFF e cookie HttpOnly/XSS hardening completo: #9 resta aperta.

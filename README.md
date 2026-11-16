@@ -208,3 +208,8 @@ Per avanzare oltre la sola verifica di `docker info` (#39), il progetto include 
 ## Canary: test Docker Engine reale in GitHub Actions (#41)
 
 La CI, dopo lo smoke dei job, esegue ora **anche** il ciclo Docker del canary `#40` contro un **vero Engine su macchina GitHub Actions effimera**. Recupera il riferimento `node@sha256` dalla cache locale, controlla il risultato del Docker `create/inspect/start/inspect/rm` e rifiuta residui. Lo script è riservato alla CI e dichiara esplicitamente `ROOTFUL_CI_ONLY`: la sua iniezione di test bypassa la prova rootless per verificare la compatibilità del percorso Docker, ma **non modifica la CLI operatore**, che continua a rifiutare un daemon rootful. Il successo della CI non costituisce quindi prova di un daemon rootless, VM dedicata, Cloudflare Access o attestazione off-host: resta aperta la #2.
+
+
+## Protezione dalle risposte HTTP tardive dopo logout OIDC (#42)
+
+Le app PostgreSQL generate ora legano le risposte delle letture e delle **mutazioni crea/modifica/elimina** al token e alla generazione di sessione che le ha avviate. Logout, cambio account, rinnovo credenziali o invalidazione da un'altra scheda annullano immediatamente l'autorizzazione delle vecchie risposte a modificare l'interfaccia, gli errori o lo stato dei form. Anche un vecchio 401 non può cancellare un login successivo. La CI verifica con Chromium, OIDC temporaneo, ASP.NET Core e PostgreSQL che un POST già completato dal server ma consegnato al browser **dopo** il logout cross-tab non faccia ricomparire dati privati. Questo non revoca token né annulla transazioni già autorizzate sul server; restano aperti BFF/cookie HttpOnly e IdP di produzione nella #9.
