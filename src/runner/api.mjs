@@ -8,10 +8,12 @@ import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
+import { loadRunnerTenantsFile, authenticateRunnerTenant } from "./tenants.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
   apiKeyFile = process.env.RUNNER_API_KEY_FILE,
+  tenantsFile = process.env.RUNNER_TENANTS_FILE,
   allowedOrigins = (process.env.RUNNER_ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean),
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
@@ -23,12 +25,22 @@ export function createRunnerServer({
   repairOperatorsFile = process.env.RUNNER_REPAIR_OPERATORS_FILE,
 } = {}) {
   const fileMode = apiKeyFile !== undefined && apiKeyFile !== null && apiKeyFile !== "";
+  const tenantMode = tenantsFile !== undefined && tenantsFile !== null && tenantsFile !== "";
+  if (tenantMode && (fileMode || (apiKey !== undefined && apiKey !== null && apiKey !== "")))
+    throw new Error("Configure only one runner authentication source (RUNNER_TENANTS_FILE or API key)");
   if (fileMode && apiKey !== undefined && apiKey !== null && apiKey !== "")
     throw new Error("Configure only one runner API credential source (RUNNER_API_KEY or RUNNER_API_KEY_FILE)");
+  if (tenantMode && (typeof tenantsFile !== "string" ||
+      !path.isAbsolute(tenantsFile) || tenantsFile.includes("\0")))
+    throw new Error("RUNNER_TENANTS_FILE must be an absolute path");
+  // Repair approval has no tenant role/ownership model yet: disallow it
+  // altogether in this mode, rather than silently installing a global admin.
+  if (tenantMode && (repairOperators || repairOperatorsFile))
+    throw new Error("Multi-tenant runner mode forbids repair operator registry");
   if (fileMode && (typeof apiKeyFile !== "string" ||
       !path.isAbsolute(apiKeyFile) || apiKeyFile.includes("\0")))
     throw new Error("RUNNER_API_KEY_FILE must be an absolute path");
-  if (!fileMode && (typeof apiKey !== "string" || apiKey.length < 32))
+  if (!fileMode && !tenantMode && (typeof apiKey !== "string" || apiKey.length < 32))
     throw new Error("RUNNER_API_KEY must contain at least 32 characters");
   if (fileMode && repairOperators)
     throw new Error("File-backed runner key cannot use inline repair operator registry");
@@ -60,6 +72,13 @@ export function createRunnerServer({
     if (!authenticate(authorization, latest))
       throw Object.assign(new Error("runner_auth_revoked"), { code: "RUNNER_AUTH_REVOKED" });
   } : undefined;
+  const recheckTenant = tenantMode ? async (authorization, expectedId) => {
+    const latest = authenticateRunnerTenant(authorization,
+      await loadRunnerTenantsFile(tenantsFile));
+    if (!latest || latest.id !== expectedId)
+      throw Object.assign(new Error("tenant_auth_revoked"), { code: "TENANT_AUTH_REVOKED" });
+    return latest;
+  } : undefined;
   return httpServer(async (req, res) => {
     const origin = req.headers.origin;
     const allowed = origin && allowedOrigins.includes(origin);
@@ -78,11 +97,18 @@ export function createRunnerServer({
     if (req.method === "OPTIONS") { send(204, {}); return; }
     if (req.url === "/healthz" && req.method === "GET") { send(200, { status: "ok", version: 1 }); return; }
     let activeRunnerKey = apiKey;
-    if (fileMode) {
+    let activeTenant = null;
+    if (tenantMode) {
+      try {
+        activeTenant = authenticateRunnerTenant(req.headers.authorization,
+          await loadRunnerTenantsFile(tenantsFile));
+      } catch { send(503, { error: "tenant_auth_unavailable" }); return; }
+    } else if (fileMode) {
       try { activeRunnerKey = await loadRunnerApiKeyFile(apiKeyFile); }
       catch { send(503, { error: "runner_auth_unavailable" }); return; }
     }
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
+    if (tenantMode && repairRoute) { send(404, { error: "not_found" }); return; }
     if (repairRoute && !repairOperatorsFile && !inlineOperatorRegistry) {
       send(503, { error: "repair_auth_unconfigured" }); return;
     }
@@ -96,7 +122,8 @@ export function createRunnerServer({
     const repairOperator = repairRoute
       ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)
       : null;
-    if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, activeRunnerKey)) {
+    if (repairRoute ? !repairOperator :
+        tenantMode ? !activeTenant : !authenticate(req.headers.authorization, activeRunnerKey)) {
       send(401, { error: "unauthorized" }); return;
     }
     if (req.method === "GET" && req.url === "/v1/execution-readiness") {
@@ -130,12 +157,26 @@ export function createRunnerServer({
       try {
         const id = req.url.split("/")[3];
         const verified = await verifyJobEvidenceForRead(dataDir, id);
+        if (tenantMode) {
+          const latest = await recheckTenant(req.headers.authorization, activeTenant.id);
+          if (verified.report.tenantId !== latest.id) {
+            send(404, { error: "not_found" }); return;
+          }
+        }
         send(200, req.url.endsWith("/evidence")
           ? portableEvidenceBundle(verified)
           : verified.report);
       } catch(e) {
-        if (e.code === "EVIDENCE_INVALID") send(409, { error: "evidence_invalid" });
+        // In tenant mode, a corrupt foreign job must not become an existence
+        // oracle. Report and evidence corruption still blocks all admissions.
+        if (e.code === "EVIDENCE_INVALID")
+          tenantMode ? send(404, { error: "not_found" })
+            : send(409, { error: "evidence_invalid" });
         else if (e.code === "ENOENT") send(404, { error: "not_found" });
+        else if (e.code === "TENANT_AUTH_REVOKED")
+          send(401, { error: "unauthorized" });
+        else if (e.code === "TENANT_AUTH_UNAVAILABLE")
+          send(503, { error: "tenant_auth_unavailable" });
         else send(500, { error: "read_failure" });
       }
       return;
@@ -237,13 +278,20 @@ export function createRunnerServer({
           const receipt = await admitRunnerJob({
             dataDir, checked, idempotencyKey: req.headers["idempotency-key"],
             maxQueued, maxRetained, waitMs: admissionWaitMs, maxAcceptedPerMinute,
-            reauthorize: recheckRunnerKey
-              ? () => recheckRunnerKey(req.headers.authorization) : undefined,
+            tenant: activeTenant,
+            reauthorize: tenantMode
+              ? () => recheckTenant(req.headers.authorization, activeTenant.id)
+              : recheckRunnerKey
+                ? () => recheckRunnerKey(req.headers.authorization) : undefined,
           });
           send(202, receipt);
         } catch (error) {
           if (error.code === "INVALID_IDEMPOTENCY_KEY")
             send(422, { error: "invalid_idempotency_key" });
+          else if (error.code === "TENANT_AUTH_REVOKED")
+            send(401, { error: "unauthorized" });
+          else if (error.code === "TENANT_AUTH_UNAVAILABLE")
+            send(503, { error: "tenant_auth_unavailable" });
           else if (error.code === "RUNNER_AUTH_REVOKED")
             send(401, { error: "unauthorized" });
           else if (error.code === "RUNNER_AUTH_UNAVAILABLE")
