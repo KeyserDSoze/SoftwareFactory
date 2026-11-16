@@ -487,3 +487,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Estendere l'autenticazione degli operatori repair con lettura size-pinned dal solo FD `O_NOFOLLOW`, verifiche owner-only, inode/link/size/timestamps/mode prima e dopo. Fallire chiuso per EOF, append/truncate, riscrittura in place (anche JSON valido, stessa lunghezza), chmod/link concorrenti, senza esporre path e chiavi.
 - Mantenere la rotazione atomica fra richieste e la reauth all'interno dei lock; niente cache o sessione di token, niente bypass tramite job payload. Test Node deterministici tramite FD wrapper con mutazioni nel mezzo della lettura, oltre alle API due-replica preesistenti.
 - ADR 0017, issue #60. Non collauda identity federation, VM Docker rootless, Cloudflare Access, fencing o attestazione off-host, ancora in #2 e #9.
+
+
+## v0.2 — Recovery incompleta e retention conservativa per job orfani (#61)
+
+- Cambiare la recovery senza claim da `failed` a `incomplete` con evento SHA-chain `recovered`, preservando step parziali, idempotenza terminale e claim esclusiva. Non trasformare un crash in codice fallito o test `passed`.
+- Il coordinatore non deve iniziare repair su ultimo evento `recovered` anche se vecchi report portano `failed` con exit code di step precedente: respingere con `REPAIR_NOT_FAILED`.
+- La retention controlla l'ultimo evento del journal verificato prima e *sotto il lock* di cancellazione; i `recovered` scaduti si conservano finché un operatore non riconcilia container/journal con worker e API fermati. I terminali normali scaduti rimangono eleggibili per retention.
+- Test Node con export, API GET, journal legacy/moderni, repair negato, claimed job, no retry e retention. ADR 0018; quota preservata a costo di spazio non limitato per orfani finché non interviene l'operatore. #2 aperta per fencing e VM Docker rootless reale.
