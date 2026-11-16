@@ -218,3 +218,8 @@ Le app PostgreSQL generate ora legano le risposte delle letture e delle **mutazi
 ## Readiness Docker stabile durante gli aggiornamenti heartbeat (#43)
 
 La readiness del runner è stata corretta per evitare falsi **503 `docker_unavailable`** quando un heartbeat viene sostituito mentre l'API lo legge: il tempo di confronto viene rilevato dopo la lettura asincrona del file, non prima. Resta obbligatorio rifiutare timestamp realmente futuri, probe scaduti o non-rootless. Test Node eseguono molte GET su due API mentre il worker aggiorna il file, senza alterare la sicurezza né le limitazioni del deployment remoto sperimentale (#2).
+
+
+## Ruoli OIDC univoci nelle app generate (#44)
+
+La API PostgreSQL generata non concede più permessi per la sola presenza di `editor` in un elenco ambiguo di ruoli JWT. Ogni token firmato deve avere **esattamente un claim `role`**, con valore `reader` oppure `editor`, e un soggetto `sub` univoco. Token con ruoli doppi, misti, assenti o sconosciuti sono negati con HTTP 403; i token invalidi crittograficamente continuano a ricevere HTTP 401. Il provider OIDC temporaneo della CI firma queste varianti e la vera API ASP.NET Core le verifica anche dopo il rollover JWKS. Per gli IdP esterni è necessaria una mappatura esplicita del singolo ruolo applicativo: non è un'integrazione IdP production e la #9 resta aperta.

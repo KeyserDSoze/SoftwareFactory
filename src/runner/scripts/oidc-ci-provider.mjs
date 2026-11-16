@@ -178,12 +178,18 @@ const server = http.createServer(async (req, res) => {
       const role = url.searchParams.get("role") || "";
       const type = url.searchParams.get("type") || "";
       if (!/^[A-Za-z0-9_-]{1,80}$/.test(subject) || !["reader","editor","none"].includes(role)
-        || !["", "wrong-audience", "expired", "empty-sub", "missing-sub"].includes(type))
+        || !["", "wrong-audience", "expired", "empty-sub", "missing-sub",
+          "mixed-roles", "duplicate-roles", "unknown-role", "empty-role", "missing-role"].includes(type))
         return fail(res, 400, "invalid_user");
       const extra = type === "wrong-audience" ? { aud: "not-the-api" } :
         type === "expired" ? { exp: Math.floor(Date.now()/1000)-120 } :
         type === "empty-sub" ? { sub: "" } :
-        type === "missing-sub" ? { sub: undefined } : {};
+        type === "missing-sub" ? { sub: undefined } :
+        type === "mixed-roles" ? { role: ["reader", "editor"] } :
+        type === "duplicate-roles" ? { role: ["editor", "editor"] } :
+        type === "unknown-role" ? { role: "administrator" } :
+        type === "empty-role" ? { role: "" } :
+        type === "missing-role" ? { role: undefined } : {};
       return json(res, 200, { access_token: accessToken(subject, role, extra) });
     }
   }

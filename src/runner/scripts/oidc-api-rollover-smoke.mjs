@@ -18,8 +18,8 @@ async function getJson(path, headers = undefined) {
   assert.equal(response.status, 200, "OIDC test provider response");
   return response.json();
 }
-async function mint(role) {
-  const q = new URLSearchParams({ sub: "owner-a", role });
+async function mint(role, type = "") {
+  const q = new URLSearchParams({ sub: "owner-a", role, ...(type ? { type } : {}) });
   const response = await getJson("/__ci/mint?" + q, controlHeaders);
   assert.equal(typeof response.access_token, "string");
   return response.access_token;
@@ -76,5 +76,15 @@ assert.equal(await status(parts.join(".")), 401, "Tampered RS256 signature must 
 const reader = await mint("reader");
 assert.equal(header(reader).kid, newJwks.keys[0].kid);
 assert.equal(await status(reader, "POST"), 403, "New signing key must not bypass RBAC");
-
-console.log("OIDC_API_JWKS_ROLLOVER_PASS: live ASP.NET Core accepted new kid without restart; bad signature 401; reader write 403; transient401=" + transient401);
+assert.equal(await status(reader, "GET"), 200, "One reader role must permit read");
+assert.equal(await status(after, "POST"), 201, "One editor role must permit write");
+// RSA-signed negative claims: an editor inside an ambiguous role list must NOT
+// be enough to grant writes. The test fixture is CI-only and does not log JWTs.
+for (const type of ["mixed-roles", "duplicate-roles", "unknown-role", "empty-role", "missing-role"]) {
+  const bad = await mint("editor", type);
+  assert.equal(await status(bad, "GET"), 403,
+    "Ambiguous/unrecognized OIDC role must not grant read: " + type);
+  assert.equal(await status(bad, "POST"), 403,
+    "Ambiguous/unrecognized OIDC role must not grant write: " + type);
+}
+console.log("OIDC_API_JWKS_ROLLOVER_PASS: live ASP.NET Core accepted new kid; bad signature 401; strict unique reader/editor role with five negative variants; transient401=" + transient401);

@@ -375,3 +375,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `GET /v1/execution-readiness` usa al massimo tre letture/verifiche **integrali** di heartbeat + probe daemon, separate da 15ms, se una lettura è incoerente durante un cambio revisione. Ogni tentativo deve soddisfare **da solo** tutti i check owner/permissions/schema/ISO/TTL/rootless; nessuna risposta parziale, stato cached `ready` o bypass del check Docker. Tre rifiuti consecutivi => HTTP 503 `docker_unavailable`.
 - Gli heartbeat devono essere validati contro il clock **post-I/O**; gli eventuali failure log dei test possono riportare solo rootless booleano ed età dei timestamp, non token, UUID, file path o output Docker. Una VM rootless reale rimane da verificare (#2).
+
+
+## RBAC OIDC: un solo ruolo firmato valido (#44)
+
+- Le policy ASP.NET Core del progetto PostgreSQL generato richiedono **esattamente un** claim `role` normalizzato a `reader` o `editor` (oltre al singolo `sub` già richiesto), e conservano `RequireRole`. Un JWT firmato con ruoli multipli, duplicati, vuoti, non riconosciuti o assenti deve ottenere 403 anche se include `editor`; JWT con firma/issuer/audience/scadenza non validi devono restare 401.
+- Gli IdP reali devono configurare una mappatura applicativa esplicita per emettere un **unico** `role` valido; non prendere il primo elemento di array `roles` senza policy o fondere ruoli. Il provider RSA effimero `oidc-ci-provider.mjs` conia in CI varianti firmate, e `oidc-api-rollover-smoke.mjs` ne verifica diniego GET/POST contro API .NET viva dopo JWKS rollover e le capacità reader/editor legittime.
+- Questo non equivale a IDP HTTPS di produzione, BFF, revoca federata, multi-tenancy o verifiche cross-device: la #9 resta aperta.

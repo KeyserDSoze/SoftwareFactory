@@ -369,3 +369,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Elimina false 503 quando `readDockerExecutionReadiness` confronta un heartbeat aggiornato durante il GET con un `now` catturato prima dell'I/O. Usa due clock post-read, oppure clock iniettato coerente per i test.
 - Test con due API e 80 GET in parallelo agli heartbeat periodici reali: nessun falso stato future quando il probe è rootless fresco; resta il rifiuto fail-closed per file malformati, vecchi o rootful. Lo stato operativo VM rootless reale resta nella #2.
+
+
+## v0.3 — JWT role claim univoco e fail-closed (#44)
+
+- Politiche WorkItems: singolo `sub` e singolo claim `role` esattamente `reader`/`editor` più `RequireRole`; le forme ambigue, duplicate, sconosciute, vuote o mancanti non autorizzano read/write nonostante JWT RSA valido.
+- Prove reali con l'Identity Provider RSA effimero che firma cinque varianti malformate, `GET/POST /api/items` su API .NET/PostgreSQL post-JWKS-rollover devono essere tutti 403, mantenendo 200 reader GET, 403 reader POST e 201 editor POST; Vitest sullo scaffold generato.
+- Rimangono nella #9 integrazione HTTPS IdP production, validazione mapping ruoli in deployment esterni, BFF/HttpOnly e revoca/cross-device.

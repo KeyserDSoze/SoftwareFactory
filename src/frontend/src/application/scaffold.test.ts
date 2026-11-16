@@ -159,6 +159,17 @@ describe("application scaffold", () => {
       expect(files[".github/workflows/ci.yml"]).not.toContain("E2E_DATABASE=postgresql");
     }
   });
+  it("rejects ambiguous signed OIDC role claims in the generated .NET policy and real-CI fixture", () => {
+    const files = generateFiles(example());
+    const auth = files["src/backend/applications/Api/AuthStartup.cs"];
+    expect(auth).toContain("private static bool HasValidRole");
+    expect(auth.match(/HasValidSubject\(context.User\) && HasValidRole\(context.User\)/g)).toHaveLength(2);
+    expect(auth).toContain('var roles = user.FindAll("role").ToArray()');
+    expect(auth).toContain('roles.Length == 1');
+    expect(auth).toContain('roles[0].Value == "reader" || roles[0].Value == "editor"');
+    expect(auth).toContain('RequireRole("reader", "editor")');
+    expect(auth).toContain('RequireRole("editor")');
+  });
   it("emits real OIDC code+PKCE UI and production-only JWKS verifier with explicit legacy-dev mode", () => {
     const files = generateFiles(example());
     const auth = files["src/backend/applications/Api/AuthStartup.cs"];

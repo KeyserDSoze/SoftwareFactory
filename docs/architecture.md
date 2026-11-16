@@ -263,3 +263,8 @@ Il componente `WorkItems` dell'app generata conserva un `sessionEpoch` monotono 
 ### Coerenza tra clock e rename heartbeat (#43)
 
 Il file heartbeat viene aggiornato da un writer atomico indipendente dai GET. Un `Date.now()` catturato **prima** dell'I/O del lettore, riusato per la verifica del JSON letto dopo un rename, può far apparire un record fresco come proveniente dal futuro. Il controllo execution-readiness ora lascia che il parser misuri il clock dopo la lettura e verifica il TTL del probe con un nuovo clock post-I/O; un clock di test iniettato mantiene invarianti deterministici. Nessuna modifica al contenuto o alla fiducia del segnale: timestamp futuri reali e compromissioni restano errori, la #2 richiede ancora controlli off-host e VM dedicata.
+
+
+### OIDC RBAC con ruolo applicativo univoco (#44)
+
+Dopo la verifica RS256/JWKS dell'access token, le policy ASP.NET Core dei WorkItems ora controllano sia l'unicità/forma di `sub` sia l'unicità del claim `role`. L'unico ruolo consentito è `reader` o `editor`: più claim, payload multi-role o valori sconosciuti non devono diventare privilegi attraverso `RequireRole` che altrimenti accetterebbe un elemento `editor` nell'elenco. I token firmati senza ruolo applicativo univoco ricevono 403; firma/issuer/audience/exp non validi 401. I provider reali devono emettere un singolo claim normalizzato tramite mapping sicuro, senza scegliere arbitrariamente tra ruoli concorrenti. Test CI su provider RSA effimero + API ASP.NET/PostgreSQL dopo rotation JWKS, senza registrare token. Non aggiunge revoca server-side o IdP reale (#9).

@@ -79,3 +79,10 @@ Decisione: usare un contatore `sessionEpoch` locale monotono per ogni transizion
 Il meccanismo non annulla una scrittura PostgreSQL già autorizzata dal server né impedisce l'uso del vecchio JWT sul lato rete finché resta valido; nessuna revoca federata o cross-device è stata introdotta. Per una protezione complessiva rimangono necessari BFF HttpOnly, CSRF/XSS e IdP HTTPS in #9.
 
 Il test della #42 incrementa il browser fullstack CI da 15 a 16 scenari OIDC/PostgreSQL; il gate `fullstack-smoke.mjs` richiede ora esattamente `16 passed` sull'output reale Playwright e continua a rifiutare test mancanti, skipped o falliti. Non è sufficiente che il processo Playwright ritorni exit code 0 se l'intero set atteso non è stato eseguito.
+
+
+## Addendum — cardinalità del ruolo firmato OIDC (#44, 16 novembre 2026)
+
+Le policy originali controllavano il singolo `sub` ma `RequireRole` accettava anche un access token RSA valido contenente più claim `role`, tra cui `editor`. Questo poteva produrre una decisione editor non giustificata da un mapping univoco del provider. Decisione: l'API generata impone `HasValidRole` in entrambe le policy (insieme a `HasValidSubject`), richiedendo **un unico ruolo applicativo** esattamente `reader` o `editor`, quindi applica ancora `RequireRole`. Se l'IdP presenta liste o formati diversi, il deployment deve configurare una mappatura firmata e non ambigua: non vengono inventati ruoli né concessi privilegi con fallback.
+
+Le prove CI con provider RSA effimero firmano ruoli misti, duplicati, sconosciuti, vuoti e mancanti, e richiedono 403 per GET/POST contro la API ASP.NET Core reale dopo rollover JWKS. Rimangono positive le capacità di reader/editor singoli e le verifiche negative di firma/audience. Questo è un hardening RBAC lato server, **non** una prova con IdP esterno di produzione o revoca JWT; #9 resta aperta.
