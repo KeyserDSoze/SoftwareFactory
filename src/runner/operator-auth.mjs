@@ -110,3 +110,17 @@ export function mayRecordRepairAction(operator, action) {
       action === "record_approval" ? "approve" : null;
   return scope !== null && operator.roles.includes(scope);
 }
+
+/** Recheck a file-backed operator capability at the start of the ledger's
+ * exclusive write section. Never persist or echo the supplied authorization.
+ * Not a transaction with concurrent host-side registry replacement.
+ */
+export async function reauthorizeRepairMutation(filePath, runnerKey, authorization, actorId, action) {
+  const registry = await loadRepairOperatorsFile(filePath, runnerKey);
+  const current = authenticateRepairOperator(authorization, registry);
+  if (!current) throw Object.assign(new Error("repair_authorization_revoked"),
+    { code: "REPAIR_AUTH_REVOKED" });
+  if (current.id !== actorId || !mayRecordRepairAction(current, action))
+    throw Object.assign(new Error("repair_scope_revoked"),
+      { code: "REPAIR_SCOPE_REVOKED" });
+}

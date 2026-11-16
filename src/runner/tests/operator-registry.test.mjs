@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
+import { setTimeout as sleep } from "node:timers/promises";
 import { mkdtemp, chmod, link, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
-import { isPrivateRepairOperatorFile, loadRepairOperatorsFile } from "../operator-auth.mjs";
+import { isPrivateRepairOperatorFile, loadRepairOperatorsFile, reauthorizeRepairMutation } from "../operator-auth.mjs";
+import { beginRepairSession, advanceRepairSession } from "../coordinator.mjs";
 import { readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
 
@@ -13,15 +15,16 @@ const runnerKey = "runner-job-secret-abcdefghijklmnopqrstuvwxyz12345678";
 const originalKey = "operator-original-secret-abcdefghijklmnopqrstuvwxyz";
 const rotatedKey = "operator-rotated-secret-abcdefghijklmnopqrstuvwxyz1";
 const reviewerKey = "operator-reviewer-secret-abcdefghijklmnopqrstuvwxyz";
+const rotatedReviewerKey = "operator-reviewer-rotated-secret-abcdefghijklmnopqrstuvwxyz";
 const origin = "http://localhost:5173";
 const proposalId = "00000000-0000-4000-a000-000000000031";
 const source = {
   "src/backend/applications/Api/Api.csproj": "<Project></Project>",
   "src/backend/domain/Item.cs": "namespace Demo; public record Item(int A);",
 };
-const entries = (key = originalKey, active = true) => [
+const entries = (key = originalKey, active = true, reviewKey = reviewerKey) => [
   ...(active ? [{ id: "editor", key, roles: ["propose"] }] : []),
-  { id: "reviewer", key: reviewerKey, roles: ["review"] },
+  { id: "reviewer", key: reviewKey, roles: ["review"] },
 ];
 const render = value => JSON.stringify(value);
 async function saveAtomic(file, text) {
@@ -197,6 +200,93 @@ test("two API instances rotate and revoke operator keys on shared directory with
       begin.body.id + ".json"), "utf8")).startsWith(disk.slice(0, 80)), true);
     assert.ok(!JSON.stringify(patch.body).includes(rotatedKey));
     assert.ok(!JSON.stringify(patch.body).includes(originalKey));
+    assert.equal((await f.request(0, "/v1/capabilities", runnerKey)).status, 200);
+  } finally { await f.close(); }
+});
+
+test("queued repair mutations recheck rotated credentials under admission lock", async () => {
+  const f = await environment();
+  try {
+    await saveAtomic(f.file, render(entries()));
+    const accepted = await f.request(0, "/v1/jobs", runnerKey, {
+      label: "Queued repair reauthentication", files: source, steps: ["dotnet-build"],
+    });
+    assert.equal(accepted.status, 202);
+    const before = await readReport(f.dataDir, accepted.body.id);
+    await recordJobEvidence(f.dataDir, accepted.body.id, {
+      ...before, state: "running", startedAt: "2026-11-16T10:00:00.000Z",
+    }, "started");
+    const running = await readReport(f.dataDir, accepted.body.id);
+    await recordJobEvidence(f.dataDir, accepted.body.id, {
+      ...running, state: "failed", finishedAt: "2026-11-16T10:00:01.000Z",
+      results: [{ step: "dotnet-build", state: "failed", exitCode: 1,
+        timedOut: false, durationMs: 1000 }],
+    }, "finished");
+    const input = { failedJobId: accepted.body.id, proposalId,
+      paths: ["src/backend/domain/Item.cs"], consent: true };
+    // The direct coordinator guard must run only while the lock is held,
+    // before even the initial session file can be created.
+    let checkedUnderLock = false;
+    await assert.rejects(
+      beginRepairSession(f.dataDir, input, "editor", undefined, async () => {
+        await stat(path.join(f.dataDir, "jobs", ".admission"));
+        checkedUnderLock = true;
+        throw Object.assign(new Error("revoked"), { code: "REPAIR_AUTH_REVOKED" });
+      }), { code: "REPAIR_AUTH_REVOKED" });
+    assert.equal(checkedUnderLock, true);
+    const session = await f.request(0, "/v1/repair-sessions", originalKey, input);
+    assert.equal(session.status, 201, JSON.stringify(session.body));
+    const route = "/v1/repair-sessions/" + session.body.id;
+    const pathFile = path.join(f.dataDir, "repair-sessions", session.body.id + ".json");
+    const initial = await readFile(pathFile, "utf8");
+    // A revoked/scope-changed operator cannot mutate an existing ledger.
+    await assert.rejects(advanceRepairSession(f.dataDir, session.body.id, {
+      action: "patch", consent: true, digest: "d".repeat(64),
+      paths: ["src/backend/domain/Item.cs"],
+    }, "editor", async () => {
+      await stat(path.join(f.dataDir, "jobs", ".admission"));
+      await saveAtomic(f.file, render(entries(rotatedKey)));
+      await reauthorizeRepairMutation(f.file, runnerKey,
+        "Bearer " + originalKey, "editor", "patch");
+    }), { code: "REPAIR_AUTH_REVOKED" });
+    assert.equal(await readFile(pathFile, "utf8"), initial);
+    assert.equal((await f.request(1, route, originalKey)).status, 401);
+    // Same ID with a new credential can still continue after the rejected mutation.
+    const patched = await f.request(1, route + "/checkpoints", rotatedKey, {
+      action: "patch", consent: true, digest: "d".repeat(64),
+      paths: ["src/backend/domain/Item.cs"],
+    });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.audit.length, 2);
+    const patchedDisk = await readFile(pathFile, "utf8");
+    // Server-side HTTP request starts with a valid reviewer Bearer, but waits
+    // for the shared lock while the private registry rotates.
+    const lock = path.join(f.dataDir, "jobs", ".admission");
+    await mkdir(lock, { mode: 0o700 });
+    let pending;
+    try {
+      pending = f.request(0, route + "/checkpoints", reviewerKey,
+        { action: "review", consent: true, verdict: "pass" });
+      await sleep(100);
+      await saveAtomic(f.file, render(entries(rotatedKey, true, rotatedReviewerKey)));
+    } finally {
+      await rm(lock, { recursive: true, force: true });
+    }
+    assert.equal((await pending).status, 401);
+    assert.equal(await readFile(pathFile, "utf8"), patchedDisk);
+    const approvedReview = await f.request(1, route + "/checkpoints", rotatedReviewerKey,
+      { action: "review", consent: true, verdict: "pass" });
+    assert.equal(approvedReview.status, 200);
+    assert.deepEqual(approvedReview.body.audit.map(x => x.actorId),
+      ["editor", "editor", "reviewer"]);
+    await saveAtomic(f.file, render([{ id: "editor", key: rotatedKey,
+      roles: ["review"] }, { id: "reviewer", key: rotatedReviewerKey,
+      roles: ["review"] }]));
+    await assert.rejects(reauthorizeRepairMutation(f.file, runnerKey,
+      "Bearer " + rotatedKey, "editor", "patch"), { code: "REPAIR_SCOPE_REVOKED" });
+    await saveAtomic(f.file, "{broken");
+    await assert.rejects(reauthorizeRepairMutation(f.file, runnerKey,
+      "Bearer " + rotatedKey, "editor", "patch"), { code: "REPAIR_AUTH_UNAVAILABLE" });
     assert.equal((await f.request(0, "/v1/capabilities", runnerKey)).status, 200);
   } finally { await f.close(); }
 });

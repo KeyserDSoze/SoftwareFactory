@@ -290,3 +290,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - La revoca è riferita alle **credenziali del coordinatore**, non a JWT generati, sessionStorage, account OIDC o token di altri servizi. Rotazione non prova identità fisica, MFA né revoca transazionale di richieste in-flight; la #2 rimane aperta.
 
 - **Limite del socket:** il semplice mancato mount del registro nel worker non lo protegge da un worker compromesso che controlla il Docker daemon rootless: quel daemon potrebbe creare altri bind mount di directory host leggibili dalla sua UID. La directory del registry e l'UID del daemon non costituiscono un confine di sicurezza indipendente. Non promettere revoca sicura contro compromissione completa dell'host/daemon; #2 richiede IAM esterno o isolamento forte tra servizi/host e test reali di user namespace.
+
+
+## Recheck delle credenziali durante mutazioni repair (#33)
+
+- Nei POST `/v1/repair-sessions*` l'autorizzazione in modalità registro file è controllata **due volte**: prima di leggere il body e **dopo l'acquisizione del lock POSIX** del coordinatore, prima di qualsiasi read/write del ledger. Non anticipare questo secondo controllo fuori dal lock: se la richiesta resta in coda, la chiave può essere già stata ruotata o revocata.
+- Il secondo controllo rilegge il file con le medesime protezioni della #31/#32, confronta il Bearer originale, lo **stesso actorId** e lo scope richiesto. Revoca o rotazione => 401; cambio ID/scope => 403; file non disponibile/corrotto => 503. Nessuna entry hash-chain per richieste respinte. I GET e i job non usano questo lock aggiuntivo.
+- Non descrivere il gate come revoca atomica degli in-flight: rimane una finestra dopo il controllo dentro il lock, perché la sostituzione del file registry non è una transazione sul ledger. Servono un IAM/DB transazionale, policy di firma o fencing affidabile per la garanzia forte; #2 rimane aperta.

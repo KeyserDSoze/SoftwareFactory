@@ -5,7 +5,7 @@ import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from 
 import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
-import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction } from "./operator-auth.mjs";
+import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -122,9 +122,17 @@ export function createRunnerServer({
         send(403, { error: "operator_scope_denied" }); return;
       }
       try {
+        // Registry may rotate while this request waits for the admission lock.
+        // Re-read it at the start of the locked write section, not only here.
+        const reauthorize = repairOperatorsFile
+          ? () => reauthorizeRepairMutation(repairOperatorsFile, apiKey,
+            req.headers.authorization, repairOperator.id, action)
+          : undefined;
         const result = actionRoute
-          ? await advanceRepairSession(dataDir, actionRoute[1], input, repairOperator.id)
-          : await beginRepairSession(dataDir, input, repairOperator.id);
+          ? await advanceRepairSession(dataDir, actionRoute[1], input,
+            repairOperator.id, reauthorize)
+          : await beginRepairSession(dataDir, input, repairOperator.id,
+            undefined, reauthorize);
         send(actionRoute ? 200 : 201, result);
       } catch (error) {
         const codes = {
@@ -137,6 +145,9 @@ export function createRunnerServer({
           REPAIR_CAPACITY: [429, "repair_capacity"],
           REPAIR_ACTOR_CONFLICT: [409, "repair_actor_conflict"],
           REPAIR_LEGACY_READONLY: [409, "repair_legacy_readonly"],
+          REPAIR_AUTH_REVOKED: [401, "unauthorized"],
+          REPAIR_SCOPE_REVOKED: [403, "operator_scope_denied"],
+          REPAIR_AUTH_UNAVAILABLE: [503, "repair_auth_unavailable"],
         };
         if (codes[error.code]) send(codes[error.code][0], { error: codes[error.code][1] });
         else if (error.code === "ENOENT") send(404, { error: "not_found" });

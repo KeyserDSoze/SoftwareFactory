@@ -103,3 +103,10 @@ Scelta: l'operator registry statico in ambiente (#27) richiedeva restart coordin
 ## Addendum — ownership effettiva del registro privato (#32, 16 novembre 2026)
 
 Per il registry file della #31, il solo controllo dei mode bit `0600/0400` non dimostra che il file appartenga all'identità con cui gira l'API. Aggiungiamo il confronto fail-closed `fstat.uid === process.geteuid()` sul **file descriptor già aperto** prima di caricare chiavi: file di un altro UID vengono rifiutati con 503, mentre le API job restano operative. Non ci fidiamo di `lstat(path)` separato, che introdurrebbe una race al rename. La documentazione richiede di verificare l'UID *dentro* il container in presenza di Docker rootless e user namespace; la VM reale rimane da collaudare in #2. Questa misura non prova autenticazione umana o protezione contro amministratori dell'host.
+
+
+## Addendum — secondo gate auth dentro il lock repair (#33, 16 novembre 2026)
+
+Problema: anche una credenziale rivista ad ogni richiesta può essere revocata dopo la prima lettura e prima che il POST ottenga il lock filesystem condiviso. Decisione: la funzione che acquisisce `jobs/.admission` esegue una callback di **ri-autorizzazione** in modalità file prima di scandire o scrivere qualsiasi record. Il callback riapre il file privato con gli stessi controlli di ownership, riconfronta il Bearer iniziale, l'actor ID atteso e il ruolo della transizione. Il rifiuto non genera eventi e restituisce 401/403/503. In modalità JSON inline non c'è rotazione live; i call site rimangono compatibili e i GET non richiedono lock. L'operatore continua ad autorizzare esplicitamente ciascuna azione; il guard non lancia test o patch autonomamente.
+
+**Tradeoff:** il lock serializza il ledger, non la sostituzione dell'operator registry, che avviene fuori banda. L'operatore può essere revocato fra gate e `atomicWrite`; non esiste garanzia di annullamento delle richieste già entrate nella sezione critica. Il miglioramento protegge i POST in coda e lascia identità federata, revoca transazionale e distribuzione multi-host alla #2.

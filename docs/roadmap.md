@@ -287,3 +287,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rotazione delle chiavi a **ID costante** e revoca con eliminazione dal JSON, rilevate da entrambe le istanze API senza riavvio; test di mount ostile, symlink/hardlink, dir, permessi, JSON corrotto, accesso vecchi token e integrità audit.
 - Compose override opzionale con mount **directory** read-only soltanto API e preflight/CI per configurazione finale, mai socket Docker/segretistica nel worker. Non è una gestione centralizzata di account umani o MFA.
 - Rimane #2: identità OIDC/SSO, second-person verification reale, revoca delle richieste già avviate e dei JWT/app, RBAC multi-tenant, osservabilità, attestazioni esterne e VM rootless Cloudflare reali.
+
+
+## v0.2 — Controllo credenziali in attesa del lock repair (#33)
+
+- In modalità registry file i checkpoint repair ricontrollano Bearer, `actorId` e scope **dentro il lock di admission**, dopo eventuali attese: vecchie chiavi non possono iniziare la mutazione quando già revocate, senza scrivere snapshot o hash-chain.
+- HTTP 401 per key revocata, 403 per scope/identità modificati, 503 per file inaccessibile. Test per begin e advance con guard sotto lock, cambio registry atomico su due API, job capability invariato.
+- Limiti: non è commit/revoca transazionale con registry file, non annulla richieste dopo il secondo gate; non sostituisce IAM federato, firma umana o fencing cross-host. #2 resta aperta.

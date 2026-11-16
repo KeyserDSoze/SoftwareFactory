@@ -214,11 +214,17 @@ const overview = r => ({
 export async function getRepairSession(dataDir, id) {
   return overview(await readSession(dataDir, id));
 }
-async function locked(dataDir, action) {
-  return withAdmissionLock(dataDir, action, 1500);
+async function locked(dataDir, action, reauthorize) {
+  // A queued mutation must not use an operator authorization captured before
+  // waiting for the shared lock. The registry is rechecked inside this lock.
+  return withAdmissionLock(dataDir, async () => {
+    if (reauthorize) await reauthorize();
+    return action();
+  }, 1500);
 }
 export async function beginRepairSession(
   dataDir, input, actorId, timestamp = () => new Date().toISOString(),
+  reauthorize = undefined,
 ) {
   if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   if (!exact(input, ["failedJobId","proposalId","paths","consent"]) ||
@@ -283,9 +289,9 @@ export async function beginRepairSession(
     verifyRepairSession(next);
     await atomicWrite(sessionFile(dataDir, id), next);
     return overview(next);
-  });
+  }, reauthorize);
 }
-export async function advanceRepairSession(dataDir, id, input, actorId) {
+export async function advanceRepairSession(dataDir, id, input, actorId, reauthorize = undefined) {
   if (!ACTOR.test(actorId)) throw issue("REPAIR_INVALID");
   if (!UUID.test(id) || !input || typeof input !== "object" ||
       Array.isArray(input) || input.consent !== true ||
@@ -347,7 +353,7 @@ export async function advanceRepairSession(dataDir, id, input, actorId) {
     verifyRepairSession(projected);
     await atomicWrite(sessionFile(dataDir, id), projected);
     return overview(projected);
-  });
+  }, reauthorize);
 }
 function projectEvents(next) {
   enforceActorSeparation(next.events, "REPAIR_ACTOR_CONFLICT");
