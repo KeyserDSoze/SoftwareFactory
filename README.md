@@ -447,6 +447,6 @@ Linux dedicati: istruzioni di installazione del runner esistente e controllo aut
 sola lettura di API, heartbeat worker e osservazione recente del daemon Docker rootless.
 Non richiede di mettere SDK o Docker nel browser, ma **non** è ancora un installer
 one-click e non prova che un build/test sia riuscito. I test rimangono job espliciti con
-report firmati da digest. I container multi-servizio orchestrati dal worker e il pairing
+report vincolati al digest dello snapshot. I container multi-servizio orchestrati dal worker e il pairing
 sicuro host↔app sono previsti nell'[issue #87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87);
 vedi [guida runner](docs/runner.md) e [ADR 0044](adr/0044-runner-connector-onboarding-and-container-orchestration.md).
