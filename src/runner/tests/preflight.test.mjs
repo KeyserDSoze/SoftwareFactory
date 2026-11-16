@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, chmod, link, open, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  inspectComposeConfig, inspectHost, probeEndpoint, readPrivateEnv, validateHostEnvironment,
+  inspectComposeConfig, inspectHost, probeEndpoint, readPrivateEnv, validateHostEnvironment, main,
   isPrivateEnvFile, isStablePrivateEnvSnapshot,
 } from "../preflight.mjs";
 
@@ -269,6 +269,153 @@ test("HTTPS endpoint probe sends no writes, never follows redirects and verifies
       } });
       return fakeFetch(url, options);
     } }), /CORS/);
+});
+
+test("Access Service Auth probe requires gateway denial, then checks API key and CORS behind Access", async () => {
+  const id = "a".repeat(44) + ".access";
+  const serviceSecret = "cfast_" + "b".repeat(48);
+  const apiKey = "k".repeat(48);
+  const origin = "https://factory.example.org";
+  const baseUrl = "https://runner.example.org";
+  const calls = [];
+  const gateway = async (url, options) => {
+    calls.push({ url, options });
+    assert.equal(options.redirect, "manual");
+    assert.notEqual(options.method, "POST");
+    assert.equal(new URL(url).origin, baseUrl);
+    const route = new URL(url).pathname;
+    const protectedRequest = Boolean(options.headers["CF-Access-Client-Id"]);
+    if (!protectedRequest) {
+      assert.equal(calls.length, 1, "only the negative probe may omit Access");
+      assert.deepEqual(options.headers, { Origin: origin });
+      return new Response(null, { status: 302, headers: {
+        Location: "https://private.cloudflareaccess.com/login?private-do-not-log",
+      } });
+    }
+    assert.equal(options.headers["CF-Access-Client-Id"], id);
+    assert.equal(options.headers["CF-Access-Client-Secret"], serviceSecret);
+    if (route === "/healthz") return new Response("{}", { status: 200 });
+    if (route === "/v1/capabilities" && !options.headers.Authorization)
+      return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    if (route === "/v1/capabilities" && options.headers.Authorization) {
+      assert.equal(options.headers.Authorization, "Bearer " + apiKey);
+      return new Response(JSON.stringify({ protocol: 1, networkDefault: "none",
+        steps: ["dotnet-build", "dotnet-test"] }), { status: 200 });
+    }
+    if (route === "/v1/jobs" && options.method === "OPTIONS")
+      return new Response(null, { status: 204, headers: {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "authorization, content-type, idempotency-key",
+      } });
+    throw Error("unexpected gateway route");
+  };
+  const result = await probeEndpoint({ baseUrl, origin, apiKey,
+    accessClientId: id, accessClientSecret: serviceSecret, fetchImpl: gateway });
+  assert.deepEqual(result, {
+    mode: "endpoint", status: "passed", https: true, bearerAuthRequired: true,
+    corsPreflightPassed: true, networkDefaultNone: true,
+    accessServiceTokenUsed: true, accessUnauthenticatedDenied: true,
+  });
+  assert.deepEqual(calls.map(x => x.options.method),
+    ["GET", "GET", "GET", "GET", "OPTIONS"]);
+  assert.deepEqual(calls.map(x => Boolean(x.options.headers.Authorization)),
+    [false, false, false, true, false]);
+  assert.ok(calls.slice(1).every(x => x.options.headers["CF-Access-Client-Id"] === id));
+  assert.doesNotMatch(JSON.stringify(result), /cfast_|\.access|Bearer|private-do-not-log/);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(apiKey));
+});
+
+test("Access credentials must be a complete bounded printable pair before any network call", async () => {
+  const bad = [
+    { accessClientId: "a".repeat(48) },
+    { accessClientSecret: "b".repeat(64) },
+    { accessClientId: "", accessClientSecret: "b".repeat(64) },
+    { accessClientId: "a".repeat(48), accessClientSecret: "" },
+    { accessClientId: "a".repeat(48), accessClientSecret: "REPLACE_ME" },
+    { accessClientId: "a".repeat(48) + "\r\nInjected: evil",
+      accessClientSecret: "b".repeat(64) },
+    { accessClientId: "a".repeat(48),
+      accessClientSecret: "b".repeat(64) + "\nAuthorization: fake" },
+    { accessClientId: "a".repeat(257), accessClientSecret: "b".repeat(64) },
+    { accessClientId: "a".repeat(48), accessClientSecret: "b".repeat(513) },
+    { accessClientId: "a".repeat(48), accessClientSecret: "secret with spaces".repeat(4) },
+  ];
+  for (const credentials of bad) {
+    let requestCount = 0;
+    await assert.rejects(probeEndpoint({
+      baseUrl: "https://runner.example.org", origin: "https://factory.example.org",
+      apiKey: secret, ...credentials,
+      fetchImpl: async () => { requestCount++; throw Error("must not connect"); },
+    }), error => error.message ===
+      "Cloudflare Access service credentials missing or invalid");
+    assert.equal(requestCount, 0);
+  }
+});
+
+test("Access endpoint must deny requests without its service token and reject expired or redirected Access", async () => {
+  const credentials = { accessClientId: "a".repeat(44) + ".access",
+    accessClientSecret: "b".repeat(64) };
+  const common = { baseUrl: "https://runner.example.org",
+    origin: "https://factory.example.org", apiKey: secret, ...credentials };
+  for (const denial of [200, 204, 404, 500]) {
+    let count = 0;
+    await assert.rejects(probeEndpoint({ ...common,
+      fetchImpl: async () => { count++; return new Response(null, { status: denial }); },
+    }), /not restricted/);
+    assert.equal(count, 1);
+  }
+  for (const authenticatedStatus of [302, 401, 403]) {
+    let count = 0;
+    await assert.rejects(probeEndpoint({ ...common,
+      fetchImpl: async () => {
+        return ++count === 1 ? new Response(null, { status: 403 }) :
+          new Response(null, { status: authenticatedStatus });
+      },
+    }), error => !error.message.includes(credentials.accessClientSecret) &&
+      !error.message.includes(credentials.accessClientId) &&
+      /liveness|redirected/.test(error.message));
+    assert.equal(count, 2);
+  }
+  await assert.rejects(probeEndpoint({ ...common,
+    fetchImpl: async (url, options) => {
+      if (!options.headers["CF-Access-Client-Id"])
+        return new Response(null, { status: 403 });
+      throw Error("CF-Access-Client-Secret=" + credentials.accessClientSecret);
+    },
+  }), error => error.message === "HTTPS endpoint request failed or redirected");
+});
+
+test("preflight endpoint CLI forwards optional service token only from a 0600 private env file", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-access-preflight-"));
+  const file = path.join(dir, "runner.env");
+  const clientId = "c".repeat(48), clientSecret = "d".repeat(64);
+  const records = [];
+  try {
+    await writeFile(file, [
+      "RUNNER_API_KEY=" + secret,
+      "CF_ACCESS_CLIENT_ID=" + clientId,
+      "CF_ACCESS_CLIENT_SECRET=" + clientSecret,
+    ].join("\n"), { mode: 0o600 });
+    const status = await main([
+      "endpoint", "--env-file=" + file,
+      "--url=https://runner.example.org", "--origin=https://factory.example.org",
+    ], {
+      endpointProbe: async input => {
+        assert.equal(input.apiKey, secret);
+        assert.equal(input.accessClientId, clientId);
+        assert.equal(input.accessClientSecret, clientSecret);
+        return { mode: "endpoint", status: "passed",
+          accessServiceTokenUsed: true, accessUnauthenticatedDenied: true };
+      },
+      write: line => records.push(line),
+    });
+    assert.equal(status.status, "passed");
+    assert.equal(records.length, 1);
+    assert.doesNotMatch(records[0], new RegExp(secret));
+    assert.doesNotMatch(records[0], new RegExp(clientSecret));
+    assert.doesNotMatch(records[0], new RegExp(clientId));
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test("private env reading rejects symlinks, world-readable secrets and duplicate keys", async () => {

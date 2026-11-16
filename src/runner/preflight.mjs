@@ -203,9 +203,13 @@ export async function inspectHost({
     directoriesPrivate: true, socketPrivate: true, dockerRootless: true };
 }
 
-/** Read-only HTTPS/CORS/TLS/auth probe. No POST, no automatic redirect, no secret output. */
+/** Read-only HTTPS/CORS/TLS/auth probe. No POST, no automatic redirect, no secret output.
+ * Optional Access Service Auth is for trusted operator CLI only. NEVER put
+ * Cloudflare service tokens into the Factory browser, HTTP job or generated app.
+ */
 export async function probeEndpoint({
-  baseUrl, origin, apiKey, fetchImpl = fetch,
+  baseUrl, origin, apiKey, accessClientId, accessClientSecret,
+  fetchImpl = fetch,
 } = {}) {
   let endpoint, source;
   try {
@@ -220,10 +224,43 @@ export async function probeEndpoint({
     fail("Endpoint and Factory origin must be bare HTTPS origins");
   if (typeof apiKey !== "string" || apiKey.length < 32 || apiKey.startsWith("REPLACE_"))
     fail("A real runner API key is required in the environment");
+  const hasAccess = accessClientId != null || accessClientSecret != null;
+  let accessHeaders = {};
+  if (hasAccess) {
+    // Accept both legacy 64-hex and new cfast_ Cloudflare Access secrets.
+    // Do not require a fixed token syntax, but reject CR/LF, controls,
+    // whitespace and unbounded values before any HTTP request.
+    const printable = /^[\\x21-\\x7e]+$/;
+    if (typeof accessClientId !== "string" ||
+        accessClientId.length < 8 || accessClientId.length > 256 ||
+        !printable.test(accessClientId) ||
+        typeof accessClientSecret !== "string" ||
+        accessClientSecret.length < 32 || accessClientSecret.length > 512 ||
+        !printable.test(accessClientSecret) ||
+        accessClientSecret.startsWith("REPLACE_"))
+      fail("Cloudflare Access service credentials missing or invalid");
+    accessHeaders = {
+      "CF-Access-Client-Id": accessClientId,
+      "CF-Access-Client-Secret": accessClientSecret,
+    };
+    // Negative check: an ordinary request must not get the runner health
+    // response without Access. 302 login challenge is accepted but NEVER
+    // followed. It is not provider identity/Cloudflare policy attestation.
+    let negative;
+    try {
+      negative = await fetchImpl(new URL("/healthz", endpoint).href, {
+        method: "GET", headers: { Origin: origin },
+        redirect: "manual", signal: AbortSignal.timeout(8000),
+      });
+    } catch { fail("Cloudflare Access unauthenticated probe failed"); }
+    if (![302, 401, 403].includes(negative?.status))
+      fail("Endpoint is not restricted without Access service credentials");
+  }
   async function call(resource, headers, method = "GET") {
     try {
       const response = await fetchImpl(new URL(resource, endpoint).href, {
-        method, headers, redirect: "manual", signal: AbortSignal.timeout(8000),
+        method, headers: { ...headers, ...accessHeaders },
+        redirect: "manual", signal: AbortSignal.timeout(8000),
       });
       if (response.status >= 300 && response.status < 400)
         fail("HTTP redirect refused by endpoint probe");
@@ -257,7 +294,9 @@ export async function probeEndpoint({
       !["authorization", "content-type", "idempotency-key"].every(x => headers.includes(x)))
     fail("Remote CORS preflight rejected or misconfigured");
   return { mode: "endpoint", status: "passed", https: true,
-    bearerAuthRequired: true, corsPreflightPassed: true, networkDefaultNone: true };
+    bearerAuthRequired: true, corsPreflightPassed: true, networkDefaultNone: true,
+    accessServiceTokenUsed: hasAccess,
+    accessUnauthenticatedDenied: hasAccess };
 }
 
 // The private env holds bearer credentials and is consulted before deploy.
@@ -333,7 +372,10 @@ async function executeCompose(envFile, operatorRegistry = false) {
   return inspectComposeConfig(json);
 }
 
-export async function main(argv = process.argv.slice(2)) {
+/** endpointProbe/write are trusted Node test seams, not CLI/API parameters. */
+export async function main(argv = process.argv.slice(2), {
+  endpointProbe = probeEndpoint, write = value => process.stdout.write(value),
+} = {}) {
   const [mode, ...options] = argv;
   if (!["compose", "host", "endpoint"].includes(mode) ||
       options.some(x => x !== "--operator-registry" &&
@@ -355,9 +397,13 @@ export async function main(argv = process.argv.slice(2)) {
   else {
     const env = flags["env-file"] ? await readPrivateEnv(path.resolve(flags["env-file"])) : process.env;
     result = mode === "host" ? await inspectHost({ env }) :
-      await probeEndpoint({ baseUrl: flags.url, origin: flags.origin, apiKey: env.RUNNER_API_KEY });
+      await endpointProbe({
+        baseUrl: flags.url, origin: flags.origin, apiKey: env.RUNNER_API_KEY,
+        accessClientId: env.CF_ACCESS_CLIENT_ID,
+        accessClientSecret: env.CF_ACCESS_CLIENT_SECRET,
+      });
   }
-  process.stdout.write("RUNNER_PREFLIGHT_PASS: " + JSON.stringify(result) + "\n");
+  write("RUNNER_PREFLIGHT_PASS: " + JSON.stringify(result) + "\n");
   return result;
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
