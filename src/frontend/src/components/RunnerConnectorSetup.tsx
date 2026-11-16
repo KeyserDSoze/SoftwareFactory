@@ -9,7 +9,7 @@ type Host = "local" | "server";
  * Guided, non-destructive install/link flow. The browser never runs shell,
  * uses SSH or downloads the runner host's secrets.
  */
-export default function RunnerConnectorSetup({ endpoint }: { endpoint: string }) {
+export default function RunnerConnectorSetup({ endpoint, authRevision }: { endpoint: string; authRevision: number }) {
   const [host, setHost] = useState<Host>("local");
   const [status, setStatus] = useState<RunnerConnectorProbe | null>(null);
   const [checking, setChecking] = useState(false);
@@ -20,7 +20,7 @@ export default function RunnerConnectorSetup({ endpoint }: { endpoint: string })
     setStatus(null);
     setChecking(false);
     return () => { active.current?.abort(); };
-  }, [endpoint]);
+  }, [endpoint, authRevision]);
 
   const checkConnection = async () => {
     active.current?.abort();
