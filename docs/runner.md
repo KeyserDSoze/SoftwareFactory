@@ -857,3 +857,35 @@ L'evento `kind:"reconciled"` in `evidence.jsonl` contiene una fotografia dell'ul
 ### Prova CI OIDC Production HTTPS con CA temporanea (#86)
 
 Il comando di Factory CI `node src/runner/scripts/fullstack-smoke.mjs src/frontend/generated-fixture` mantiene prima la suite Chromium/OIDC con issuer HTTP **esclusivamente interno** alla rete Docker `--internal`. Dopo gli E2E avvia un issuer HTTPS aggiuntivo su alias `identity-tls:9443`, firmato da una CA temporanea non inclusa nel repository né nel workspace generato. `openssl` crea CA e server certificate con SAN corretto nel temp privato host, e un mount read-only separato contiene solo ca.crt, server.crt e server.key; la chiave privata della CA non entra nei container. Due backend ASP.NET Core `Production` con PostgreSQL e Web CORS HTTPS verificano la necessità del CA trust: uno via `SSL_CERT_FILE` deve accettare i JWT RS256 e il rollover JWKS, l'altro deve rispondere `401` ai token firmati correttamente; un client Node senza CA deve fallire handshake TLS. Nessuna porta host pubblicata, nessun `NODE_TLS_REJECT_UNAUTHORIZED=0`, cleanup sempre in finally. Non è un test di federazione IdP esterno/PKI production, né rootless VM (#86, ADR 0043).
+
+
+## Connector installabile da SoftwareFactory: prima iterazione (#87, 16 novembre 2026)
+
+In **Settings → Runner Docker remoto → Installa o collega il tuo connector Linux** la SPA
+offre un percorso guidato per **PC Linux** o **server/VM Linux**. È un onboarding manuale:
+il browser non installa Docker, non usa SSH, non invia comandi arbitrari e non automatizza
+l'installazione remota. L'utente esegue i comandi mostrati **sulla macchina target**,
+predispone Docker Engine **rootless** dedicato, Docker Compose, Node.js, directory private
+e file `.env` mode 0600 con API key forte e origin SPA esatto (mai committato).
+
+Per test **sullo stesso PC Linux** scegliere `http://localhost:8787` come URL runner,
+se anche il browser è sulla stessa macchina. Per una SPA su altro dispositivo o un
+server remoto usare HTTPS e accesso sicuro via Cloudflare Tunnel/Access o proxy
+attendibile; attenzione a CORS e al fatto che il tunnel non autentica da solo.
+Il Docker socket rootless deve rimanere soltanto nel worker.
+
+Il pulsante **Verifica connector** esegue soltanto tre GET autenticate, in ordine:
+`/v1/capabilities` (protocollo e step fissi, rete none),
+`/v1/readiness` (heartbeat recente del worker) e
+`/v1/execution-readiness` (stato recente del Docker daemon rootless misurato dal worker).
+Non avvia job, non invia sorgenti e non certifica SDK .NET, Playwright, cache npm
+o isolamento effettivo. Risposte 401/403, 503 worker, 503 Docker, schemi inattesi e
+guasti di connessione sono distinti; nessuno viene mostrato come successo.
+Dopo la verifica è comunque necessario lanciare un test esplicitamente autorizzato
+nel Code Agent e controllare il report legato al digest.
+
+**Evoluzione pianificata:** installer host versionato/firmato, pairing monouso,
+scoped credentials revocabili, uninstall, policy/quote e supporto fullstack
+multicontainer orchestrato dal worker (non socket Docker dentro i job).
+Dettagli in [ADR 0044](../adr/0044-runner-connector-onboarding-and-container-orchestration.md)
+e [issue #87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87).
