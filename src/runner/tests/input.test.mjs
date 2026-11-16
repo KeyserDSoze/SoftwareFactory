@@ -18,7 +18,10 @@ async function fixture() {
   await mkdir(dir, { recursive: true });
   const checked = validateRequest({
     label: "Snapshot safety",
-    files: { "src/backend/domain/Item.cs": "namespace Demo; public record Item(int Value);" },
+    files: {
+      "src/backend/domain/Item.cs": "namespace Demo; public record Item(int Value);",
+      "src/backend/applications/Api/Api.csproj": "<Project><PropertyGroup><TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>",
+    },
     steps: ["dotnet-build"],
   });
   const file = path.join(dir, "input.json");
