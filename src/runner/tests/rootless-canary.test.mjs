@@ -116,7 +116,11 @@ test("canary rejects unsafe Docker inspect and never starts the container", asyn
       runDocker: fake.runDocker,
     }), /verification|mismatch|unverified/);
     assert.ok(!fake.calls.some(x => x[0] === "start"), "must fail before executing");
-    if (patch.Config?.Labels) assert.ok(!fake.calls.some(x => x[0] === "rm"),
+    // A changed UID is an unsafe CONFIG but does not change ownership:
+    // cleanup is still mandatory. Only an unknown label makes cleanup unsafe.
+    const foreignLabel = patch.Config?.Labels &&
+      patch.Config.Labels["softwarefactory.canary"] !== name;
+    if (foreignLabel) assert.ok(!fake.calls.some(x => x[0] === "rm"),
       "foreign container label must never be cleaned automatically");
     else assert.equal(fake.calls.at(-1)?.[0], "rm",
       "verified identity must be cleaned even if security settings rejected");
