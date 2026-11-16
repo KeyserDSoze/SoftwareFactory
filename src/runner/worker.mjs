@@ -35,8 +35,8 @@ export async function recoverUnclaimedJob(dataDir, id) {
     const { report: latest } = await verifyJobEvidence(dataDir, id);
     if (latest.state !== "running") return false;
     await recordJobEvidence(dataDir, id, {
-      ...latest, state: "failed", finishedAt: new Date().toISOString(),
-      summary: "Worker interrupted without claim; inspect orphaned Docker containers",
+      ...latest, state: "incomplete", finishedAt: new Date().toISOString(),
+      summary: "Worker interrupted; check completion unverified; manually reconcile orphaned Docker containers",
     }, "recovered");
     return true;
   } finally { await rm(claim, { recursive: true, force: true }); }
@@ -173,17 +173,26 @@ export async function runWorker({
     const expireBefore = Date.now() - retentionHours * 60 * 60 * 1000;
     for (const id of entries) {
       try {
-        const { report } = await verifyJobEvidence(dataDir, id);
+        const { report, entries: evidenceEntries } = await verifyJobEvidence(dataDir, id);
         const claimed = await isClaimed(dataDir, id);
-        if (!claimed && ["passed", "failed", "incomplete"].includes(report.state) &&
+        // A recovered worker may have left a live container. Preserve its
+        // verified journal for operator-only reconciliation irrespective of
+        // retention age; never silently erase the only cleanup authority.
+        const needsReconciliation = evidenceEntries.at(-1)?.kind === "recovered";
+        if (!claimed && !needsReconciliation &&
+            ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
           // Admission and retention share one lock; an idempotent retry can
           // never race deletion of the very job whose receipt it needs.
           try {
             await withAdmissionLock(dataDir, async () => {
               if (await isClaimed(dataDir, id)) return;
-              const { report: latest } = await verifyJobEvidence(dataDir, id);
-              if (["passed", "failed", "incomplete"].includes(latest.state) &&
+              const { report: latest, entries: latestEntries } =
+                await verifyJobEvidence(dataDir, id);
+              // Recheck the recovered marker UNDER admission lock: a scan
+              // must not delete proof of a job just recovered by a worker.
+              if (latestEntries.at(-1)?.kind !== "recovered" &&
+                  ["passed", "failed", "incomplete"].includes(latest.state) &&
                   Number.isFinite(Date.parse(latest.finishedAt)) &&
                   Date.parse(latest.finishedAt) < expireBefore)
                 await rm(jobDirectory(dataDir, id), { recursive: true, force: true });
