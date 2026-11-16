@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { scrub } from "./common.mjs";
 import { runnerContainerIdentity } from "./orphans.mjs";
 import { probeRootlessDocker } from "./docker-probe.mjs";
+import { cleanupTimedOutRunnerContainer } from "./timeout-cleanup.mjs";
 
 const SAFE_IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{2,180}$/;
 const TIME_LIMIT_MS = 120_000;
@@ -141,6 +142,7 @@ export function isInfrastructureFailure(result) {
 export async function runDockerStep(plan, id, step, {
   spawnProcess = spawn, timeoutMs = plan.timeoutMs,
   probeDocker = probeRootlessDocker,
+  cleanupTimedOutContainer = cleanupTimedOutRunnerContainer,
 } = {}) {
   let ready = false;
   try { ready = (await probeDocker()) === true; }
@@ -152,31 +154,39 @@ export async function runDockerStep(plan, id, step, {
   const started = Date.now();
   return new Promise(resolve => {
     let stdout = "", stderr = "", settled = false, timedOut = false;
+    let cleanup = Promise.resolve(false);
     const child = spawnProcess("docker", args, { stdio: ["ignore", "pipe", "pipe"], env: {
-      PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST || "unix:///run/docker.sock", HOME: "/tmp", DOCKER_CONFIG: "/tmp",
+      PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST || "unix:///run/docker.sock",
+      HOME: "/tmp", DOCKER_CONFIG: "/tmp",
     } });
     child.stdout?.on("data", b => { stdout = (stdout + b.toString("utf8")).slice(-12_000); });
     child.stderr?.on("data", b => { stderr = (stderr + b.toString("utf8")).slice(-12_000); });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-      // A killed CLI can leave the container running; forcibly stop the exact dedicated name.
-      const cleaner = spawnProcess("docker", ["rm", "-f", name], {
-        stdio: "ignore", env: { PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST || "unix:///run/docker.sock" },
-      });
-      cleaner.on("error", () => {});
-    }, timeoutMs);
     const finish = (code, error) => {
       if (settled) return;
-      settled = true; clearTimeout(timer);
-      resolve({
-        step, state: !timedOut && code === 0 ? "passed" : "failed",
-        exitCode: timedOut ? null : (typeof code === "number" ? code : null),
-        timedOut, durationMs: Date.now() - started,
-        image: plan.image, command: plan.command.join(" "),
-        stdout: scrub(stdout), stderr: scrub(error || stderr),
-      });
+      settled = true;
+      clearTimeout(timer);
+      // Hold the claim until the bounded identity-checked cleanup completes.
+      void (async () => {
+        if (timedOut) await cleanup;
+        resolve({
+          step, state: !timedOut && code === 0 ? "passed" : "failed",
+          exitCode: timedOut ? null : (typeof code === "number" ? code : null),
+          timedOut, durationMs: Date.now() - started,
+          image: plan.image, command: plan.command.join(" "),
+          stdout: scrub(stdout), stderr: scrub(error || stderr),
+        });
+      })();
     };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // Install the cleanup promise BEFORE killing the CLI, which may emit
+      // close synchronously. Never rm -f by a potentially reused Docker name.
+      cleanup = Promise.resolve().then(() =>
+        cleanupTimedOutContainer(id, step, { probeDocker })).catch(() => false);
+      try { child.kill("SIGKILL"); } catch { /* Cleanup still runs. */ }
+      // CLI SIGKILL may never emit close. The cleanup itself bounds the result.
+      void cleanup.then(() => finish(null, "Docker CLI timed out"));
+    }, timeoutMs);
     child.on("error", e => finish(null, e.message));
     child.on("close", code => finish(code));
   });
