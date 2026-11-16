@@ -84,6 +84,21 @@ describe("application scaffold", () => {
     expect(workflow).toContain("E2E_API_ORIGIN=http://127.0.0.1:8080");
     expect(workflow).toContain("curl -fsS http://127.0.0.1:8080/health");
   });
+  it("keeps cross-tab OIDC logout terminal against delayed refresh and stale boot sync", () => {
+    const generated = generateFiles(example());
+    const component = generated["src/frontend/web/src/WorkItems.tsx"];
+    const browser = generated["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(component).toContain("const logoutFence = useRef(false)");
+    expect(component).toContain("if (active && !logoutFence.current)");
+    expect(component).toContain("if (logoutFence.current)");
+    expect(component).toContain("logoutFence.current = true;");
+    expect(component).toContain("void manager.removeUser().catch(() => {})");
+    expect(component).toContain('setItems([]); setEditing(null); setTitle(""); setDraft("");');
+    expect(browser).toContain("late OIDC silent refresh cannot resurrect a cross-tab logged-out session");
+    expect(browser).toContain('const response = await route.fetch()');
+    expect(browser).toContain('await releaseGate');
+    expect(browser).toContain("Object.keys(sessionStorage)");
+  });
   it("fences every generated PostgreSQL mutation and 401 to the active OIDC session", () => {
     const files = generateFiles(example());
     const component = files["src/frontend/web/src/WorkItems.tsx"];

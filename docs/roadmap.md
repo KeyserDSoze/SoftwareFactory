@@ -376,3 +376,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Politiche WorkItems: singolo `sub` e singolo claim `role` esattamente `reader`/`editor` più `RequireRole`; le forme ambigue, duplicate, sconosciute, vuote o mancanti non autorizzano read/write nonostante JWT RSA valido.
 - Prove reali con l'Identity Provider RSA effimero che firma cinque varianti malformate, `GET/POST /api/items` su API .NET/PostgreSQL post-JWKS-rollover devono essere tutti 403, mantenendo 200 reader GET, 403 reader POST e 201 editor POST; Vitest sullo scaffold generato.
 - Rimangono nella #9 integrazione HTTPS IdP production, validazione mapping ruoli in deployment esterni, BFF/HttpOnly e revoca/cross-device.
+
+
+## v0.3 — Fence di logout contro silent renew OIDC tardivo (#45)
+
+- Rendere il logout terminale per il documento browser fino a nuovo login interattivo: `userLoaded`/getUser/callback arrivati dopo disconnessione multi-tab non possono reinserire credenziali; lo storage riscritto da una vecchia risposta viene ripulito senza broadcast loop.
+- Pulizia di dati e bozze a **ogni** transizione token (anche account A→B), mantenendo le barriere `sessionEpoch` per mutate/401 già introdotte.
+- E2E Chromium con provider OIDC effimero, due tab, `signinSilent` e risposta refresh ritardata fino a logout; fullstack gate da 16 a 17 test. Non è revoca server-side o sessione BFF: l'epica #9 rimane aperta.

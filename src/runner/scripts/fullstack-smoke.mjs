@@ -261,11 +261,11 @@ try {
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
-  if (outcome.state !== "passed" || !/16 passed/.test(outcome.stdout)) {
+  if (outcome.state !== "passed" || !/17 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
     const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
     console.error("OIDC_BROWSER_DIAGNOSTICS", snippet.slice(-4));
-    throw Error("Playwright integration did not pass all 16 assertions, including OIDC browser refresh and PostgreSQL persistence");
+    throw Error("Playwright integration did not pass all 17 assertions, including OIDC browser refresh and PostgreSQL persistence");
   }
   for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
     const count = Number(await docker(["exec", dbName, "psql", "-U", "app", "-d", "app",

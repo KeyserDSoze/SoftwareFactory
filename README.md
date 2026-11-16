@@ -223,3 +223,8 @@ La readiness del runner è stata corretta per evitare falsi **503 `docker_unavai
 ## Ruoli OIDC univoci nelle app generate (#44)
 
 La API PostgreSQL generata non concede più permessi per la sola presenza di `editor` in un elenco ambiguo di ruoli JWT. Ogni token firmato deve avere **esattamente un claim `role`**, con valore `reader` oppure `editor`, e un soggetto `sub` univoco. Token con ruoli doppi, misti, assenti o sconosciuti sono negati con HTTP 403; i token invalidi crittograficamente continuano a ricevere HTTP 401. Il provider OIDC temporaneo della CI firma queste varianti e la vera API ASP.NET Core le verifica anche dopo il rollover JWKS. Per gli IdP esterni è necessaria una mappatura esplicita del singolo ruolo applicativo: non è un'integrazione IdP production e la #9 resta aperta.
+
+
+## Logout OIDC resistente a refresh tardivi (#45)
+
+Le app React/PostgreSQL generate ora trattano il logout come una **barriera terminale per la scheda corrente**. Un refresh OIDC partito prima della disconnessione non può far ricomparire token o elementi nella UI dopo un logout in un'altra scheda; eventuali credenziali riscritte in ritardo dal client OIDC vengono eliminate. La sostituzione di un token con un altro pulisce immediatamente dati e bozze della sessione precedente. Un test Chromium usa due tab e un vero provider OIDC di test: blocca la consegna della risposta di rinnovo fino al logout e verifica che login e dati non siano ripristinati dopo il rilascio. Questo protegge solo il browser: **non revoca JWT già emessi**, né implementa BFF/cookie HttpOnly o sessioni server-side, ancora nella #9.
