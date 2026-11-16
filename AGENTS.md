@@ -662,3 +662,19 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Certificati TLS: creare CA RSA e server leaf con SAN `DNS:identity-tls` **solo durante il fullstack CI**, materiali in directory privata temporanea fuori dal workspace generato. La CA **private key non va montata in nessun container**: copiare soltanto la CA pubblica, leaf crt e leaf key nel mount privato read-only `/ci-tls`, applicare permessi 0600 a chiavi private; smontare/terminare i container e rimuovere la directory anche in failure.
 - Avviare due API ASP.NET Core `Production` reali con OIDC HTTPS, CORS `Web__AllowedOrigins=https://app.example.test`, PostgreSQL e issuer TLS identici; soltanto l'API positiva riceve `SSL_CERT_FILE=/ci-tls/ca.crt`. Il test richiede HTTPS SAN/trust positivo, Node senza CA negativo, .NET senza CA `401`, RS256 JWKS rollover e RBAC con firmati/tampered sul .NET positivo.
 - Mai bypass TLS (`NODE_TLS_REJECT_UNAUTHORIZED=0`, `DangerousAcceptAnyServerCertificateValidator`), non loggare JWT, CA privata, controllo segreto, né confondere il collaudo TLS CA effimera con un IdP HTTPS **esterno** o affidabilità PKI di produzione. Test del transport fail-closed in Node e runner syntax `npm run check`. ADR 0043, epic #9 resta aperta.
+
+
+## Connector host e onboarding remoto (#87)
+
+- Il browser non può installare Docker o SDK Linux sull'host. Mostrare istruzioni per
+  PC/VM e usare probe autenticati **read-only** prima di inviare codice: capabilities
+  protocol 1 / network none, readiness heartbeat e execution-readiness rootless.
+- `GET /healthz` non certifica worker o sandbox; una readiness positiva non equivale
+  a build/test passati, che richiedono job esplicito con report bound al digest.
+- Non passare mai API key, token Tunnel, credenziali cloud o SSH nell'URL, nei comandi
+  mostrati, nel repository, in ZIP o in localStorage. Non aprire una shell/SSH arbitraria
+  dal browser verso un host con workload sensibili.
+- Per fullstack multi-container orchestrare solo dal worker con servizi/immagini/policy
+  controllati: non esporre Docker socket ai job, alla API o alla SPA. Prima dell'installer
+  automatico servono pairing monouso, revoca/rotazione, artefatti verificati, test su host
+  reale e documentazione di uninstall. Vedi ADR 0044 e issue #87.
