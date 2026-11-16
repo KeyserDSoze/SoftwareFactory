@@ -478,6 +478,82 @@ describe("application scaffold", () => {
       expect(String(production.services.web.ports[0].published)).toBe("3000");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+  it("renders optional services before top-level volumes across all database variants", () => {
+    const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
+      HOME: process.env.HOME || "/tmp" };
+    const available = spawnSync("docker", ["compose", "version"], {
+      encoding: "utf8", timeout: 6000, maxBuffer: 65536, env: processEnv,
+    });
+    const hasCompose = available.status === 0;
+    if (!hasCompose && process.env.CI === "true")
+      throw Error("Docker Compose is mandatory for the CI schema check");
+    const directory = mkdtempSync(path.join(tmpdir(), "sf-compose-services-"));
+    const dockerDir = path.join(directory, "docker");
+    mkdirSync(dockerDir);
+    const composeFile = path.join(dockerDir, "compose.yml");
+    const envFile = path.join(dockerDir, ".env");
+    writeFileSync(envFile, [
+      "DB_PASSWORD=ci-only-fake-db-password",
+      "DB_ROOT_PASSWORD=ci-only-fake-root-password",
+      "AUTH_AUDIENCE=factory-web",
+      "AUTH_MODE=legacy",
+      "MINIO_USER=ci-only-minio",
+      "MINIO_PASSWORD=ci-only-fake-minio-password",
+    ].join("\n") + "\n", { mode: 0o600 });
+    try {
+      for (const database of ["postgresql", "mysql", "sqlserver", "sqlite"] as const) {
+        const project = example();
+        project.config.database = database;
+        project.config.services.cache.development = "redis";
+        project.config.services.queue.development = "rabbitmq";
+        project.config.services.telemetry.development = "opentelemetry-jaeger";
+        project.config.services.storage.development = "minio";
+        const files = generateFiles(project);
+        const compose = files["docker/compose.yml"];
+        const volumeName = database === "postgresql" ? "pgdata" :
+          database === "mysql" ? "mysqldata" :
+          database === "sqlserver" ? "sqlserverdata" : null;
+        expect(compose).toContain("  jaeger:");
+        expect(compose).toContain("  rabbitmq:");
+        expect(compose).toContain("  redis:");
+        expect(compose).toContain("  minio:");
+        expect(compose).toContain('      - "127.0.0.1:15672:15672"');
+        expect(compose).toContain('      - "127.0.0.1:16686:16686"');
+        expect(compose).toContain('      - "127.0.0.1:4317:4317"');
+        if (volumeName) {
+          const marker = "\nvolumes:\n";
+          expect(compose).toContain(marker);
+          expect(compose.indexOf("  minio:")).toBeLessThan(compose.indexOf(marker));
+          expect(compose).toContain(marker + "  " + volumeName + ":\n");
+        } else {
+          expect(compose).not.toContain("\nvolumes:\n");
+        }
+        if (!hasCompose) continue;
+        writeFileSync(composeFile, compose, { mode: 0o600 });
+        const out = spawnSync("docker", [
+          "compose", "-f", composeFile, "--env-file", envFile,
+          "config", "--format", "json",
+        ], { encoding: "utf8", timeout: 12000,
+          maxBuffer: 1_000_000, env: processEnv });
+        expect(out.status, database + ": " + out.stderr).toBe(0);
+        const rendered = JSON.parse(out.stdout) as {
+          services: Record<string, {
+            ports?: Array<{ host_ip: string; published: string }>;
+          }>;
+          volumes?: Record<string, unknown>;
+        };
+        for (const service of ["api", "web", "redis", "rabbitmq", "jaeger", "minio"])
+          expect(rendered.services[service], service + " missing for " + database).toBeDefined();
+        if (volumeName) expect(rendered.volumes?.[volumeName]).toBeDefined();
+        else expect(rendered.volumes || {}).toEqual({});
+        for (const exposed of ["web", "rabbitmq", "jaeger"]) {
+          expect(rendered.services[exposed].ports?.length).toBeGreaterThan(0);
+          for (const port of rendered.services[exposed].ports || [])
+            expect(port.host_ip, exposed + " not loopback").toBe("127.0.0.1");
+        }
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";

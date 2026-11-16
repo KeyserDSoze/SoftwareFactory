@@ -636,3 +636,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Parametrizzare `ASPNETCORE_ENVIRONMENT` con `APP_ENVIRONMENT` (Development default per solo demo locale), e `VITE_API_URL` con `PUBLIC_API_URL` (origin **browser**, non `http://api:8080`). Il builder CSP deve validare lo **stesso** origin effettivamente usato dalla SPA, impedendo HTTP remoto salvo fixture CI interna autorizzata.
 - Mai derivare automaticamente `VITE_OIDC_AUDIENCE` da `AUTH_AUDIENCE` quando le altre variabili OIDC pubbliche non sono impostate: usare `OIDC_PUBLIC_AUDIENCE` separata, vuota per legacy; richiedere 0 o 3 variabili OIDC_PUBLIC_* complete in CSP.
 - Testare la struttura di `docker/compose.yml` e, se Docker Compose è disponibile (obbligatorio in CI), il **rendering reale** del Compose in development e production usando variabili fittizie e senza avviare servizi. Non dichiarare collaudo di TLS, IdP reale o CORS/CDN produzione senza prova esterna. ADR 0039, issue #9.
+
+## Generazione Compose sintatticamente valida per servizi opzionali (#83)
+
+- Non emettere mai una root `volumes:` prima di aver aggiunto **tutti** i servizi sotto `services:`: Redis/RabbitMQ/Jaeger/MinIO vanno generati prima della definizione finale dei volumi PostgreSQL, MySQL e SQL Server. SQLite non richiede `volumes:` senza altri volumi.
+- Porte management RabbitMQ `15672`, Jaeger `16686` e OTLP `4317` sono per demo locale e devono bindare `127.0.0.1` nel Compose generato, così come API e Web. Pubblicare queste console sul WAN richiede una distinta architettura di accesso autenticato.
+- I test Vitest devono chiamare `docker compose config --format json` in CI per combinazioni con tutti i servizi opzionali e database PostgreSQL, MySQL, SQL Server e SQLite, usando credenziali fittizie senza eseguire/pullare container. Lo schema Compose e le porte effettivamente renderizzate sono l'evidenza del fix, non il collaudo delle immagini runtime. ADR 0040, #83.

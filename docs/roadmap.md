@@ -622,3 +622,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Frontend generato non più su `0.0.0.0:3000`: bind `127.0.0.1:3000:80`, API/database già loopback. `APP_ENVIRONMENT` mappato all'ASP.NET Core runtime (default Development solo per locale), `PUBLIC_API_URL` impostabile per browser HTTPS e CSP.
 - `OIDC_PUBLIC_AUDIENCE` separata da `AUTH_AUDIENCE` per eliminare la regressione #81 in build legacy/dev; validazione CSP 0-o-3 completa preservata. Aggiornati `docker/.env.example` e README dello scaffold.
 - Test Vitest della generazione e `docker compose config --format json` in CI sulle modalità locale/HTTPS senza avviare servizi; ADR 0039. Per l'epica #9 restano IdP reale su HTTPS, edge TLS/CORS/CDN certificati, BFF e modello sessione production.
+
+## v0.3 — Validazione schema Compose con services + volumes (#83)
+
+- Risolto il bug segnalato dalla CI della #82: la sezione top-level `volumes:` viene scritta dopo tutti i servizi (compresi Jaeger, Redis, RabbitMQ e MinIO) e solo per database con named volume.
+- Management ports RabbitMQ/Jaeger/OTLP ora bindate loopback; quattro varianti database e servizi opzionali verificate tramite `docker compose config --format json` nella Factory CI.
+- ADR 0040. Si tratta di controllo sintattico/di configurazione, non prova della salute o sicurezza di immagini/servizi né deploy production-ready; l'epica #9 rimane aperta.

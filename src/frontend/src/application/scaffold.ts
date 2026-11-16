@@ -7,6 +7,11 @@ function slugify(name: string): string {
 }
 function dockerCompose(c: ProjectConfig): string {
   const deps = c.database !== "sqlite" ? ["db"] : [];
+  // Compose top-level named volumes MUST be emitted after every service:
+  // otherwise optional Redis/Jaeger/RabbitMQ/MinIO end up under "volumes".
+  const namedVolume = c.database === "postgresql" ? "pgdata" :
+    c.database === "mysql" ? "mysqldata" :
+    c.database === "sqlserver" ? "sqlserverdata" : null;
   const services = [
     "services:",
     "  api:",
@@ -41,28 +46,28 @@ function dockerCompose(c: ProjectConfig): string {
   if (c.database === "postgresql") {
     services.push("  db:", "    image: postgres:17-alpine", "    environment:",
       "      POSTGRES_DB: app", "      POSTGRES_USER: app", '      POSTGRES_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"',
-      "    ports:", '      - "127.0.0.1:5432:5432"', "    healthcheck:", '      test: ["CMD-SHELL", "pg_isready -U app -d app"]', "      interval: 2s", "      timeout: 2s", "      retries: 20", "    volumes:", "      - pgdata:/var/lib/postgresql/data", "volumes:", "  pgdata:");
+      "    ports:", '      - "127.0.0.1:5432:5432"', "    healthcheck:", '      test: ["CMD-SHELL", "pg_isready -U app -d app"]', "      interval: 2s", "      timeout: 2s", "      retries: 20", "    volumes:", "      - pgdata:/var/lib/postgresql/data");
   } else if (c.database === "mysql") {
     services.push("  db:", "    image: mysql:8.4", "    environment:", "      MYSQL_DATABASE: app", "      MYSQL_USER: app",
       '      MYSQL_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"',
       '      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}"',
-      "    volumes:", "      - mysqldata:/var/lib/mysql", "volumes:", "  mysqldata:");
+      "    volumes:", "      - mysqldata:/var/lib/mysql");
   } else if (c.database === "sqlserver") {
     services.push("  db:", "    image: mcr.microsoft.com/mssql/server:2022-latest",
       "    environment:", '      ACCEPT_EULA: "Y"', '      MSSQL_SA_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env}"',
-      "    volumes:", "      - sqlserverdata:/var/opt/mssql", "volumes:", "  sqlserverdata:");
+      "    volumes:", "      - sqlserverdata:/var/opt/mssql");
   }
   if (Object.values(c.services.cache).includes("redis")) services.push(
     "  redis:", "    image: redis:7.4-alpine", "    command: [redis-server, --appendonly, 'yes']");
   if (Object.values(c.services.queue).includes("rabbitmq")) services.push(
-    "  rabbitmq:", "    image: rabbitmq:4-management", "    ports:", '      - "15672:15672"');
+    "  rabbitmq:", "    image: rabbitmq:4-management", "    ports:", '      - "127.0.0.1:15672:15672"');
   if (Object.values(c.services.telemetry).includes("opentelemetry-jaeger")) services.push(
     "  jaeger:", "    image: jaegertracing/all-in-one:1.65.0", "    ports:",
-    '      - "16686:16686"', '      - "4317:4317"');
+    '      - "127.0.0.1:16686:16686"', '      - "127.0.0.1:4317:4317"');
   if (Object.values(c.services.storage).includes("minio")) services.push(
     "  minio:", "    image: minio/minio:RELEASE.2025-02-07T23-21-09Z", "    command: server /data",
     "    environment:", '      MINIO_ROOT_USER: "${MINIO_USER:?Set MINIO_USER}"', '      MINIO_ROOT_PASSWORD: "${MINIO_PASSWORD:?Set MINIO_PASSWORD}"');
-  return lines(...services);
+  return lines(...services, ...(namedVolume ? ["volumes:", "  " + namedVolume + ":"] : []));
 }
 function terraform(c: ProjectConfig, slug: string): string {
   const head = ['terraform {', '  required_version = ">= 1.7.0"'];
