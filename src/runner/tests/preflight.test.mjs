@@ -28,7 +28,8 @@ function composeConfig() {
       build: { context: checkoutRoot, dockerfile: "docker/runner/Dockerfile.api" },
       volumes: [{ type: "bind", source: apiEnv.RUNNER_DATA_DIR, target: "/data" }],
       ports: [{ host_ip: "127.0.0.1", target: 8787, published: "8787", protocol: "tcp" }],
-      environment: { RUNNER_PORT: "8787", RUNNER_API_KEY: secret },
+      environment: { RUNNER_PORT: "8787", RUNNER_API_KEY: secret,
+        RUNNER_DATA_DIR: "/data" },
     }),
     "runner-worker": service({
       build: { context: checkoutRoot, dockerfile: "docker/runner/Dockerfile.worker" },
@@ -38,6 +39,7 @@ function composeConfig() {
         { type: "bind", source: apiEnv.RUNNER_DOCKER_SOCKET, target: "/run/docker.sock" },
       ],
       environment: { DOCKER_HOST: "unix:///run/docker.sock",
+        RUNNER_DATA_DIR: "/data",
         RUNNER_HOST_WORK_DIR: apiEnv.RUNNER_HOST_WORK_DIR },
     }),
     cloudflared: {
