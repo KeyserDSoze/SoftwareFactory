@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
 import { atomicWrite } from "../common.mjs";
-import { startWorkerHeartbeat, readWorkerHeartbeat,
+import { startWorkerHeartbeat, readWorkerHeartbeat, readDockerExecutionReadiness,
   isPrivateWorkerHeartbeatFile } from "../heartbeat.mjs";
 
 const key = "runner-heartbeat-integration-key-abcdefghijklmnopqrstuvwxyz";
@@ -46,6 +46,10 @@ test("two APIs distinguish live HTTP liveness from authenticated worker readines
     for (let i = 0; i < 2; i++) {
       assert.equal((await request(i, "/healthz", false)).status, 200);
       assert.equal((await request(i, "/v1/readiness", false)).status, 401);
+      assert.equal((await request(i, "/v1/execution-readiness", false)).status, 401);
+      const noDocker = await request(i, "/v1/execution-readiness");
+      assert.equal(noDocker.status, 503);
+      assert.equal((await noDocker.json()).error, "docker_unavailable");
       const absent = await request(i, "/v1/readiness");
       assert.equal(absent.status, 503);
       assert.equal((await absent.json()).error, "worker_unavailable");
@@ -53,9 +57,12 @@ test("two APIs distinguish live HTTP liveness from authenticated worker readines
       assert.equal((await request(i, "/v1/capabilities")).status, 200,
         "job API stays available while worker is offline");
     }
-    heartbeat = await startWorkerHeartbeat({ dataDir, intervalMs: 20 });
+    heartbeat = await startWorkerHeartbeat({
+      dataDir, intervalMs: 20, probeIntervalMs: 50,
+      probeDocker: async () => false,
+    });
     const first = await readWorkerHeartbeat(dataDir);
-    assert.equal(first.version, 1);
+    assert.equal(first.version, 2);
     assert.ok(!JSON.stringify(first).includes(key), "no credential in readiness file");
     assert.ok(!JSON.stringify(first).includes("docker.sock"));
     assert.ok(!JSON.stringify(first).includes("pid"));
@@ -64,6 +71,8 @@ test("two APIs distinguish live HTTP liveness from authenticated worker readines
       assert.equal(ready.status, 200);
       assert.deepEqual(await ready.json(), { status: "ready", worker: "responsive" });
       assert.equal(ready.headers.get("cache-control"), "no-store");
+      assert.equal((await request(i, "/v1/execution-readiness")).status, 503,
+        "worker liveness alone must not claim a rootless Docker daemon");
     }
     // A long awaited Docker operation must not suspend the independent timer.
     await sleep(130);
@@ -97,6 +106,86 @@ test("two APIs distinguish live HTTP liveness from authenticated worker readines
   }
 });
 
+test("rootless daemon execution readiness is gated by a fresh probe on both API replicas", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-execution-readiness-"));
+  const file = path.join(dataDir, "worker-heartbeat.json");
+  let release = null;
+  const blocked = new Promise(resolve => { release = resolve; });
+  let mode = "blocked", calls = 0;
+  const probeDocker = async () => {
+    calls++;
+    if (mode === "blocked") await blocked;
+    return mode === "rootless";
+  };
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir,
+  }));
+  let heartbeat = null;
+  try {
+    for (const server of servers) { server.listen(0, "127.0.0.1"); await once(server, "listening"); }
+    const endpoints = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const get = async (i, route) => fetch(endpoints[i] + route, {
+      headers: { Origin: origin, Authorization: "Bearer " + key },
+    });
+    heartbeat = await startWorkerHeartbeat({
+      dataDir, intervalMs: 20, probeIntervalMs: 60_000, probeDocker,
+    });
+    const start = await readWorkerHeartbeat(dataDir);
+    assert.equal(start.docker.rootless, false);
+    assert.equal(start.docker.checkedAt, null);
+    assert.equal((await get(0, "/v1/execution-readiness")).status, 503);
+    await sleep(90);
+    const stillRunning = await readWorkerHeartbeat(dataDir);
+    assert.ok(Date.parse(stillRunning.updatedAt) > Date.parse(start.updatedAt),
+      "a blocked Docker probe must not suspend the heartbeat");
+    assert.equal(calls, 1, "probe must not overlap itself");
+    mode = "rootless";
+    release();
+    await heartbeat.checkDockerNow();
+    for (let i = 0; i < 2; i++) {
+      const ready = await get(i, "/v1/execution-readiness");
+      assert.equal(ready.status, 200);
+      assert.deepEqual(await ready.json(), { status: "ready", worker: "responsive", docker: "rootless" });
+    }
+    mode = "rootful";
+    await heartbeat.checkDockerNow();
+    for (let i = 0; i < 2; i++) {
+      const denied = await get(i, "/v1/execution-readiness");
+      assert.equal(denied.status, 503);
+      assert.equal(denied.headers.get("retry-after"), "5");
+      assert.equal((await denied.json()).error, "docker_unavailable");
+      assert.equal((await get(i, "/v1/readiness")).status, 200);
+    }
+    mode = "rootless";
+    await heartbeat.checkDockerNow();
+    const current = await readWorkerHeartbeat(dataDir);
+    assert.equal(current.docker.rootless, true);
+    await heartbeat.stop();
+    heartbeat = null;
+    const past = new Date(Date.now() - 120_000).toISOString();
+    const checked = new Date(Date.now() - 45_000).toISOString();
+    await atomicWrite(file, { ...current, startedAt: past,
+      updatedAt: new Date().toISOString(), docker: { rootless: true, checkedAt: checked } });
+    await assert.rejects(readDockerExecutionReadiness(dataDir, 30_000),
+      "a stale daemon probe must not be legitimized by a new heartbeat");
+    assert.equal((await get(0, "/v1/execution-readiness")).status, 503);
+    const v1 = { version: 1, instanceId: randomUUID(),
+      startedAt: past, updatedAt: new Date().toISOString() };
+    await atomicWrite(file, v1);
+    assert.equal((await get(0, "/v1/readiness")).status, 200,
+      "legacy heartbeat remains readable during rolling upgrades");
+    assert.equal((await get(1, "/v1/execution-readiness")).status, 503,
+      "legacy heartbeat can never attest Docker readiness");
+    assert.ok(!JSON.stringify(current).includes(key), "never persist the job key");
+    assert.ok(!JSON.stringify(current).includes("docker.sock"), "never persist socket locations");
+  } finally {
+    if (mode === "blocked") { mode = "rootful"; release(); }
+    if (heartbeat) await heartbeat.stop();
+    await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("readiness age/config validation fails before serving and heartbeat parser is strict", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "sf-heartbeat-canonical-"));
   try {
@@ -109,6 +198,20 @@ test("readiness age/config validation fails before serving and heartbeat parser 
     const file = path.join(dataDir, "worker-heartbeat.json");
     await atomicWrite(file, good);
     assert.equal((await readWorkerHeartbeat(dataDir)).version, 1);
+    const current = { version: 2, instanceId: randomUUID(), startedAt: now,
+      updatedAt: now, docker: { rootless: false, checkedAt: null } };
+    await atomicWrite(file, current);
+    assert.equal((await readWorkerHeartbeat(dataDir)).version, 2);
+    for (const invalid of [
+      { ...current, docker: { rootless: true, checkedAt: null } },
+      { ...current, docker: { rootless: "true", checkedAt: now } },
+      { ...current, docker: { rootless: true, checkedAt: new Date(Date.now() + 60_000).toISOString() } },
+      { ...current, docker: { rootless: true, checkedAt: "bad-time" } },
+      { ...current, docker: { rootless: false, checkedAt: now, socket: "must-not-appear" } },
+    ]) {
+      await atomicWrite(file, invalid);
+      await assert.rejects(readWorkerHeartbeat(dataDir));
+    }
     for (const value of [
       { ...good, instanceId: "not-a-uuid" },
       { ...good, version: 2 },

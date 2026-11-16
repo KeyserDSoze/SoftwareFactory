@@ -333,3 +333,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `GET /v1/readiness` autenticato con Bearer job: 200 su heartbeat valido/fresco, 503 + Retry-After su worker assente/stale/futuro/JSON ostile/permission mismatch. `healthz` resta pura liveness non autenticata.
 - TTL configurabile con `RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS` 10–300 (default 30), Compose, test two-API e validazione file; liveness non è prova Docker rootless o attestation esterna.
 - Restano #2: vero isolamento VM rootless, verifica engine/SDK/Cloudflare Access su deployment reale, storage/quote per tenant, fencing e prove off-host.
+
+
+## v0.2 — Probe daemon Docker rootless dalla worker VM (#39)
+
+- Misurare nel worker la vera risposta a `docker info` via CLI read-only, comando fissato, socket UNIX locale allowlist, timeout 5s, output limitato e obbligo `name=rootless`; non inferire la modalità dal solo socket.
+- Heartbeat v2 su volume privato: ultimo stato rootless e timestamp probe, refresh indipendente ogni 10s e heartbeat Node ogni 5s; niente env o log nel record. Lettura v1 legacy soltanto per worker readiness.
+- `GET /v1/execution-readiness` autenticato e fail-closed se heartbeat/probe non fresh o daemon non rootless; API continua a non montare Docker. Test unit/integrazione su due API e negativi rootful/malformed/timing.
+- Restano in #2: collaudo effettivo daemon **rootless** in VM con Docker containers reali .NET/Playwright, Cloudflare Tunnel/Access, fencing, IAM/quote per tenant e trust anchor off-host.

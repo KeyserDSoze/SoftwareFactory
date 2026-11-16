@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
-import { readWorkerHeartbeat } from "./heartbeat.mjs";
+import { readWorkerHeartbeat, readDockerExecutionReadiness } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -77,6 +77,18 @@ export function createRunnerServer({
       : null;
     if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, apiKey)) {
       send(401, { error: "unauthorized" }); return;
+    }
+    if (req.method === "GET" && req.url === "/v1/execution-readiness") {
+      // API never opens the Docker socket. It verifies the last daemon result
+      // measured by the worker, not container execution or remote attestation.
+      try {
+        await readDockerExecutionReadiness(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
+        send(200, { status: "ready", worker: "responsive", docker: "rootless" });
+      } catch {
+        res.writeHead(503, { ...headers, "Retry-After": "5" });
+        res.end(JSON.stringify({ error: "docker_unavailable" }));
+      }
+      return;
     }
     if (req.method === "GET" && req.url === "/v1/readiness") {
       // Readiness is not liveness. Do not expose host paths or internal
