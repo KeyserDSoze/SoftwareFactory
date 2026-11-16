@@ -17,6 +17,17 @@ function safeStepResult(value) {
   }
   return copy;
 }
+/** A timed-out Docker CLI may leave a live container behind. The verified
+ * hash-chain must remain available past retention for manual reconciliation.
+ * Legacy timeout results without cleanupVerified are uncertain as well.
+ */
+export function needsTimeoutReconciliation(report) {
+  const unresolved = result => result?.timedOut === true &&
+    result.cleanupVerified !== true;
+  return unresolved(report?.preparation) ||
+    (Array.isArray(report?.results) && report.results.some(unresolved));
+}
+
 /** Atomic exclusive job claim on the shared POSIX filesystem. Do not expire by age. */
 async function isClaimed(dataDir, id) {
   try { await lstat(path.join(jobDirectory(dataDir, id), ".claim")); return true; }
@@ -137,9 +148,11 @@ async function executeClaimedJob(id, {
     const failed = report.results.some(r => r.state === "failed");
     const skipped = report.results.some(r => r.state === "skipped");
     report.state = failed ? "failed" : skipped ? "incomplete" : "passed";
-    report.summary = failed ? "At least one executed code test failed" :
-      skipped ? "Some checks were skipped due to missing tests or infrastructure setup; NOT a pass" :
-        "All requested steps executed and passed";
+    report.summary = needsTimeoutReconciliation(report)
+      ? "Timed-out Docker container cleanup unverified; manually reconcile job containers before deleting evidence"
+      : failed ? "At least one executed code test failed" :
+        skipped ? "Some checks were skipped due to missing tests or infrastructure setup; NOT a pass" :
+          "All requested steps executed and passed";
   } catch {
     // A thrown workspace/planner/Docker infrastructure exception is not a
     // verified failed code test. Do not leak host paths or exception contents
@@ -178,7 +191,8 @@ export async function runWorker({
         // A recovered worker may have left a live container. Preserve its
         // verified journal for operator-only reconciliation irrespective of
         // retention age; never silently erase the only cleanup authority.
-        const needsReconciliation = evidenceEntries.at(-1)?.kind === "recovered";
+        const needsReconciliation = evidenceEntries.at(-1)?.kind === "recovered" ||
+          needsTimeoutReconciliation(report);
         if (!claimed && !needsReconciliation &&
             ["passed", "failed", "incomplete"].includes(report.state) &&
             Number.isFinite(Date.parse(report.finishedAt)) && Date.parse(report.finishedAt) < expireBefore) {
@@ -192,6 +206,7 @@ export async function runWorker({
               // Recheck the recovered marker UNDER admission lock: a scan
               // must not delete proof of a job just recovered by a worker.
               if (latestEntries.at(-1)?.kind !== "recovered" &&
+                  !needsTimeoutReconciliation(latest) &&
                   ["passed", "failed", "incomplete"].includes(latest.state) &&
                   Number.isFinite(Date.parse(latest.finishedAt)) &&
                   Date.parse(latest.finishedAt) < expireBefore)

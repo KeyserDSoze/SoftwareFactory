@@ -167,11 +167,15 @@ export async function runDockerStep(plan, id, step, {
       clearTimeout(timer);
       // Hold the claim until the bounded identity-checked cleanup completes.
       void (async () => {
-        if (timedOut) await cleanup;
+        // Only a literal true from identity-checked Docker cleanup counts
+        // as verified. No-container/legacy/exception remains uncertain and
+        // needs a manual review before retention can delete the journal.
+        const cleanupVerified = timedOut ? (await cleanup) === true : undefined;
         resolve({
           step, state: !timedOut && code === 0 ? "passed" : "failed",
           exitCode: timedOut ? null : (typeof code === "number" ? code : null),
-          timedOut, durationMs: Date.now() - started,
+          timedOut, ...(timedOut ? { cleanupVerified } : {}),
+          durationMs: Date.now() - started,
           image: plan.image, command: plan.command.join(" "),
           stdout: scrub(stdout), stderr: scrub(error || stderr),
         });

@@ -131,6 +131,8 @@ test("timeout awaits cleanup even if killed CLI never emits close", async () => 
   assert.equal(cleaned, true);
   assert.equal(result.state, "failed");
   assert.equal(result.exitCode, null); assert.equal(result.timedOut, true);
+  assert.equal(result.cleanupVerified, false,
+    "a void cleanup callback is not proof of container removal");
 });
 
 test("synchronous close on SIGKILL cannot finish before cleanup or report a pass", async () => {
@@ -149,4 +151,46 @@ test("synchronous close on SIGKILL cannot finish before cleanup or report a pass
   assert.equal(result.state, "failed");
   assert.equal(result.timedOut, true);
   assert.equal(result.exitCode, null);
+  assert.equal(result.cleanupVerified, false);
+});
+
+// Timeout does not certify a code failure; even successful Docker rm cannot
+// turn a timed-out step into a passing test, but it can authorize normal TTL.
+test("verified cleanup requires exact true and survives synchronous close", async () => {
+  for (const [answer, verified] of [
+    [true, true], [false, false], [undefined, false],
+    ["true", false], [null, false],
+  ]) {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => { child.emit("close", 0); };
+    const result = await runDockerStep(plan, jobId, step, {
+      probeDocker: async () => true,
+      spawnProcess: () => child,
+      cleanupTimedOutContainer: async () => answer,
+    });
+    assert.equal(result.state, "failed");
+    assert.equal(result.exitCode, null);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.cleanupVerified, verified);
+  }
+});
+
+test("cleanup exception is not proof, timeout remains unverified", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => child.emit("close", null);
+  const result = await runDockerStep(plan, jobId, step, {
+    probeDocker: async () => true,
+    spawnProcess: () => child,
+    cleanupTimedOutContainer: async () => {
+      throw Error("private Docker socket and secret");
+    },
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.cleanupVerified, false);
+  assert.equal(result.exitCode, null);
+  assert.doesNotMatch(JSON.stringify(result), /private Docker socket and secret/);
 });

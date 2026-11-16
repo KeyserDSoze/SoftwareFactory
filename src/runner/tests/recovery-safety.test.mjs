@@ -9,7 +9,7 @@ import { atomicWrite, jobDirectory, readReport, validateRequest } from "../commo
 import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport } from "../evidence.mjs";
 import { createRunnerServer } from "../api.mjs";
 import { beginRepairSession } from "../coordinator.mjs";
-import { executeJob, recoverUnclaimedJob, runWorker } from "../worker.mjs";
+import { executeJob, recoverUnclaimedJob, runWorker, needsTimeoutReconciliation } from "../worker.mjs";
 import { reconcileRunnerContainers } from "../orphans.mjs";
 
 const origin = "http://localhost:5173";
@@ -26,6 +26,7 @@ const check = () => validateRequest({
 });
 async function createFixture(dataDir, {
   id = randomUUID(), started = true, stepResult = null,
+  preparation = null,
   finished = null, terminalKind = "finished", terminalState = "passed",
 } = {}) {
   const dir = jobDirectory(dataDir, id), checked = check();
@@ -43,6 +44,12 @@ async function createFixture(dataDir, {
       ...accepted, state: "running", startedAt: ago(),
       summary: "Worker started",
     }, "started");
+    if (preparation) {
+      const running = await readReport(dataDir, id);
+      await recordJobEvidence(dataDir, id, {
+        ...running, preparation,
+      }, "preparation");
+    }
     if (stepResult) {
       const running = await readReport(dataDir, id);
       await recordJobEvidence(dataDir, id, {
@@ -121,6 +128,64 @@ test("interrupted running job is recovered ONCE as incomplete, not a provable co
     if (server.listening) await new Promise(resolve => server.close(resolve));
     await rm(dataDir, { recursive: true, force: true });
   }
+});
+
+
+test("retention never deletes unverified Docker timeout evidence, including npm prepare and legacy", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-retain-timeout-"));
+  const unresolved = { step: "dotnet-build", state: "skipped",
+    timedOut: true, exitCode: null, cleanupVerified: false };
+  const legacy = { step: "dotnet-build", state: "skipped",
+    timedOut: true, exitCode: null };
+  const cleaned = { step: "dotnet-build", state: "skipped",
+    timedOut: true, exitCode: null, cleanupVerified: true };
+  try {
+    const oldStep = await createFixture(dataDir, {
+      stepResult: unresolved, finished: ago(), terminalState: "incomplete",
+    });
+    const oldLegacy = await createFixture(dataDir, {
+      stepResult: legacy, finished: ago(), terminalState: "incomplete",
+    });
+    const oldPrep = await createFixture(dataDir, {
+      preparation: { ...unresolved, step: "npm-prepare" },
+      finished: ago(), terminalState: "incomplete",
+    });
+    const oldCleaned = await createFixture(dataDir, {
+      stepResult: cleaned, finished: ago(), terminalState: "incomplete",
+    });
+    const oldNormal = await createFixture(dataDir, {
+      stepResult: passedStep, finished: ago(), terminalState: "passed",
+    });
+    const runOnce = () => runWorker({
+      dataDir, workspaceRoot: path.join(dataDir, "workspaces"), pollMs: 1,
+      heartbeatIntervalMs: 60_000,
+      stop: (() => { let n = 0; return () => n++ > 0; })(),
+      executeQueuedJob: async () => { throw Error("unexpected job"); },
+    });
+    for (const candidate of [oldStep, oldLegacy, oldPrep]) {
+      const verified = await verifyJobEvidence(dataDir, candidate.id);
+      assert.equal(needsTimeoutReconciliation(verified.report), true);
+    }
+    assert.equal(needsTimeoutReconciliation(
+      (await verifyJobEvidence(dataDir, oldCleaned.id)).report), false);
+    await runOnce();
+    for (const candidate of [oldStep, oldLegacy, oldPrep]) {
+      const verified = await verifyJobEvidence(dataDir, candidate.id);
+      assert.equal(verified.report.state, "incomplete");
+      assert.equal(verified.entries.at(-1).kind, "finished");
+      await assert.rejects(beginRepairSession(dataDir, {
+        failedJobId: candidate.id, proposalId: randomUUID(),
+        paths: ["src/backend/domain/Record.cs"], consent: true,
+      }, "editor"), { code: "REPAIR_NOT_FAILED" });
+    }
+    for (const candidate of [oldCleaned, oldNormal])
+      await assert.rejects(verifyJobEvidence(dataDir, candidate.id),
+        { code: "ENOENT" }, "verified cleanup or normal jobs can expire");
+    // Repeated worker polling must not silently remove unresolved evidence.
+    const previous = (await verifyJobEvidence(dataDir, oldStep.id)).head;
+    await runOnce();
+    assert.equal((await verifyJobEvidence(dataDir, oldStep.id)).head, previous);
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
 test("retention preserves ALL recovered journals (including historical failed), deletes ordinary expired terminal jobs", async () => {

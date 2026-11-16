@@ -599,3 +599,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - `vm-acceptance` valida subito il private env con single-FD stabile, mode 0600 e UID del proprietario; confronta tutti i valori dopo Compose, host e canary. Fail-closed su rotazione, eliminazione, path non sicuro e read errors; nessuna credenziale/impronta in ricevuta.
 - Test Node per differenze, reordered equivalenti, failure con segreti, rename atomico reale su filesystem privato; ADR 0035. Resta da collaudare sulla vera VM rootless e dietro Cloudflare esterno, senza fingere transazioni/fencing atomici (#2).
+
+## v0.2 — Timeout Docker e retention dei job da riconciliare (#79)
+
+- Registrazione del risultato di cleanup sui timeout; `cleanupVerified:true` soltanto dopo esito positivo verificato. Report `incomplete` e summary di riconciliazione se cleanup incerto.
+- Retention fail-closed su step Docker e preparazione npm scaduti con `timedOut:true` e `cleanupVerified !== true` (anche legacy), più check dentro il lock admission. Test Node di timeout, eccezioni e journal TTL, ADR 0036. L'epica #2 mantiene VM rootless live, Cloudflare Access/Tunnel e fencing/attestazione distribuiti come attività aperte.

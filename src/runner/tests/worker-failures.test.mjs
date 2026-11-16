@@ -131,6 +131,36 @@ test("real failed code-step result remains failed; incomplete after-start never 
   } finally { await successfulFailure.close(); }
 });
 
+
+test("worker journals ambiguous timeouts as incomplete and preserves manual cleanup evidence", async () => {
+  for (const cleanupVerified of [false, true]) {
+    const f = await fixture();
+    try {
+      const report = await executeJob(f.id, {
+        dataDir: f.dataDir, workspaceRoot: f.work,
+        executeStep: async (_plan, _id, step) => ({
+          step, state: "failed", exitCode: null, timedOut: true,
+          cleanupVerified, durationMs: 20, stdout: "", stderr: "",
+        }),
+      });
+      assert.equal(report.state, "incomplete");
+      assert.equal(report.results[0].timedOut, true);
+      assert.equal(report.results[0].cleanupVerified, cleanupVerified);
+      assert.equal(report.results[0].state, "skipped");
+      if (!cleanupVerified) assert.match(report.summary, /manually reconcile/);
+      const evidence = await verifyJobEvidence(f.dataDir, f.id);
+      assert.equal(evidence.report.state, "incomplete");
+      assert.deepEqual(evidence.report.results, report.results);
+      assert.deepEqual(evidence.entries.map(entry => entry.kind),
+        ["accepted", "started", "step", "finished"]);
+      await assert.rejects(beginRepairSession(f.dataDir, {
+        failedJobId: f.id, proposalId: randomUUID(),
+        paths: ["src/backend/domain/Record.cs"], consent: true,
+      }, "editor"), { code: "REPAIR_NOT_FAILED" });
+    } finally { await f.close(); }
+  }
+});
+
 test("a post-start infrastructure exception is API-verifiable as incomplete evidence", async () => {
   const f = await fixture();
   const server = createRunnerServer({

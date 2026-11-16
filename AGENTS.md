@@ -610,3 +610,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `vm-acceptance.mjs` deve leggere `--env-file` 0600 tramite `readPrivateEnv` *prima* di invocare Compose, poi ricontrollare la stessa configurazione effettiva dopo Compose, dopo host, dopo canary, senza scrivere credenziali, hash o env nei log/receipt. Qualunque cambiamento, read failure o mismatch blocca il gate successivo o la receipt; non sostituire con `process.env`.
 - Le prove sono snapshot point-in-time, **non** un lock atomico sul file/daemon e non garantiscono che Compose e host abbiano letto lo stesso inode se un operatore ostile ripristina la versione originale fra due check. Test Node con rename privato reale e seam fidati; CI GitHub rootful non è attestazione VM o Cloudflare (#2, ADR 0035).
+
+## Timeout Docker e retention con cleanup non verificato (#79)
+
+- Ogni timeout `runDockerStep` deve riportare `timedOut:true`, `exitCode:null`, `cleanupVerified:true` **solo** se il cleanup d'identità restituisce il booleano `true`; altrimenti false. Un timeout non è un fallimento del codice verificato né autorizza AI repair.
+- La retention del worker deve conservare per sempre fino a intervento operatore i journal con `results[].timedOut` o `preparation.timedOut` e `cleanupVerified !== true`, inclusi i formati legacy. Ripetere il gate sotto `.admission` prima di `rm`; non fare cleanup automatico per nome, per età o senza prova rootless.
+- Documentare e testare l'uso di `orphans.mjs` dry-run e apply su ID job specifico dopo aver fermato i worker. I journal conservati contengono prove verificabili, non sono garanzia che il container sia ancora in esecuzione (ADR 0036, #2).
