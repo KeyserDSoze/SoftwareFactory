@@ -181,7 +181,7 @@ describe("application scaffold", () => {
     expect(auth).toContain("subjects.Length == 1");
     expect(auth).toContain("!string.IsNullOrWhiteSpace(subjects[0].Value)");
     expect(auth).toContain("subjects[0].Value.Length <= 255");
-    expect(auth).toContain("RequireAssertion(context => HasValidSubject(context.User))");
+    expect(auth).toContain("RequireAssertion(context => HasValidSubject(context.User) && HasValidRole(context.User))");
     expect(auth).toContain("options.Authority = issuer");
     expect(auth).toContain("options.RefreshOnIssuerKeyNotFound = true");
     expect(auth).toContain("SecurityAlgorithms.RsaSha256");
