@@ -349,3 +349,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - `docker create` con rete none, readonly, cap-drop, no-new-privileges, UID non privilegiato, limiti CPU/RAM/PID/tmpfs, zero bind mounts; inspect prima/dopo e verifica dei controlli interni; cleanup mirato su ID/label. Niente auto-esecuzione o pull runtime.
 - Test Node deterministici per piano, sicurezza/config, retry, errori e cleanup; documentazione comandi operatori su VM, senza affermare che GitHub hosted rootful CI certifichi rootless.
 - Resta in #2 eseguire davvero il canary e un job .NET/Playwright su VM dedicata e Cloudflare Tunnel/Access reale, oltre a IAM, multi-tenancy, attestation esterna e fencing.
+
+
+## v0.2 — Canary con vero Docker CI, dichiaratamente rootful (#41)
+
+- Aggiungere nella Factory CI uno step reale `docker create/inspect/start/inspect/rm` per il canary #40, usando immagine Node già pullata e digest locale, senza pull né prune; fallire su esito invalido o risorse residue.
+- Il codice di smoke CI è esclusivamente per runner GitHub effimero, controlla ambiente CI non root e daemon effettivamente rootful e bypassa la verifica rootless **solo** tramite dipendenza locale iniettata; la CLI operator-only rimane fail-closed su rootful.
+- Verifiche Node per selezione digest, guardia di lancio e rifiuto modalità daemon diversa; doc/ADR aggiornati. Lo smoke reale CI **non sostituisce** il collaudo su VM rootless (#2).

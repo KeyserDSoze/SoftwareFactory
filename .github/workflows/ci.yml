@@ -37,6 +37,10 @@ jobs:
         run: |
           docker pull node:22-bookworm-slim
           timeout 240s node src/runner/scripts/docker-smoke.mjs
+      - name: Execute actual canary Docker lifecycle (rootful CI host ONLY, not rootless VM)
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+        run: timeout 90s node src/runner/scripts/rootless-canary-ci-smoke.mjs
       - name: Check runner Docker Compose configuration
         run: docker compose --env-file docker/runner/.env.example -f docker/runner/compose.yml config --quiet
       - name: Preflight resolved runner Compose topology (no VM or tunnel)
