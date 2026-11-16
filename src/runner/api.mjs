@@ -162,6 +162,10 @@ export function createRunnerServer({
           if (verified.report.tenantId !== latest.id) {
             send(404, { error: "not_found" }); return;
           }
+        } else if (verified.report.tenantId !== undefined) {
+          // A deployment accidentally switched back to the legacy key must
+          // not silently make all tenant-owned reports visible globally.
+          send(404, { error: "not_found" }); return;
         }
         send(200, req.url.endsWith("/evidence")
           ? portableEvidenceBundle(verified)

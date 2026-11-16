@@ -329,6 +329,9 @@ export async function beginRepairSession(
     }
     if (entries.length === MAX_SESSIONS) throw issue("REPAIR_CAPACITY");
     const rootEvidence = await verifyJobEvidence(dataDir, input.failedJobId);
+    // Legacy global operator approvals have no tenant-scoped consent policy.
+    // Even after an accidental mode rollback, tenant jobs cannot enter repair.
+    if (rootEvidence.report.tenantId !== undefined) throw issue("REPAIR_EVIDENCE");
     if (!legitimateFailure(rootEvidence.report)) throw issue("REPAIR_NOT_FAILED");
     const report = rootEvidence.report;
     const id = randomUUID();
@@ -381,7 +384,8 @@ export async function advanceRepairSession(dataDir, id, input, actorId, reauthor
         throw error;
       }
       const target = current.attempts.at(-1);
-      if (test.id !== input.jobId || test.digest !== target.digest ||
+      if (test.tenantId !== undefined ||
+          test.id !== input.jobId || test.digest !== target.digest ||
           test.id === current.rootJobId ||
           test.steps?.some(step => !ALLOWED_STEPS.includes(step)))
         throw issue("REPAIR_EVIDENCE");
@@ -401,7 +405,8 @@ export async function advanceRepairSession(dataDir, id, input, actorId, reauthor
       let result;
       try { result = (await verifyJobEvidence(dataDir, last.retestJobId)).report; }
       catch { throw issue("REPAIR_EVIDENCE"); }
-      if (!legitimatePass(result, last.digest, current.requiredSteps))
+      if (result.tenantId !== undefined ||
+          !legitimatePass(result, last.digest, current.requiredSteps))
         throw issue("REPAIR_EVIDENCE");
       kind = "record_approval"; data = { sessionId: id };
     } else throw issue("REPAIR_INVALID");

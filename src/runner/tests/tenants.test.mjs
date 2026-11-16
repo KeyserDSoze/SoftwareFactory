@@ -144,6 +144,24 @@ test("tenant clients cannot read foreign reports or evidence and idempotency is 
     assert.equal((await verifyJobEvidence(f.dataDir, b.body.id)).report.tenantId, "bravo");
     assert.equal((await f.request(0, "not-valid-key", "/v1/jobs/" + a.body.id)).status, 401);
     assert.equal((await f.request(0, alphaKey, "/v1/repair-sessions")).status, 404);
+    // If an operator accidentally reverts to the legacy global credential,
+    // tenant reports remain inaccessible, not implicitly public to that key.
+    const globalKey = "legacy-global-key-abcdefghijklmnopqrstuvwxyz123456";
+    const legacy = createRunnerServer({ apiKey: globalKey, apiKeyFile: "",
+      tenantsFile: "", dataDir: f.dataDir, allowedOrigins: [origin] });
+    legacy.listen(0, "127.0.0.1"); await once(legacy, "listening");
+    try {
+      for (const id of [a.body.id, b.body.id]) {
+        for (const suffix of ["", "/evidence"]) {
+          const response = await fetch("http://127.0.0.1:" + legacy.address().port +
+            "/v1/jobs/" + id + suffix, { headers: {
+              Origin: origin, Authorization: "Bearer " + globalKey,
+            } });
+          assert.equal(response.status, 404,
+            "legacy key must not gain access to tenant evidence after mode rollback");
+        }
+      }
+    } finally { await new Promise(resolve => legacy.close(resolve)); }
   } finally { await f.close(); }
 });
 
