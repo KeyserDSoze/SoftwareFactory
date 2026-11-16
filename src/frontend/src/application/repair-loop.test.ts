@@ -131,12 +131,13 @@ describe("supervised repair/retest policy", () => {
     expect(staged.development!.pending?.repairCount).toBeUndefined();
     expect(staged.development!.lastRunnerEvidence?.id).toBe(id1);
   });
-  it("accepts only a queued UUID-v4 receipt with the exact submitted SHA-256", () => {
+  it("accepts a verified job ID/digest for queued or replayed terminal receipts without claiming test success", () => {
     const valid = { id: id1, digest, state: "queued" as const };
-    expect(() => verifyRepairRetestReceipt(valid, digest)).not.toThrow();
+    for (const state of ["queued", "running", "passed", "failed", "incomplete"] as const)
+      expect(() => verifyRepairRetestReceipt({ ...valid, state }, digest)).not.toThrow();
     expect(() => verifyRepairRetestReceipt({ ...valid, digest: "c".repeat(64) }, digest))
       .toThrow(/Ricevuta/);
-    expect(() => verifyRepairRetestReceipt({ ...valid, state: "passed" as "queued" }, digest))
+    expect(() => verifyRepairRetestReceipt({ ...valid, state: "successful" as "queued" }, digest))
       .toThrow(/Ricevuta/);
     expect(() => verifyRepairRetestReceipt({ ...valid, id: "bad" }, digest))
       .toThrow(/Ricevuta/);

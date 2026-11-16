@@ -294,3 +294,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - In modalità registry file i checkpoint repair ricontrollano Bearer, `actorId` e scope **dentro il lock di admission**, dopo eventuali attese: vecchie chiavi non possono iniziare la mutazione quando già revocate, senza scrivere snapshot o hash-chain.
 - HTTP 401 per key revocata, 403 per scope/identità modificati, 503 per file inaccessibile. Test per begin e advance con guard sotto lock, cambio registry atomico su due API, job capability invariato.
 - Limiti: non è commit/revoca transazionale con registry file, non annulla richieste dopo il secondo gate; non sostituisce IAM federato, firma umana o fencing cross-host. #2 resta aperta.
+
+
+## v0.2 — Admission integra e retry semantici (#34)
+
+- Prima di contare quota o rispondere a replay, il runner verifica SHA-256 journal/report **di tutti i job UUID conservati**: alterazioni su qualsiasi job causano 503 `admission_integrity`, non liberano falsamente slot e non mascherano corruzione dei sibling.
+- Retry breve in caso di transizione journal→report in corso; non recuperare o cancellare automaticamente evidenze. Test con due API e journal/report falsificati/troncati, più verifica della quota.
+- Receipt idempotente con ID/digest immutati ma stato del job verificato corrente; browser accetta enum valido ma richiede comunque GET e controlli build/test prima di qualsiasi approvazione.
+- Rimangono #2: trust anchor off-host, storage transazionale vero, fencing multi-host, limiti tenant e collaudo VM rootless/Cloudflare reali.

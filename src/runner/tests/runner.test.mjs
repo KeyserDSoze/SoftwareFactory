@@ -170,7 +170,10 @@ test("two API instances serialize quota admission and replay the same idempotent
     assert.equal(completed.state, "passed");
     const replayFinished = await send(1, retryKey);
     assert.equal(replayFinished.status, 202);
-    assert.equal((await replayFinished.json()).id, id, "completed job still reuses its receipt");
+    const finishedReceipt = await replayFinished.json();
+    assert.equal(finishedReceipt.id, id, "completed job still reuses its receipt");
+    assert.equal(finishedReceipt.state, "passed",
+      "replay reports the verified current state, never a fabricated queue state");
 
     const newKey = randomUUID();
     const next = await send(0, newKey);
@@ -255,6 +258,83 @@ test("stale admission lock and corrupt persisted job fail closed without disk qu
   } finally {
     await new Promise(resolve => s.close(resolve));
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("admission verifies every retained sibling before quotas and idempotent retries", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-admission-evidence-"));
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "sf-admission-evidence-work-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir, maxQueued: 1, maxRetained: 4,
+  }));
+  try {
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const submit = (index, token) => fetch(urls[index] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(job()),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json", "Idempotency-Key": token },
+    });
+    const originalKey = randomUUID();
+    const accepted = await submit(0, originalKey);
+    assert.equal(accepted.status, 202);
+    const id = (await accepted.json()).id;
+    const reportPath = path.join(jobDirectory(dataDir, id), "report.json");
+    const journalPath = path.join(jobDirectory(dataDir, id), "evidence.jsonl");
+    const originalReport = await readFile(reportPath, "utf8");
+    const originalJournal = await readFile(journalPath, "utf8");
+
+    // A forged terminal state would previously evade maxQueued=1 because only
+    // report.json was scanned. The hash-chain must reject it instead.
+    await writeFile(reportPath, originalReport.replace('"state": "queued"', '"state": "passed"'));
+    const forged = await submit(1, randomUUID());
+    assert.equal(forged.status, 503);
+    assert.equal((await forged.json()).error, "admission_integrity");
+    assert.equal((await submit(0, originalKey)).status, 503);
+    await writeFile(reportPath, originalReport);
+
+    // Existing report with a truncated journal cannot be ignored even when
+    // the new request has a distinct idempotency key.
+    await writeFile(journalPath, originalJournal.slice(0, -1));
+    const truncated = await submit(0, randomUUID());
+    assert.equal(truncated.status, 503);
+    assert.equal((await truncated.json()).error, "admission_integrity");
+    await writeFile(journalPath, originalJournal);
+    assert.equal((await submit(1, randomUUID())).status, 429,
+      "after restoration the real queued state still consumes the quota");
+
+    const completed = await executeJob(id, {
+      dataDir, workspaceRoot,
+      executeStep: async plan => ({
+        step: "dotnet-build", state: "passed", exitCode: 0,
+        durationMs: 1, image: plan.image, stdout: "", stderr: "",
+      }),
+    });
+    assert.equal(completed.state, "passed");
+    const replay = await submit(1, originalKey);
+    assert.equal(replay.status, 202);
+    assert.deepEqual(await replay.json(), { id, digest: completed.digest, state: "passed" });
+
+    // Even replaying a VALID completed job cannot hide a corrupt sibling.
+    const second = await submit(0, randomUUID());
+    assert.equal(second.status, 202);
+    const otherId = (await second.json()).id;
+    const otherJournal = path.join(jobDirectory(dataDir, otherId), "evidence.jsonl");
+    const saved = await readFile(otherJournal, "utf8");
+    await writeFile(otherJournal, saved.slice(0, -1));
+    const invalidSibling = await submit(1, originalKey);
+    assert.equal(invalidSibling.status, 503);
+    assert.equal((await invalidSibling.json()).error, "admission_integrity");
+    await writeFile(otherJournal, saved);
+    const safeReplay = await submit(0, originalKey);
+    assert.equal(safeReplay.status, 202);
+    assert.equal((await safeReplay.json()).state, "passed");
+    assert.equal((await readdir(path.join(dataDir, "jobs"))).filter(x => !x.startsWith(".")).length,
+      2, "no extra job admitted during corrupt evidence");
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+    await rm(workspaceRoot, { recursive: true, force: true });
   }
 });
 

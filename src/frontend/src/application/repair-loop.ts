@@ -51,11 +51,15 @@ export function planRepairRetest(project: FactoryProject, selected: RunnerStep[]
   };
 }
 
-/** A rejected or ambiguous response is NOT a verified test receipt. */
+/** A rejected or ambiguous response is NOT a verified test receipt. The
+ * state field is a hint for a retried job, never proof of successful tests.
+ * Only a separately fetched report can satisfy approval gates.
+ */
 export function verifyRepairRetestReceipt(
   receipt: RunnerJobReceipt, digest: string,
 ): void {
   if (!receipt || !UUID.test(receipt.id) || !HASH.test(digest) ||
-      receipt.digest !== digest || receipt.state !== "queued")
+      receipt.digest !== digest ||
+      !["queued", "running", "passed", "failed", "incomplete"].includes(receipt.state))
     throw new Error("Ricevuta re-test diversa dallo snapshot: esito non verificabile.");
 }

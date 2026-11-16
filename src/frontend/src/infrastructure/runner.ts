@@ -22,7 +22,9 @@ export type RunnerReport = {
   steps: RunnerStep[]; results: RunnerStepResult[];
   preparation?: RunnerStepResult | null;
 };
-export type RunnerJobReceipt = { id: string; digest: string; state: "queued" };
+// A retry may return the existing job's current verified state. A receipt
+// alone never certifies that any build/test succeeded: fetch the full report.
+export type RunnerJobReceipt = { id: string; digest: string; state: RunnerReport["state"] };
 export type RunnerVerification = {
   kind: "awaiting" | "passed" | "failed" | "incomplete" | "stale" | "invalid";
   detail: string;

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, writeFile, rm } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
-import { atomicWrite, jobDirectory, jobId, readReport } from "./common.mjs";
+import { atomicWrite, jobDirectory, jobId } from "./common.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -17,6 +17,22 @@ export function parseIdempotencyKey(header) {
   if (typeof header !== "string" || !UUID.test(header)) throw issue("INVALID_IDEMPOTENCY_KEY");
   // Only a one-way fingerprint of this non-secret UUID is ever persisted.
   return createHash("sha256").update(header.toLowerCase()).digest("hex");
+}
+
+/** A worker can be between fsync(journal) and atomic rename(report) while
+ * holding its own .claim, not the API admission lock. Bounded retries tolerate
+ * that short transition; persistent integrity failures never free capacity.
+ */
+async function verifiedAdmissionReport(dataDir, id) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return (await verifyJobEvidence(dataDir, id)).report; }
+    catch (error) {
+      if (error.code !== "EVIDENCE_INVALID" || attempt === 2)
+        throw issue("ADMISSION_INTEGRITY");
+      await sleep(25);
+    }
+  }
+  throw issue("ADMISSION_INTEGRITY");
 }
 
 export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {
@@ -54,12 +70,9 @@ export async function admitRunnerJob({
     const ids = entries.filter(entry => JOB_ID.test(entry.name)).map(entry => entry.name);
     let active = 0, matching = null;
     for (const id of ids) {
-      let report;
-      try { report = await readReport(dataDir, id); }
-      catch {
-        // No capacity can be freed by removing or corrupting a report.
-        throw issue("ADMISSION_INTEGRITY");
-      }
+      // Every retained sibling is verified, even if a matching retry key was
+      // already found. A forged terminal state must never free quota.
+      const report = await verifiedAdmissionReport(dataDir, id);
       if (report.id !== id || !["queued", "running", "passed", "failed", "incomplete"].includes(report.state))
         throw issue("ADMISSION_INTEGRITY");
       if (fingerprint && report.idempotencyKeyHash === fingerprint) {
@@ -71,9 +84,9 @@ export async function admitRunnerJob({
     // Retries are returned *before* capacity checks, even if the queue is full.
     if (matching) {
       if (matching.digest !== checked.digest) throw issue("IDEMPOTENCY_CONFLICT");
-      try { await verifyJobEvidence(dataDir, matching.id); }
-      catch { throw issue("ADMISSION_INTEGRITY"); }
-      return { id: matching.id, digest: matching.digest, state: "queued" };
+      // Verified in the complete scan above: a replay returns the CURRENT
+      // state, not a fictitious new queued job. This is not test attestation.
+      return { id: matching.id, digest: matching.digest, state: matching.state };
     }
     if (ids.length >= maxRetained || active >= maxQueued) throw issue("QUEUE_FULL");
     const id = jobId(), dir = jobDirectory(dataDir, id);
