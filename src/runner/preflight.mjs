@@ -205,14 +205,36 @@ export function validateHostEnvironment(env) {
   if (env.RUNNER_DOCKER_SOCKET !== "/run/user/1000/docker.sock")
     fail("Expected the dedicated uid 1000 rootless Docker socket");
   for (const key of ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR"]) {
-    const value = env[key];
-    if (typeof value !== "string" || !path.isAbsolute(value) || value.includes("\0") ||
-        value === "/" || value === "/tmp")
+    if (!safeHostMountSource(env[key]))
       fail("Invalid runner host directory configuration");
   }
-  if (path.resolve(env.RUNNER_DATA_DIR) === path.resolve(env.RUNNER_HOST_WORK_DIR))
+  // A nested data directory can be modified through the workspace bind mount.
+  // The host preflight must enforce the SAME disjoint policy as Compose.
+  if (overlaps(env.RUNNER_DATA_DIR, env.RUNNER_HOST_WORK_DIR))
     fail("Runner data and workspace must be separate");
   return true;
+}
+
+/** Check every pathname component with lstat, not only the final directory.
+ * A symlink at /srv/runner-parent is otherwise followed silently even when
+ * the final /srv/runner-parent/data entry is a private regular directory.
+ * This is a point-in-time check, not atomic filesystem fencing.
+ */
+export async function inspectHostPath(target, stat = lstat) {
+  if (!canonicalAbsolutePath(target) || target === "/")
+    fail("Runner host path must be canonical");
+  const parts = target.slice(1).split("/");
+  let cursor = "/";
+  let result;
+  for (let i = 0; i < parts.length; i++) {
+    cursor = path.join(cursor, parts[i]);
+    try { result = await stat(cursor); }
+    catch { fail("Runner host path component unavailable"); }
+    if (!result || result.isSymbolicLink?.() !== false ||
+        (i < parts.length - 1 && result.isDirectory?.() !== true))
+      fail("Runner host path contains a symlink or invalid directory component");
+  }
+  return result;
 }
 
 /** Live VM check (not run as a rootless substitute on hosted CI). */
@@ -229,17 +251,14 @@ export async function inspectHost({
   validateHostEnvironment(env);
   if (uid !== 1000) fail("Run VM preflight as the dedicated uid 1000 account");
   for (const key of ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR"]) {
-    let info;
-    try { info = await stat(env[key]); } catch { fail("Runner host directory missing"); }
-    if (!info.isDirectory() || info.isSymbolicLink() ||
-        info.uid !== 1000 || (info.mode & 0o077) !== 0)
+    const info = await inspectHostPath(env[key], stat);
+    if (!info.isDirectory() || info.uid !== 1000 ||
+        (info.mode & 0o077) !== 0)
       fail("Runner host directory has unsafe owner or permissions (require uid 1000 and mode 0700)");
   }
-  let socket;
-  try { socket = await stat(env.RUNNER_DOCKER_SOCKET); }
-  catch { fail("Rootless Docker socket unavailable"); }
-  if (!socket.isSocket() || socket.isSymbolicLink() ||
-      socket.uid !== 1000 || (socket.mode & 0o007) !== 0)
+  const socket = await inspectHostPath(env.RUNNER_DOCKER_SOCKET, stat);
+  if (!socket.isSocket() || socket.uid !== 1000 ||
+      (socket.mode & 0o007) !== 0)
     fail("Docker socket is not a private Unix socket owned by uid 1000");
   let securityOptions;
   try {

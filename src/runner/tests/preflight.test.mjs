@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  inspectComposeConfig, inspectHost, probeEndpoint, readPrivateEnv, validateHostEnvironment, main,
+  inspectComposeConfig, inspectHost, inspectHostPath, probeEndpoint,
+  readPrivateEnv, validateHostEnvironment, main,
   isPrivateEnvFile, isStablePrivateEnvSnapshot,
 } from "../preflight.mjs";
 
@@ -383,6 +384,85 @@ test("rootless host preflight checks socket, private directories and daemon Secu
   await assert.rejects(inspectHost({ env: apiEnv, stat: async p => ({
     ...await stat(p), isSymbolicLink: () => true,
   }), uid: 1000, runDocker }), /unsafe/);
+});
+
+test("VM host env enforces canonical system-safe and segment-disjoint directories", () => {
+  const invalid = [
+    ["/srv/softwarefactory/workspaces/cache", "/srv/softwarefactory/workspaces"],
+    ["/srv/softwarefactory/workspaces", "/srv/softwarefactory/workspaces/cache"],
+    ["/srv/softwarefactory/runner-data", "/srv/softwarefactory/runner-data"],
+    ["/srv/softwarefactory/../etc", "/srv/softwarefactory/workspaces"],
+    ["/etc/runner-data", "/srv/softwarefactory/workspaces"],
+    ["/var/run/workspaces", "/srv/softwarefactory/runner-data"],
+    ["/tmp/runner-data", "/srv/softwarefactory/workspaces"],
+    ["/srv/softwarefactory/runner-data/", "/srv/softwarefactory/workspaces"],
+    ["/srv/softwarefactory/runner-data", "/root/private-workspaces"],
+  ];
+  for (const [data, work] of invalid) {
+    assert.throws(() => validateHostEnvironment({
+      ...apiEnv, RUNNER_DATA_DIR: data, RUNNER_HOST_WORK_DIR: work,
+    }), /Invalid runner host directory|must be separate/);
+  }
+  for (const [data, work] of [
+    ["/srv/softwarefactory/data", "/srv/softwarefactory/database"],
+    ["/var/lib/softwarefactory/data", "/srv/softwarefactory/workspaces"],
+  ]) {
+    assert.equal(validateHostEnvironment({
+      ...apiEnv, RUNNER_DATA_DIR: data, RUNNER_HOST_WORK_DIR: work,
+    }), true, "similar prefixes are not ancestor relationships");
+  }
+});
+
+test("host preflight rejects unsafe directory topology before probing Docker", async () => {
+  const called = [];
+  const stat = async pathname => {
+    const socket = pathname === apiEnv.RUNNER_DOCKER_SOCKET;
+    called.push(pathname);
+    return { uid: 1000, mode: socket ? 0o140600 : 0o040700,
+      isDirectory: () => !socket, isSocket: () => socket,
+      isSymbolicLink: () => false };
+  };
+  let dockerCalls = 0;
+  const runDocker = async () => { dockerCalls++; return '["name=rootless"]'; };
+  for (const env of [
+    { ...apiEnv, RUNNER_DATA_DIR: apiEnv.RUNNER_HOST_WORK_DIR + "/evidence" },
+    { ...apiEnv, RUNNER_HOST_WORK_DIR: apiEnv.RUNNER_DATA_DIR + "/build" },
+    { ...apiEnv, RUNNER_DATA_DIR: "/etc/runner-secret" },
+  ]) {
+    await assert.rejects(inspectHost({ env, stat, uid: 1000, runDocker }),
+      /Invalid runner host directory|must be separate/);
+    assert.equal(dockerCalls, 0);
+  }
+  for (const symlinkComponent of [
+    "/srv/softwarefactory", "/run/user/1000",
+  ]) {
+    const suspicious = async pathname => ({
+      ...await stat(pathname),
+      isSymbolicLink: () => pathname === symlinkComponent,
+    });
+    await assert.rejects(inspectHost({
+      env: apiEnv, stat: suspicious, uid: 1000, runDocker,
+    }), /symlink/);
+    assert.equal(dockerCalls, 0);
+  }
+  assert.ok(called.includes("/srv/softwarefactory"),
+    "each intermediate directory is inspected, not just the leaf");
+});
+
+test("host path inspection rejects real intermediate symlinks and malformed paths", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-preflight-path-"));
+  try {
+    await mkdir(path.join(dir, "real", "private"), { recursive: true, mode: 0o700 });
+    await symlink(path.join(dir, "real"), path.join(dir, "alias"));
+    const safe = await inspectHostPath(path.join(dir, "real", "private"));
+    assert.equal(safe.isDirectory(), true);
+    await assert.rejects(inspectHostPath(path.join(dir, "alias", "private")),
+      /symlink/);
+    await assert.rejects(inspectHostPath(path.join(dir, "real", "..", "real")),
+      /canonical/);
+    await assert.rejects(inspectHostPath(path.join(dir, "missing", "private")),
+      /unavailable/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test("HTTPS endpoint probe sends no writes, never follows redirects and verifies auth plus CORS", async () => {
