@@ -332,7 +332,11 @@ export async function beginRepairSession(
     // Legacy global operator approvals have no tenant-scoped consent policy.
     // Even after an accidental mode rollback, tenant jobs cannot enter repair.
     if (rootEvidence.report.tenantId !== undefined) throw issue("REPAIR_EVIDENCE");
-    if (!legitimateFailure(rootEvidence.report)) throw issue("REPAIR_NOT_FAILED");
+    // Older workers could record a crash-recovered job as "failed" even
+    // though the final code-test verdict was never committed. Recovered is
+    // an interrupted execution, NOT repairable, including legacy reports.
+    if (rootEvidence.entries.at(-1)?.kind === "recovered" ||
+        !legitimateFailure(rootEvidence.report)) throw issue("REPAIR_NOT_FAILED");
     const report = rootEvidence.report;
     const id = randomUUID();
     // One instant for the persisted session and its first hashed event.

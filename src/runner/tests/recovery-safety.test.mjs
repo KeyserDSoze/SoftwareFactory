@@ -132,7 +132,13 @@ test("retention preserves ALL recovered journals (including historical failed), 
     // readable; it must not disappear just because an upgraded worker polls.
     const historic = await createFixture(dataDir, {
       terminalKind: "recovered", terminalState: "failed", finished: ago(),
+      stepResult: failedStep,
     });
+    await assert.rejects(beginRepairSession(dataDir, {
+      failedJobId: historic.id, proposalId: randomUUID(),
+      paths: ["src/backend/domain/Record.cs"], consent: true,
+    }, "editor"), { code: "REPAIR_NOT_FAILED" },
+    "old recovered=failed journals must not be accepted as true code failures");
     const expired = await createFixture(dataDir, {
       terminalKind: "finished", terminalState: "passed", finished: ago(),
       stepResult: passedStep,

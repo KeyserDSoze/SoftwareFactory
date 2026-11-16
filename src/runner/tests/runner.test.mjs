@@ -800,8 +800,8 @@ test("orphan claim blocks execution, does not starve queue, and never becomes pa
     await runWorker({ dataDir, workspaceRoot: work, pollMs: 1,
       stop: (() => { let n = 0; return () => n++ > 0; })(),
       executeQueuedJob: async () => {} });
-    assert.equal((await readReport(dataDir, orphan)).state, "failed",
-      "manual removal of orphan claim allows failure recovery, never automatic retry");
+    assert.equal((await readReport(dataDir, orphan)).state, "incomplete",
+      "manual removal of orphan claim allows incomplete recovery, never automatic retry");
     // A real completed journal must not be overwritten by an out-of-date recovery.
     const raceId = "00000000-0000-4000-a000-000000000021";
     const raceDir = jobDirectory(dataDir, raceId);
