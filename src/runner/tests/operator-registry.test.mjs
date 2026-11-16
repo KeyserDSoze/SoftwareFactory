@@ -351,7 +351,7 @@ test("operator registry rejects same-length valid in-place rewrite while reading
   const dir = await mkdtemp(path.join(tmpdir(), "sf-operator-inplace-"));
   const file = path.join(dir, "operators.json");
   const old = render(entries());
-  const updated = old.replace('"editor"', '"auditor"');
+  const updated = old.replace('"editor"', '"author"');
   assert.equal(updated.length, old.length);
   try {
     await writeFile(file, old, { mode: 0o600 });
@@ -377,7 +377,7 @@ test("operator registry rejects same-length valid in-place rewrite while reading
     await assert.rejects(loadRepairOperatorsFile(file, runnerKey, { openFile }),
       { code: "REPAIR_AUTH_UNAVAILABLE" });
     assert.equal(mutated, true);
-    assert.equal((await loadRepairOperatorsFile(file, runnerKey))[0].id, "auditor");
+    assert.equal((await loadRepairOperatorsFile(file, runnerKey))[0].id, "author");
 
     // Atomic rename swaps a whole credential file on the NEXT request.
     await saveAtomic(file, old);
