@@ -584,3 +584,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `preflight compose` ammette le modalità global-inline, `--runner-key-file` e `--tenants` esclusive. `--operator-registry` può essere combinato con inline o key-file, MAI con tenant. Il preflight usa i file Compose revisionati, non override arbitrari.
 - Credenziali API in directory bind read-only soltanto `runner-api`, con percorsi esatti (`runner-key`, `tenants.json`, `operators.json`), host path canonici disgiunti sia dal data/work del worker sia tra segreti. L'API deve rifiutare env non coerenti col profilo e mount assenti/addizionali. Non esporre path o chiavi nei log. `preflight host` resta un controllo distinto del filesystem/daemon, non un attestato VM (#2).
+
+## Host e endpoint preflight per credenziali dedicate (#74)
+
+- `preflight host` accetta `--runner-key-file` o `--tenants` (esclusivi) e `--operator-registry` solo con chiave globale; niente chiave inline fittizia o fallback fra profili. I directory source del file key/tenant/operators devono essere canonici, UID 1000 e 0700, disgiunti da data/work e fra loro, ogni segmento senza symlink. I file sono owner-only, nlink=1, regolari, con FD O_NOFOLLOW e rilettura bounded/stabile.
+- Il `preflight endpoint` per profili non-inline legge soltanto `RUNNER_PROBE_BEARER` da `--env-file` privato 0600 dell'operatore: non deve accedere ai registry tenant, copiare segreti in output o accettare token da HTTP/browser. Il controllo endpoint prova HTTPS/auth/CORS non la VM rootless o la validità off-host del tenant (#2).

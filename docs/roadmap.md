@@ -574,3 +574,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Supportare `--runner-key-file` e `--tenants` mutuamente esclusivi, e operator registry solo in modalità global-inline/file. Selezione esatta degli override approvati, senza bypass del check dell'intero Compose.
 - Mount API di `runner-key`, `tenants.json` e `operators.json` read-only, path host canonici disgiunti da dati/workspace e tra di loro, ambiente e target file coerenti, nessuna credenziale sul worker. Suite Node negativa e positiva + Compose v2 reali in CI. ADR 0030.
 - Non sostituisce verifica UID/mode di file e directory host, runtime Docker rootless VM, Cloudflare Access o attestazione off-host: #2 resta aperta.
+
+## v0.2 — Host preflight autenticazione file/tenant e endpoint probe dedicato (#74)
+
+- Supporto ai flag espliciti host/endpoint `--runner-key-file` e `--tenants`, no fallback alla key inline. Validazione directory private host UID 1000, mode 0700, parent no-symlink, non-overlap e lettura sicura di key/tenant/operator file con FD O_NOFOLLOW, metadati stabili e rotazione tramite rename.
+- Per endpoint remoto usare soltanto `RUNNER_PROBE_BEARER` off-host in env 0600 del singolo operatore: nessuna lettura o esposizione del tenant registry completo. Suite test reali/simulati + ADR 0031. I controlli non attestano Cloudflare o VM rootless reale; #2 resta aperta.

@@ -15,7 +15,7 @@ export function isPrivateRunnerTenantsFile(stat, effectiveUid = process.geteuid?
     Number.isSafeInteger(stat.size) && stat.size >= 32 && stat.size <= MAX_BYTES;
 }
 
-function validateRegistry(raw) {
+export function validateRunnerTenantRegistry(raw) {
   if (!raw || Array.isArray(raw) || typeof raw !== "object" ||
       Object.keys(raw).sort().join(",") !== "tenants,version" ||
       raw.version !== 1 || !Array.isArray(raw.tenants) ||
@@ -71,7 +71,7 @@ export async function loadRunnerTenantsFile(filename) {
         before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
         before.ctimeMs !== after.ctimeMs)
       throw unavailable();
-    return validateRegistry(JSON.parse(Buffer.concat(chunks, total).toString("utf8")));
+    return validateRunnerTenantRegistry(JSON.parse(Buffer.concat(chunks, total).toString("utf8")));
   } catch { throw unavailable(); }
   finally { await fd?.close().catch(() => {}); }
 }

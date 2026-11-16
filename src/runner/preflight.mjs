@@ -6,6 +6,8 @@ import { constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { rootlessSecurityOptions } from "./orphans.mjs";
+import { validateRunnerTenantRegistry } from "./tenants.mjs";
+import { configureRepairOperators } from "./operator-auth.mjs";
 
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -334,23 +336,55 @@ export function inspectComposeConfig(config) {
 }
 
 const originPattern = /^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i;
-export function validateHostEnvironment(env) {
-  if (!env || typeof env.RUNNER_API_KEY !== "string" ||
-      env.RUNNER_API_KEY.length < 32 || env.RUNNER_API_KEY.startsWith("REPLACE_"))
-    fail("Runner API key is missing or placeholder");
+// Select credentials explicitly; never derive a fallback from which secrets
+// happen to be readable. Host env describes source DIRS, not container paths.
+const hostCredentialDirectories = (mode, operatorRegistry) => [
+  ...(mode === "key-file" ? [["RUNNER_API_KEY_DIR", "runner-key", "key"]] : []),
+  ...(mode === "tenants" ? [["RUNNER_TENANTS_DIR", "tenants.json", "tenants"]] : []),
+  ...(operatorRegistry ? [["RUNNER_REPAIR_OPERATORS_DIR", "operators.json", "operators"]] : []),
+];
+export function validateHostEnvironment(env, {
+  authMode = "inline", operatorRegistry = false,
+} = {}) {
+  if (!env || !["inline", "key-file", "tenants"].includes(authMode) ||
+      typeof operatorRegistry !== "boolean" ||
+      (authMode === "tenants" && operatorRegistry))
+    fail("Runner host credential profile is invalid");
+  const key = env.RUNNER_API_KEY;
+  if (authMode === "inline") {
+    if (typeof key !== "string" || key.length < 32 || key.length > 256 ||
+        key.startsWith("REPLACE_") || !/^[\x21-\x7e]+$/.test(key))
+      fail("Runner API key is missing or placeholder");
+  } else if (key !== "") {
+    fail("Runner host credential profile requires an empty inline key");
+  }
+  // The runtime container paths are supplied ONLY by reviewed Compose
+  // overrides, never accepted from the private host env as alternate files.
+  if (env.RUNNER_API_KEY_FILE || env.RUNNER_TENANTS_FILE ||
+      env.RUNNER_REPAIR_OPERATORS_FILE)
+    fail("Runner host credentials must use approved Compose file paths");
+  if (authMode === "tenants" &&
+      (env.RUNNER_REPAIR_OPERATORS_JSON || env.RUNNER_REPAIR_OPERATORS_FILE))
+    fail("Tenant runner cannot enable repair operators");
+  if (operatorRegistry && env.RUNNER_REPAIR_OPERATORS_JSON)
+    fail("Operator file registry cannot be combined with inline operators");
+  if (authMode === "key-file" && env.RUNNER_REPAIR_OPERATORS_JSON)
+    fail("File-key profile cannot use inline repair operators");
   if (!env.RUNNER_ALLOWED_ORIGINS ||
       env.RUNNER_ALLOWED_ORIGINS.split(",").some(v => !originPattern.test(v.trim())))
     fail("Explicit trusted runner origins are required");
   if (env.RUNNER_DOCKER_SOCKET !== "/run/user/1000/docker.sock")
     fail("Expected the dedicated uid 1000 rootless Docker socket");
-  for (const key of ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR"]) {
+  const directories = ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR",
+    ...hostCredentialDirectories(authMode, operatorRegistry).map(([name]) => name)];
+  for (const key of directories) {
     if (!safeHostMountSource(env[key]))
       fail("Invalid runner host directory configuration");
   }
-  // A nested data directory can be modified through the workspace bind mount.
-  // The host preflight must enforce the SAME disjoint policy as Compose.
-  if (overlaps(env.RUNNER_DATA_DIR, env.RUNNER_HOST_WORK_DIR))
-    fail("Runner data and workspace must be separate");
+  for (let i = 0; i < directories.length; i++)
+    for (let j = i + 1; j < directories.length; j++)
+      if (overlaps(env[directories[i]], env[directories[j]]))
+        fail("Runner data, workspace and private credentials must be separate");
   return true;
 }
 
@@ -376,9 +410,64 @@ export async function inspectHostPath(target, stat = lstat) {
   return result;
 }
 
+/** Host-only private file check. A fresh O_NOFOLLOW descriptor pins each
+ * snapshot; never echo the file, its path or any key on failure. The host VM
+ * still requires UID 1000; uid/openFile/stat are internal Node test seams.
+ */
+export async function readHostCredential(filename, kind, {
+  uid = process.geteuid?.(), stat = lstat, openFile = open,
+} = {}) {
+  const limits = { key: [32, 257], tenants: [32, 16384], operators: [1, 10000] };
+  const bound = limits[kind];
+  const validStat = s => s?.isFile?.() === true && s.uid === uid &&
+    s.nlink === 1 && (s.mode & 0o077) === 0 &&
+    (s.mode & 0o400) !== 0 && Number.isSafeInteger(s.size) &&
+    s.size >= bound[0] && s.size <= bound[1];
+  const same = (a, b) => ["dev", "ino", "uid", "gid", "nlink", "mode",
+    "size", "mtimeMs", "ctimeMs"].every(k => a[k] === b[k]);
+  let fd;
+  try {
+    if (!bound || typeof constants.O_NOFOLLOW !== "number" ||
+        !canonicalAbsolutePath(filename)) throw Error("invalid");
+    const leaf = await inspectHostPath(filename, stat);
+    if (!validStat(leaf)) throw Error("unsafe");
+    fd = await openFile(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = await fd.stat();
+    if (!validStat(before) || !same(leaf, before)) throw Error("unsafe");
+    const buffer = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await fd.read(buffer, offset,
+        Math.min(2048, buffer.length - offset), offset);
+      if (!Number.isInteger(bytesRead) || bytesRead < 1)
+        throw Error("short read");
+      offset += bytesRead;
+    }
+    const after = await fd.stat();
+    if (!validStat(after) || !same(before, after)) throw Error("changed");
+    const value = buffer.toString("utf8");
+    if (kind === "key") {
+      if (!/^[\x21-\x7e]{32,256}\n?$/.test(value) ||
+          value.startsWith("REPLACE_")) throw Error("bad key");
+      return value.endsWith("\n") ? value.slice(0, -1) : value;
+    }
+    if (kind === "tenants") {
+      validateRunnerTenantRegistry(JSON.parse(value));
+      return true;
+    }
+    return value; // validated with configureRepairOperators against global key
+  } catch {
+    fail("Runner host private credential file unavailable or unsafe");
+  } finally { await fd?.close().catch(() => {}); }
+}
+
 /** Live VM check (not run as a rootless substitute on hosted CI). */
 export async function inspectHost({
-  env = process.env, stat = lstat, uid = process.getuid?.(), runDocker = async args => {
+  env = process.env, stat = lstat, uid = process.getuid?.(),
+  authMode = "inline", operatorRegistry = false,
+  // This injectable reader is only used by Node tests, never request/Compose input.
+  readCredential = (filename, kind) => readHostCredential(filename, kind, { stat, uid }),
+  runDocker = async args => {
     try {
       return (await execFile("docker", args, {
         timeout: 12000, maxBuffer: 200000,
@@ -387,13 +476,34 @@ export async function inspectHost({
     } catch { fail("Cannot reach rootless Docker daemon"); }
   },
 } = {}) {
-  validateHostEnvironment(env);
+  validateHostEnvironment(env, { authMode, operatorRegistry });
   if (uid !== 1000) fail("Run VM preflight as the dedicated uid 1000 account");
-  for (const key of ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR"]) {
+  const credentialDirs = hostCredentialDirectories(authMode, operatorRegistry);
+  for (const key of ["RUNNER_DATA_DIR", "RUNNER_HOST_WORK_DIR",
+                     ...credentialDirs.map(([name]) => name)]) {
     const info = await inspectHostPath(env[key], stat);
     if (!info.isDirectory() || info.uid !== 1000 ||
         (info.mode & 0o077) !== 0)
       fail("Runner host directory has unsafe owner or permissions (require uid 1000 and mode 0700)");
+  }
+  let globalKey = authMode === "inline" ? env.RUNNER_API_KEY : null;
+  for (const [variable, basename, kind] of credentialDirs) {
+    let value;
+    try { value = await readCredential(path.join(env[variable], basename), kind); }
+    catch { fail("Runner host private credential file unavailable or unsafe"); }
+    if (kind === "key") {
+      if (typeof value !== "string" || value.length < 32)
+        fail("Runner host private credential file unavailable or unsafe");
+      globalKey = value;
+    } else if (kind === "tenants" && value !== true) {
+      fail("Runner host private credential file unavailable or unsafe");
+    } else if (kind === "operators") {
+      try {
+        if (typeof value !== "string" ||
+            !configureRepairOperators(value, globalKey))
+          fail("Invalid registry");
+      } catch { fail("Runner host private credential file unavailable or unsafe"); }
+    }
   }
   const socket = await inspectHostPath(env.RUNNER_DOCKER_SOCKET, stat);
   if (!socket.isSocket() || socket.uid !== 1000 ||
@@ -409,7 +519,10 @@ export async function inspectHost({
   if (!rootlessSecurityOptions(securityOptions))
     fail("Docker daemon does not attest rootless security mode");
   return { mode: "host", status: "passed", uid: 1000,
-    directoriesPrivate: true, socketPrivate: true, dockerRootless: true };
+    directoriesPrivate: true, socketPrivate: true, dockerRootless: true,
+    ...(authMode !== "inline" || operatorRegistry ?
+      { credentialMode: authMode, credentialsPrivate: true,
+        operatorRegistryChecked: operatorRegistry } : {}) };
 }
 
 /** Read-only HTTPS/CORS/TLS/auth probe. No POST, no automatic redirect, no secret output.
@@ -565,6 +678,31 @@ export async function readPrivateEnv(filePath, { openFile = open } = {}) {
   return env;
 }
 
+// Operator-supplied endpoint probe credentials are loaded from a private env,
+// not obtained by dumping a tenant registry or copying a file into the browser.
+export function selectEndpointBearer(env, { authMode = "inline", privateEnv = false } = {}) {
+  if (!env || !["inline", "key-file", "tenants"].includes(authMode))
+    fail("Invalid runner endpoint credential profile");
+  const alternate = env.RUNNER_API_KEY_FILE || env.RUNNER_TENANTS_FILE;
+  if (alternate) fail("Endpoint probe must not select a container credential path");
+  if (authMode === "inline") {
+    if (env.RUNNER_PROBE_BEARER)
+      fail("Inline runner probe forbids alternate bearer");
+    return env.RUNNER_API_KEY; // probeEndpoint performs full validation
+  }
+  // Always require a deliberate dedicated bearer for a file/tenant probe.
+  // Access to the host's key file or tenant registry is NEVER required.
+  const bearer = env.RUNNER_PROBE_BEARER;
+  if (!privateEnv || env.RUNNER_API_KEY !== "" ||
+      typeof bearer !== "string" || bearer.length < 32 ||
+      bearer.length > 256 || bearer.startsWith("REPLACE_") ||
+      !/^[\x21-\x7e]+$/.test(bearer) ||
+      (authMode === "tenants" &&
+       !/^[a-z][a-z0-9-]{2,31}\.[a-zA-Z0-9_-]{32,128}$/.test(bearer)))
+    fail("Private runner probe bearer is missing or invalid");
+  return bearer;
+}
+
 async function executeCompose(envFile, { operatorRegistry = false,
   runnerKeyFile = false, tenants = false } = {}) {
   let json;
@@ -584,9 +722,10 @@ async function executeCompose(envFile, { operatorRegistry = false,
   return inspectComposeConfig(json);
 }
 
-/** endpointProbe/write are trusted Node test seams, not CLI/API parameters. */
+/** endpointProbe/hostProbe/write are trusted Node test seams, not CLI/API options. */
 export async function main(argv = process.argv.slice(2), {
-  endpointProbe = probeEndpoint, write = value => process.stdout.write(value),
+  endpointProbe = probeEndpoint, hostProbe = inspectHost,
+  write = value => process.stdout.write(value),
 } = {}) {
   const [mode, ...options] = argv;
   if (!["compose", "host", "endpoint"].includes(mode) ||
@@ -600,8 +739,7 @@ export async function main(argv = process.argv.slice(2), {
   }));
   if (mode !== "endpoint" && (flags.url || flags.origin) ||
       mode === "endpoint" && (!flags.url || !flags.origin) ||
-      mode !== "compose" && (flags["operator-registry"] ||
-        flags["runner-key-file"] || flags.tenants) ||
+      mode === "endpoint" && flags["operator-registry"] ||
       flags.tenants && (flags["runner-key-file"] || flags["operator-registry"]))
     fail("Invalid flags for preflight mode");
   let result;
@@ -612,13 +750,19 @@ export async function main(argv = process.argv.slice(2), {
       tenants: flags.tenants === true,
     });
   else {
-    const env = flags["env-file"] ? await readPrivateEnv(path.resolve(flags["env-file"])) : process.env;
-    result = mode === "host" ? await inspectHost({ env }) :
-      await endpointProbe({
-        baseUrl: flags.url, origin: flags.origin, apiKey: env.RUNNER_API_KEY,
-        accessClientId: env.CF_ACCESS_CLIENT_ID,
-        accessClientSecret: env.CF_ACCESS_CLIENT_SECRET,
-      });
+    const privateEnv = Boolean(flags["env-file"]);
+    const env = privateEnv ?
+      await readPrivateEnv(path.resolve(flags["env-file"])) : process.env;
+    const authMode = flags.tenants ? "tenants" :
+      flags["runner-key-file"] ? "key-file" : "inline";
+    result = mode === "host" ? await hostProbe({
+      env, authMode, operatorRegistry: flags["operator-registry"] === true,
+    }) : await endpointProbe({
+      baseUrl: flags.url, origin: flags.origin,
+      apiKey: selectEndpointBearer(env, { authMode, privateEnv }),
+      accessClientId: env.CF_ACCESS_CLIENT_ID,
+      accessClientSecret: env.CF_ACCESS_CLIENT_SECRET,
+    });
   }
   write("RUNNER_PREFLIGHT_PASS: " + JSON.stringify(result) + "\n");
   return result;

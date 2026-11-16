@@ -8,6 +8,7 @@ import {
   inspectComposeConfig, inspectHost, inspectHostPath, probeEndpoint,
   readPrivateEnv, validateHostEnvironment, main,
   isPrivateEnvFile, isStablePrivateEnvSnapshot,
+  readHostCredential, selectEndpointBearer,
 } from "../preflight.mjs";
 
 const secret = "s".repeat(48);
@@ -804,6 +805,205 @@ test("preflight endpoint CLI forwards optional service token only from a 0600 pr
     assert.doesNotMatch(records[0], new RegExp(secret));
     assert.doesNotMatch(records[0], new RegExp(clientSecret));
     assert.doesNotMatch(records[0], new RegExp(clientId));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+
+test("host profile selection is exclusive and secret paths are segment-disjoint", () => {
+  const base = { ...apiEnv, RUNNER_API_KEY: "", RUNNER_API_KEY_FILE: "",
+    RUNNER_TENANTS_FILE: "", RUNNER_API_KEY_DIR: "/srv/softwarefactory/api-key",
+    RUNNER_TENANTS_DIR: "/srv/softwarefactory/tenants",
+    RUNNER_REPAIR_OPERATORS_DIR: "/srv/softwarefactory/operators",
+    RUNNER_REPAIR_OPERATORS_JSON: "" };
+  assert.equal(validateHostEnvironment(base, { authMode: "key-file" }), true);
+  assert.equal(validateHostEnvironment(base, { authMode: "tenants" }), true);
+  assert.equal(validateHostEnvironment(base, {
+    authMode: "key-file", operatorRegistry: true }), true);
+  for (const [env, options] of [
+    [{ ...base, RUNNER_API_KEY: secret }, { authMode: "key-file" }],
+    [{ ...base, RUNNER_API_KEY: "REPLACE_ME" }, { authMode: "tenants" }],
+    [{ ...base, RUNNER_API_KEY_FILE: "/data/key" }, { authMode: "key-file" }],
+    [{ ...base, RUNNER_TENANTS_FILE: "/data/tenants" }, { authMode: "tenants" }],
+    [{ ...base, RUNNER_REPAIR_OPERATORS_FILE: "/run/secrets/runner-operators/operators.json" },
+      { authMode: "key-file", operatorRegistry: true }],
+    [{ ...base, RUNNER_REPAIR_OPERATORS_JSON: "[]" },
+      { authMode: "key-file", operatorRegistry: true }],
+    [{ ...base, RUNNER_REPAIR_OPERATORS_JSON: "[]" },
+      { authMode: "tenants" }],
+    [{ ...base, RUNNER_API_KEY_DIR: base.RUNNER_DATA_DIR + "/api-key" },
+      { authMode: "key-file" }],
+    [{ ...base, RUNNER_TENANTS_DIR: base.RUNNER_HOST_WORK_DIR },
+      { authMode: "tenants" }],
+    [{ ...base, RUNNER_REPAIR_OPERATORS_DIR: base.RUNNER_API_KEY_DIR + "/operators" },
+      { authMode: "key-file", operatorRegistry: true }],
+    [{ ...base, RUNNER_TENANTS_DIR: "/etc/tenants" }, { authMode: "tenants" }],
+    [base, { authMode: "tenants", operatorRegistry: true }],
+    [base, { authMode: "other" }],
+    [base, { authMode: "inline" }],
+  ]) assert.throws(() => validateHostEnvironment(env, options),
+    /credential|key|private|directory|separate|operators/i);
+});
+
+test("host profile verifies UID 1000 directory, private file and rootless probe", async () => {
+  const base = { ...apiEnv, RUNNER_API_KEY: "", RUNNER_API_KEY_FILE: "",
+    RUNNER_TENANTS_FILE: "", RUNNER_API_KEY_DIR: "/srv/softwarefactory/api-key",
+    RUNNER_TENANTS_DIR: "/srv/softwarefactory/tenants",
+    RUNNER_REPAIR_OPERATORS_DIR: "/srv/softwarefactory/operators",
+    RUNNER_REPAIR_OPERATORS_JSON: "" };
+  const filenames = [];
+  const stat = async name => ({ uid: 1000, mode: name.endsWith("docker.sock") ?
+    0o140600 : 0o040700, isDirectory: () => !name.endsWith("docker.sock"),
+    isSocket: () => name.endsWith("docker.sock"), isSymbolicLink: () => false });
+  const fakeDocker = async () => JSON.stringify(["name=rootless"]);
+  const readCredential = async (name, kind) => {
+    filenames.push([name, kind]);
+    return kind === "key" ? secret : kind === "tenants" ? true :
+      JSON.stringify([{ id: "alice", key: "o".repeat(48), roles: ["review"] }]);
+  };
+  const key = await inspectHost({ env: base, stat, uid: 1000,
+    authMode: "key-file", operatorRegistry: true,
+    readCredential, runDocker: fakeDocker });
+  assert.equal(key.credentialMode, "key-file");
+  assert.equal(key.credentialsPrivate, true);
+  assert.deepEqual(filenames, [
+    ["/srv/softwarefactory/api-key/runner-key", "key"],
+    ["/srv/softwarefactory/operators/operators.json", "operators"] ]);
+  filenames.length = 0;
+  const tenant = await inspectHost({ env: base, stat, uid: 1000,
+    authMode: "tenants", readCredential, runDocker: fakeDocker });
+  assert.equal(tenant.credentialMode, "tenants");
+  assert.deepEqual(filenames, [
+    ["/srv/softwarefactory/tenants/tenants.json", "tenants"] ]);
+  const failRead = async () => { throw Error("private simulated secret"); };
+  await assert.rejects(inspectHost({ env: base, stat, uid: 1000,
+    authMode: "tenants", readCredential: failRead, runDocker: fakeDocker }),
+    error => error.message === "Runner host private credential file unavailable or unsafe");
+  const symlink = async name => ({ ...await stat(name),
+    isSymbolicLink: () => name === "/srv/softwarefactory/tenants" });
+  let checkedDocker = false;
+  await assert.rejects(inspectHost({ env: base, stat: symlink, uid: 1000,
+    authMode: "tenants", readCredential, runDocker: async () => {
+      checkedDocker = true; return '["name=rootless"]'; } }), /symlink/);
+  assert.equal(checkedDocker, false);
+});
+
+
+test("host CLI forwards explicit file and operator selections without showing secrets", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-host-flags-"));
+  const file = path.join(dir, "config.env");
+  const seen = [];
+  try {
+    await writeFile(file, "RUNNER_API_KEY=\nRUNNER_API_KEY_DIR=/srv/softwarefactory/key",
+      { mode: 0o600 });
+    await main(["host", "--runner-key-file", "--operator-registry",
+      "--env-file=" + file], {
+      hostProbe: async input => {
+        assert.equal(input.authMode, "key-file");
+        assert.equal(input.operatorRegistry, true);
+        assert.equal(input.env.RUNNER_API_KEY, "");
+        return { mode: "host", status: "passed" };
+      }, write: line => seen.push(line),
+    });
+    assert.equal(seen.length, 1);
+    assert.doesNotMatch(seen[0], /RUNNER_API_KEY|softwarefactory\/key/);
+    await assert.rejects(main(["host", "--tenants", "--operator-registry",
+      "--env-file=" + file], {
+      hostProbe: async () => { assert.fail("invalid combination must not probe"); },
+    }), /Invalid flags/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("real private host credential reader pins inode, rejects links, and sees atomic rotation", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-host-auth-"));
+  const uid = process.geteuid();
+  const file = path.join(dir, "runner-key");
+  const token1 = "a".repeat(48), token2 = "b".repeat(48);
+  const tenants = path.join(dir, "tenants.json");
+  try {
+    await writeFile(file, token1 + "\n", { mode: 0o600 });
+    assert.equal(await readHostCredential(file, "key", { uid }), token1);
+    await writeFile(path.join(dir, "runner-key.new"), token2, { mode: 0o600 });
+    const { rename } = await import("node:fs/promises");
+    await rename(path.join(dir, "runner-key.new"), file);
+    assert.equal(await readHostCredential(file, "key", { uid }), token2);
+    await chmod(file, 0o644);
+    await assert.rejects(readHostCredential(file, "key", { uid }), /private credential/);
+    await chmod(file, 0o600);
+    await symlink(file, path.join(dir, "linked"));
+    await assert.rejects(readHostCredential(path.join(dir, "linked"), "key", { uid }),
+      /private credential/);
+    await link(file, path.join(dir, "hardlink"));
+    await assert.rejects(readHostCredential(file, "key", { uid }), /private credential/);
+    await rm(path.join(dir, "hardlink"));
+    await writeFile(tenants, JSON.stringify({ version: 1, tenants: [{
+      id: "alpha", key: "alpha." + "x".repeat(48),
+      maxQueued: 2, maxRetained: 5, maxAcceptedPerMinute: 0,
+    }] }), { mode: 0o600 });
+    assert.equal(await readHostCredential(tenants, "tenants", { uid }), true);
+    await writeFile(tenants, JSON.stringify({ version: 1, tenants: [] }));
+    await assert.rejects(readHostCredential(tenants, "tenants", { uid }),
+      /private credential/);
+    await writeFile(tenants, "{}", { mode: 0o600 });
+    await assert.rejects(readHostCredential(tenants, "tenants", { uid }),
+      /private credential/);
+    await writeFile(path.join(dir, "operators.json"),
+      JSON.stringify([{ id: "alice", key: "c".repeat(48),
+        roles: ["review"] }]), { mode: 0o600 });
+    assert.match(await readHostCredential(path.join(dir, "operators.json"),
+      "operators", { uid }), /alice/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("off-host endpoint profile uses only private explicitly supplied probe bearer", () => {
+  const tenantBearer = "alpha." + "q".repeat(48);
+  const keyBearer = "z".repeat(48);
+  for (const [mode, bearer] of [
+    ["tenants", tenantBearer], ["key-file", keyBearer],
+  ]) {
+    const env = { RUNNER_API_KEY: "", RUNNER_PROBE_BEARER: bearer };
+    assert.equal(selectEndpointBearer(env, {
+      authMode: mode, privateEnv: true }), bearer);
+    for (const bad of [
+      { ...env, RUNNER_API_KEY: secret },
+      { ...env, RUNNER_PROBE_BEARER: "" },
+      { ...env, RUNNER_PROBE_BEARER: "REPLACE_ME" },
+      { ...env, RUNNER_PROBE_BEARER: "evil\nHeader: fake" },
+      { ...env, RUNNER_API_KEY_FILE: "/data/key" },
+    ]) assert.throws(() => selectEndpointBearer(bad,
+      { authMode: mode, privateEnv: true }), /probe|container credential/);
+    assert.throws(() => selectEndpointBearer(env, { authMode: mode }),
+      /probe bearer/);
+  }
+  assert.throws(() => selectEndpointBearer({
+    RUNNER_API_KEY: "", RUNNER_PROBE_BEARER: keyBearer,
+  }, { authMode: "tenants", privateEnv: true }), /probe bearer/);
+  assert.throws(() => selectEndpointBearer({
+    RUNNER_API_KEY: secret, RUNNER_PROBE_BEARER: keyBearer,
+  }), /alternate bearer/);
+  assert.equal(selectEndpointBearer({ RUNNER_API_KEY: secret }), secret);
+});
+
+test("endpoint CLI selects private tenant bearer without reading any registry", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-probe-auth-"));
+  const file = path.join(dir, "probe.env");
+  const bearer = "alpha." + "r".repeat(48);
+  const sent = [];
+  try {
+    await writeFile(file, "RUNNER_API_KEY=\nRUNNER_PROBE_BEARER=" + bearer,
+      { mode: 0o600 });
+    const result = await main(["endpoint", "--tenants", "--env-file=" + file,
+      "--url=https://runner.example.org", "--origin=https://factory.example.org"],
+    { endpointProbe: async options => {
+      assert.equal(options.apiKey, bearer);
+      return { mode: "endpoint", status: "passed" };
+    }, write: s => sent.push(s) });
+    assert.equal(result.status, "passed");
+    assert.equal(sent.length, 1);
+    assert.doesNotMatch(sent[0], /alpha\.|RUNNER_PROBE_BEARER/);
+    await assert.rejects(main(["endpoint", "--tenants",
+      "--url=https://runner.example.org", "--origin=https://factory.example.org"],
+    { endpointProbe: async () => { assert.fail("must not probe"); } }),
+    /probe bearer/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

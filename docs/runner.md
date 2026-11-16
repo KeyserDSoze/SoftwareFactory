@@ -755,3 +755,20 @@ node src/runner/preflight.mjs compose --tenants --env-file=/percorso/runner.env
 Il comando seleziona esattamente `compose.runner-key-file.yml`, `compose.tenants.yml` e/o `compose.repair-operators.yml`. Il validatore richiede il match fra ciascun mount API-only, il path `RUNNER_API_KEY_FILE=/run/secrets/runner-api/runner-key`, `RUNNER_TENANTS_FILE=/run/secrets/runner-tenants/tenants.json` o `RUNNER_REPAIR_OPERATORS_FILE=/run/secrets/runner-operators/operators.json` e la modalità selezionata. Tutte le sorgenti devono essere path host canonici non di sistema, bind read-only e disgiunti da `RUNNER_DATA_DIR`, `RUNNER_HOST_WORK_DIR` e dalle altre directory di credenziali; worker e tunnel non possono montarle. È vietato dichiarare due fonti auth contemporaneamente o usare operatori inline con la chiave file-backed. Il JSON di input e i secret non compaiono nell'output.
 
 **Limitazione:** questo preflight verifica il Compose risolto, non i file JSON/chiavi ospitati o i loro permessi euid/nlink/mode. Il comando distinto `preflight host` mantiene al momento una validazione della chiave globale inline da env; la verifica di host con mode file/tenant richiede un adattamento dedicato e NON va aggirata con segreti fittizi per simulare un attestato di VM. È necessaria verifica separata del daemon rootless reale su VM, delle directory montate e dell'endpoint Cloudflare Access (#2, ADR 0030).
+
+### Host preflight credenziali file/tenant e probe endpoint dedicato (#74)
+
+L'operatore sulla **VM dedicata** deve prima configurare un env privato 0600 con `RUNNER_API_KEY=` vuoto per modalità file-backed e tenant, più `RUNNER_API_KEY_DIR=/srv/.../runner-api-key` oppure `RUNNER_TENANTS_DIR=/srv/.../tenant-registry`; `RUNNER_REPAIR_OPERATORS_DIR` è facoltativo solo per modalità globale. Eseguire con UID 1000 sulla VM:
+```sh
+node src/runner/preflight.mjs host --runner-key-file --env-file=/percorso/privato/runner.env
+node src/runner/preflight.mjs host --runner-key-file --operator-registry --env-file=/percorso/privato/runner.env
+node src/runner/preflight.mjs host --tenants --env-file=/percorso/privato/runner.env
+```
+La CLI richiede directory host private 0700 di UID 1000, path canonici senza parent symlink e non sovrapposti a data/work o fra secret. Verifica il file leaf regolare owner-only senza hardlink, apertura `O_RDONLY|O_NOFOLLOW`, metadati prima/dopo, dimensioni e formato della key/tenant/operator registry. Non stampa secret o nomi file. Un rename atomico di chiave/registry viene osservato dalla prossima lettura; il test non prova un binding atomico dei bind Docker al preflight. La configurazione Compose selezionata con i medesimi flag va verificata separatamente tramite `preflight compose`.
+
+Per un **endpoint remoto**, usare un diverso env 0600 della postazione operatore: `RUNNER_API_KEY=` vuoto e `RUNNER_PROBE_BEARER` con una credenziale di test **del solo tenant autorizzato** (formato `tenant.<secret>`) oppure la credenziale di probe globale per modalità key-file. Non esportare il registry/tenant completo sulla postazione operatore; la CLI non lo legge e non mostra il bearer:
+```sh
+node src/runner/preflight.mjs endpoint --tenants --env-file=/percorso/privato/probe.env --url=https://runner.example.org --origin=https://factory.example.org
+node src/runner/preflight.mjs endpoint --runner-key-file --env-file=/percorso/privato/probe.env --url=https://runner.example.org --origin=https://factory.example.org
+```
+Il probe effettua solo GET di health/capabilities e OPTIONS CORS, non crea job. Se Cloudflare Access è attivo, la coppia service auth `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` rimane nel medesimo env operatore; il probe verifica che senza token Access l'endpoint sia negato. Nessuno di questi controlli dimostra che un daemon Docker sia rootless sulla VM né revoca/rotazione fra operazioni simultanee (issue #2, ADR 0031).
