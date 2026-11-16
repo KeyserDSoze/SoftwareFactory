@@ -3,12 +3,14 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, chmod, link, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   inspectComposeConfig, inspectHost, probeEndpoint, readPrivateEnv, validateHostEnvironment, main,
   isPrivateEnvFile, isStablePrivateEnvSnapshot,
 } from "../preflight.mjs";
 
 const secret = "s".repeat(48);
+const checkoutRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const apiEnv = { RUNNER_API_KEY: secret,
   RUNNER_ALLOWED_ORIGINS: "https://factory.example.com",
   RUNNER_DATA_DIR: "/srv/softwarefactory/runner-data",
@@ -23,11 +25,13 @@ function service(extra = {}) {
 function composeConfig() {
   return { services: {
     "runner-api": service({
+      build: { context: checkoutRoot, dockerfile: "docker/runner/Dockerfile.api" },
       volumes: [{ type: "bind", source: apiEnv.RUNNER_DATA_DIR, target: "/data" }],
       ports: [{ host_ip: "127.0.0.1", target: 8787, published: "8787", protocol: "tcp" }],
       environment: { RUNNER_PORT: "8787", RUNNER_API_KEY: secret },
     }),
     "runner-worker": service({
+      build: { context: checkoutRoot, dockerfile: "docker/runner/Dockerfile.worker" },
       volumes: [
         { type: "bind", source: apiEnv.RUNNER_DATA_DIR, target: "/data" },
         { type: "bind", source: apiEnv.RUNNER_HOST_WORK_DIR, target: apiEnv.RUNNER_HOST_WORK_DIR },
@@ -37,6 +41,7 @@ function composeConfig() {
         RUNNER_HOST_WORK_DIR: apiEnv.RUNNER_HOST_WORK_DIR },
     }),
     cloudflared: {
+      image: "cloudflare/cloudflared:latest",
       cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
       profiles: ["tunnel"], command: "tunnel run --token not-a-real-token",
     },
@@ -246,6 +251,66 @@ test("Compose runner source mounts are canonical, non-system and disjoint", () =
   }
   const safe = composeConfig();
   assert.equal(inspectComposeConfig(safe).dockerSocketInWorkerOnly, true);
+});
+
+test("Compose binds each socket-capable runner to its reviewed build context and Dockerfile", () => {
+  const approved = composeConfig();
+  assert.equal(inspectComposeConfig(approved).status, "passed");
+  for (const service of ["runner-api", "runner-worker"]) {
+    for (const mutate of [
+      c => { delete c.services[service].build; },
+      c => { c.services[service].build = { context: "https://attacker.invalid/context" }; },
+      c => { c.services[service].build.context = "/tmp/untrusted-build"; },
+      c => { c.services[service].build.context = checkoutRoot + "/other"; },
+      c => { c.services[service].build.dockerfile = "../../unsafe.Dockerfile"; },
+      c => { c.services[service].build.dockerfile_inline = "FROM busybox"; },
+      c => { c.services[service].build.args = { EVIL: "value" }; },
+      c => { c.services[service].build.secrets = ["private-key"]; },
+      c => { c.services[service].build.ssh = ["default"]; },
+      c => { c.services[service].build.network = "host"; },
+      c => { c.services[service].build.target = "debug"; },
+      c => { c.services[service].build.additional_contexts = { host: "/etc" }; },
+      c => { c.services[service].build.entitlements = ["network.host"]; },
+      c => { c.services[service].build = "../remote-build"; },
+      c => { c.services[service].image = "attacker/runner:latest"; },
+      c => { c.services[service].entrypoint = ["/bin/sh", "-c", "docker ps"]; },
+      c => { c.services[service].command = "node hostile-worker.mjs"; },
+      c => { c.services[service].healthcheck = {
+        test: ["CMD-SHELL", "docker run -v /:/host busybox"] }; },
+      c => { c.services[service].post_start = [{ command: "/bin/sh -c evil" }]; },
+      c => { c.services[service].pre_stop = [{ command: "/bin/sh -c evil" }]; },
+      c => { c.services[service].develop = { watch: [{
+        path: "/etc", action: "sync", target: "/app" }] }; },
+      c => { c.services[service].pull_policy = "always"; },
+    ]) {
+      const config = composeConfig();
+      mutate(config);
+      assert.throws(() => inspectComposeConfig(config),
+        /unapproved image, build or executable override/, service);
+    }
+  }
+});
+
+test("Compose tunnel cannot be replaced by another image, startup hook or local build", () => {
+  for (const mutate of [
+    c => { c.services.cloudflared.image = "attacker/cloudflared:latest"; },
+    c => { delete c.services.cloudflared.image; },
+    c => { c.services.cloudflared.build = { context: checkoutRoot,
+      dockerfile: "docker/runner/Dockerfile.worker" }; },
+    c => { c.services.cloudflared.entrypoint = ["/bin/sh"]; },
+    c => { c.services.cloudflared.post_start = [{ command: "docker ps" }]; },
+    c => { c.services.cloudflared.pre_stop = [{ command: "curl https://evil" }]; },
+    c => { c.services.cloudflared.healthcheck = { test: ["CMD", "sh"] }; },
+    c => { c.services.cloudflared.develop = { watch: ["host"] }; },
+  ]) {
+    const config = composeConfig();
+    mutate(config);
+    assert.throws(() => inspectComposeConfig(config),
+      /cloudflared: unapproved image or executable override/);
+  }
+  const noTunnel = composeConfig();
+  delete noTunnel.services.cloudflared;
+  assert.equal(inspectComposeConfig(noTunnel).status, "passed");
 });
 
 test("rootless host preflight checks socket, private directories and daemon SecurityOptions", async () => {

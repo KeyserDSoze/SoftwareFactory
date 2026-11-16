@@ -41,6 +41,25 @@ const safeService = (name, svc) => {
       svc.read_only !== true)
     fail(name + ": unsafe runtime permissions or hidden mounts");
 };
+// Runtime isolation alone cannot make arbitrary code with the worker's Docker
+// socket trustworthy. Pin the exact reviewed build inputs in the RESOLVED
+// Compose topology. Do not allow image substitution, executable overrides,
+// startup/teardown hooks or build-time injection.
+const trustedBuild = (name, svc, dockerfile) => {
+  const build = svc?.build;
+  if (!build || typeof build !== "object" || Array.isArray(build) ||
+      Object.keys(build).some(key => !["context", "dockerfile"].includes(key)) ||
+      build.context !== root || build.dockerfile !== dockerfile ||
+      ["image", "entrypoint", "command", "healthcheck", "post_start",
+       "pre_stop", "develop", "pull_policy"].some(key => svc[key] != null))
+    fail(name + ": unapproved image, build or executable override");
+};
+const trustedTunnelImage = svc => {
+  if (svc.image !== "cloudflare/cloudflared:latest" ||
+      ["build", "entrypoint", "healthcheck", "post_start", "pre_stop",
+       "develop"].some(key => svc[key] != null))
+    fail("cloudflared: unapproved image or executable override");
+};
 // Reject obvious host-system bind targets and noncanonical paths. An
 // operator may use /srv or /var/lib for dedicated runner data; symlink and
 // directory ownership checks still require live host preflight on the VM.
@@ -93,6 +112,8 @@ export function inspectComposeConfig(config) {
   const api = svcs["runner-api"], worker = svcs["runner-worker"];
   safeService("runner-api", api);
   safeService("runner-worker", worker);
+  trustedBuild("runner-api", api, "docker/runner/Dockerfile.api");
+  trustedBuild("runner-worker", worker, "docker/runner/Dockerfile.worker");
   const apiMounts = mountsFor(api), workerMounts = mountsFor(worker, true);
   const apiData = apiMounts.find(v => v.target === "/data");
   const registry = apiMounts.find(v => v.target === "/run/secrets/runner-operators");
@@ -143,6 +164,7 @@ export function inspectComposeConfig(config) {
     const tunnel = svcs.cloudflared;
     if (!unprivilegedProfile(tunnel) || !noExtraMounts(tunnel.volumes))
       fail("cloudflared: unsafe runtime permissions or mounts");
+    trustedTunnelImage(tunnel);
     noPublicPorts("cloudflared", tunnel);
   }
   return { mode: "compose", status: "passed", apiLoopbackOnly: true,
