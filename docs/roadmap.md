@@ -341,3 +341,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Heartbeat v2 su volume privato: ultimo stato rootless e timestamp probe, refresh indipendente ogni 10s e heartbeat Node ogni 5s; niente env o log nel record. Lettura v1 legacy soltanto per worker readiness.
 - `GET /v1/execution-readiness` autenticato e fail-closed se heartbeat/probe non fresh o daemon non rootless; API continua a non montare Docker. Test unit/integrazione su due API e negativi rootful/malformed/timing.
 - Restano in #2: collaudo effettivo daemon **rootless** in VM con Docker containers reali .NET/Playwright, Cloudflare Tunnel/Access, fencing, IAM/quote per tenant e trust anchor off-host.
+
+
+## v0.2 — Canary rootless isolato con consenso operatore (#40)
+
+- CLI manuale nel worker con immagine Node ufficiale pre-caricata e **pinata per digest**, conferma esplicita, rootless daemon attestato da `docker info`, socket UNIX locale e nessuna richiesta API remota.
+- `docker create` con rete none, readonly, cap-drop, no-new-privileges, UID non privilegiato, limiti CPU/RAM/PID/tmpfs, zero bind mounts; inspect prima/dopo e verifica dei controlli interni; cleanup mirato su ID/label. Niente auto-esecuzione o pull runtime.
+- Test Node deterministici per piano, sicurezza/config, retry, errori e cleanup; documentazione comandi operatori su VM, senza affermare che GitHub hosted rootful CI certifichi rootless.
+- Resta in #2 eseguire davvero il canary e un job .NET/Playwright su VM dedicata e Cloudflare Tunnel/Access reale, oltre a IAM, multi-tenancy, attestation esterna e fencing.

@@ -491,3 +491,26 @@ curl -fsS -H "Authorization: Bearer $RUNNER_API_KEY" \
 ```
 
 Il worker non esegue container di prova durante il probe. `docker info` su socket rootless è un indicatore di **disponibilità e modalità daemon al momento del controllo**, non una verifica di user namespace o dei bind mount, della disponibilità immagini/SDK/.NET/Playwright, né del corretto funzionamento del tunnel e degli utenti Cloudflare Access. Hosted CI usa Docker rootful per lo smoke e non può essere spacciata come collaudo del daemon rootless su VM. Prima di affidare job reali serve eseguire un campione job in una VM isolata con Docker rootless, con verifiche indipendenti dei namespace e della rete (#2).
+
+
+## Canary rootless: avvio di container verificabile su VM (solo operatore, #40)
+
+La readiness della #39 verifica `docker info`, non un vero container. Per verificare anche **`docker create → inspect → start → inspect → cleanup`** usa il comando operatore nella VM dedicata. Questa funzione non è esposta alle API, non viene lanciata automaticamente dai job, non usa credenziali cloud o token e non modifica le issue GitHub.
+
+1. Sul daemon **rootless** dedicato, pre-carica l'immagine Node ufficiale `node:22-bookworm-slim` e ottieni il suo riferimento *immutabile* `node@sha256:<digest>`. Controlla la provenienza del digest/immagine secondo le policy dell'organizzazione. Non utilizzare un tag mutabile come input al canary.
+2. Sull'host con il progetto, esegui nel container `runner-worker` come UID non privilegiato (il socket Docker è montato **solo** nel worker). Per il valore `DIGEST` usare i 64 caratteri hex effettivi del digest del repository immagine già presente sul daemon rootless. Non copiare esempi o placeholder come valori reali:
+
+```bash
+# Come utente del daemon rootless, prima dello smoke:
+docker --host unix:///run/user/1000/docker.sock pull node:22-bookworm-slim
+docker --host unix:///run/user/1000/docker.sock image inspect node:22-bookworm-slim \
+  --format '{{index .RepoDigests 0}}'
+# Inserisci la stringa 'node@sha256:...' realmente ritornata:
+docker compose --env-file docker/runner/.env -f docker/runner/compose.yml exec -T \
+  runner-worker node scripts/rootless-canary.mjs \
+  --image=node@sha256:<digest-reale> --confirm
+```
+
+La CLI accetta **solo** `--confirm` e un digest `node@sha256:` di 64 hex; usa `--pull=never` (se manca la cache fallisce, senza egress). Prima del container controlla `name=rootless` via daemon Docker. Crea un container identificato da un nome UUID e label esclusivi, con `--network=none`, `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, UID:GID 65534, 128 MiB RAM, 0.5 CPU, 32 PID, tmpfs 16 MiB su `/tmp`, **nessun volume/bind mount**, nessun socket, nessuna variabile segreta iniettata. Verifica anche mediante `docker inspect` i limiti effettivamente applicati, esegue un programma Node fisso che controlla identità, capability, interfacce di rete e tmpfs, poi ricontrolla exit code zero/stato non OOM e rimuove **soltanto** il container appena creato, dopo verifica di ID/nome/label. Timeout o mismatch arrestano il controllo; errori Docker non vengono riportati nel log, e un cleanup incerto richiede verifica manuale degli eventuali container `sf-canary-...` senza usare `docker system prune`.
+
+Un esito `{"status":"passed",...}` **vale solo per quel canary sul daemon locale in quel momento**. Non è un attestato firmato da un host indipendente, né dimostra che build .NET 10/11, npm/Playwright, bind mount effimeri, Cloudflare Tunnel/Access o un job con sorgenti AI funzionino nella VM. Per la #2 servono ancora una prova manuale del workflow completo con job reali, networking e IAM e la documentazione operativa dell'esito. Su GitHub Actions i test unit simulano le chiamate Docker; lo smoke esistente in CI usa un daemon **rootful** e non prova il rootless sulla VM.

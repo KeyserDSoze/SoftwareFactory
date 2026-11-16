@@ -6,6 +6,10 @@ import { promisify } from "node:util";
 import { rootlessSecurityOptions } from "./orphans.mjs";
 
 const execFile = promisify(execFileCallback);
+export function allowedRootlessHost(host) {
+  return host === "unix:///run/docker.sock" ||
+    /^unix:\/\/\/run\/user\/[0-9]+\/docker\.sock$/.test(host);
+}
 
 /** No shell, no arbitrary daemon URI, no inherited Docker credentials.
  * Fail closed on non-rootless, unavailable, timed-out or malformed responses.
@@ -15,9 +19,7 @@ export async function probeRootlessDocker({
   runDocker = async (args, options) =>
     (await execFile("docker", args, options)).stdout,
 } = {}) {
-  if (host !== "unix:///run/docker.sock" &&
-      !/^unix:\/\/\/run\/user\/[0-9]+\/docker\.sock$/.test(host))
-    return false;
+  if (!allowedRootlessHost(host)) return false;
   try {
     const raw = await runDocker(
       ["info", "--format", "{{json .SecurityOptions}}"],
