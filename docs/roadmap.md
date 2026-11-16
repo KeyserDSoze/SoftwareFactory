@@ -473,3 +473,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Sostituire `rm -f <name>` con due inspect vincolate a nome completo, ID completo e tutte le label del job, seguite da secondo probe rootless e rimozione per ID verificato soltanto.
 - Se esiste un dubbio (nome riassegnato, falso container, rootful, risposta non valida, Docker non disponibile) non cancellare e richiedere la procedura operatore #21. Attendere il tentativo bounded prima di finalizzare timeout/claim anche senza evento `close`.
 - Test Node su casi positivi/negativi, perdita del daemon, SIGKILL e mancata notifica; mantenere la CI Docker rootful distinta dal test reale VM rootless. ADR 0015; #2 ancora aperta.
+
+
+## v0.2 — Rootless check JIT per tutte le operazioni della CLI orfani (#59)
+
+- Rimuovere `inspectedHost` e obbligare `docker info --format SecurityOptions` prima di ogni `ps/inspect/rm` dell'operatore sul socket Unix rootless allowlisted; JSON array tipizzato, output 4KiB, timeout 5s sul probe e 12s sui comandi.
+- Non ereditare `HOME`/config Docker o segreti dell'host; usare `DOCKER_CONFIG=/tmp` ed errori generici senza diagnostic leak. Conservare claim, prova evidenze, conferma job e verifica label; callback soltanto Node test trusted.
+- Test Node simulano info ripetute, rootful/JSON malformato/socket remoto e daemon cambiato a metà cleanup con nessun `rm`. ADR 0016; #2 resta aperta per VM rootless reale, Cloudflare Access e attestazione/fencing.

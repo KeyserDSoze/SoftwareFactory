@@ -299,3 +299,9 @@ La [#57](https://github.com/KeyserDSoze/SoftwareFactory/issues/57) chiude una di
 ## Avanzamento #58 — cleanup Docker verificato su timeout (16 novembre 2026)
 
 La [#58](https://github.com/KeyserDSoze/SoftwareFactory/issues/58) corregge la rimozione dei container di job terminati per timeout: il vecchio `docker rm -f <name>` poteva eliminare un container estraneo il cui nome fosse stato riutilizzato. La nuova procedura controlla due volte con Docker inspect il nome atteso, l'ID completo immutabile e tutte le label del job, ricontrolla il daemon rootless e rimuove **solo l'ID** verificato. In mancanza di una corrispondenza non elimina nulla: occorre la riconciliazione manuale #21. Il worker attende il tentativo di cleanup prima di chiudere il timeout, anche quando la CLI non invia l'evento `close`. I test Node verificano errori, scambio d'identità, perdita del rootless e SIGKILL. Non è fencing multi-host o attestazione VM rootless reale (#2).
+
+
+---
+## Avanzamento #59 — operatore Docker con rootless JIT senza cache (16 novembre 2026)
+
+La [#59](https://github.com/KeyserDSoze/SoftwareFactory/issues/59) corregge il comando di pulizia manuale dei container orfani. La precedente cache `inspectedHost` evitava di rifare il probe rootless dopo la prima richiesta al medesimo socket, permettendo di arrivare a `docker rm -f` anche se il daemon fosse cambiato. Ora **ogni** chiamata operatore (ps, inspect, rm) è preceduta da una nuova verifica rootless sul medesimo socket Unix allowlisted, con output/timeout bounded e ambiente CLI senza segreti. Risposte rootful, host non permessi o errori Docker interrompono l'operazione senza eliminazioni né messaggi diagnostici sensibili. I test provano la perdita della modalità rootless prima della rimozione e preservano journal/claim, conferma esplicita e identità del container. Non sostituisce il collaudo VM rootless o fencing multi-host della #2.
