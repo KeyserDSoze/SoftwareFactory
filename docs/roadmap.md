@@ -523,3 +523,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rifiutare ogni servizio aggiuntivo al Compose risolto oltre a API, worker e tunnel opzionale; impedire il falso `status:passed` di un progetto con sidecar privilegiato o porte pubbliche non validate.
 - Denegare a `cloudflared` qualsiasi mount incluso `volumes_from`, `secrets`, `configs`, `tmpfs`, device o namespace condiviso; negare questi mount impliciti anche a API/worker per evitare che l'API erediti il socket del worker; imporre path host canonici sicuri e data/work non sovrapposti. Preservare solo il socket dedicato `/run/user/1000/docker.sock` del worker.
 - Regressioni Node su override sidecar, tunnel host mount, path traversal e profili validi, più smoke Compose CI. ADR 0022; VM rootless e Cloudflare Access reali non ancora attestati (#2).
+
+
+## v0.2 — Preflight Access service-to-service con doppia autenticazione (#66)
+
+- Aggiungere al comando operator-only `preflight endpoint` supporto facoltativo a `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` da file 0600 O_NOFOLLOW, separati da `RUNNER_API_KEY`, mai distribuiti alla SPA. Pair required/bounded/ASCII, nuovi secret `cfast_` e 64-hex legacy supportati.
+- Prima verificare `GET /healthz` senza Access non 200 (solo 302/401/403, non seguire redirect), poi check 4 richieste già esistenti con entrambi gli header Access, mantenendo validazione API 401/200 e CORS. No POST e nessun token in result/log.
+- Test mock di gateway/HTTP con negativa, credenziali incomplete e injection, token scaduto, CORS, CLI `--env-file` e compatibilità senza Access. ADR 0023; prova vera Cloudflare Access browser + rootless VM ancora in #2.

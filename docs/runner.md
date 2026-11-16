@@ -681,3 +681,23 @@ Per `node src/runner/preflight.mjs host --env-file=/percorso/runner.env` e `endp
 Eseguire `node src/runner/preflight.mjs compose --env-file=/percorso/runner.env` (eventualmente con `--operator-registry`) **sul Compose risolto** prima di lanciare il deployment. Il verificatore ora nega qualsiasi servizio ulteriore a `runner-api`, `runner-worker` e `cloudflared` opzionale, compresi debug proxy che pubblicano il daemon Docker o sidecar aggiunti da override. Nel caso serva un servizio aggiuntivo, aprire una issue e aggiornare deliberatamente la policy, non bypassare il check.
 
 Il tunnel non può montare volumi, `tmpfs`, `volumes_from`, `secrets`, `configs`, dispositivi o namespace PID/IPC/network di altri container. Queste forme di mount implicito sono proibite anche per API e worker: `volumes_from` potrebbe dare all'API accesso al socket del worker pur senza comparire nei suoi `volumes`. I mount worker/API devono essere sorgenti host assolute e canoniche; sono vietati root/system path e sovrapposizioni fra directory persistente `/data` e workspace. Il socket `/run/user/1000/docker.sock` può essere montato solo dal worker come `/run/docker.sock`, mai dall'API o dal tunnel. Per percorsi reali l'operatore deve comunque eseguire separatamente `preflight.mjs host` sul sistema con UID 1000, verificare permessi/symlink e registrare i risultati. La CI Docker hosted non certifica la sicurezza del daemon reale né Cloudflare Access (ADR 0022, #2).
+
+
+### Preflight HTTPS dietro Cloudflare Access Service Auth, solo amministrativo (#66)
+
+Cloudflare Access richiede normalmente `CF-Access-Client-Id` e `CF-Access-Client-Secret` per accessi **machine-to-machine** autorizzati dalla policy **Service Auth**. Il `preflight.mjs endpoint` ora supporta questi header **solo nella postazione fidata dell'operatore**, tramite file privato locale `0600`, mai da un browser, da una patch AI o dalle variabili dei container runner. Su una macchina separata dal server, creare un file completo, non versionato, che contenga almeno:
+```dotenv
+RUNNER_API_KEY=<chiave-runner-reale>
+CF_ACCESS_CLIENT_ID=<client-id-del-service-token>
+CF_ACCESS_CLIENT_SECRET=<client-secret-del-service-token>
+```
+Impostare owner corrente, `chmod 600` e directory non condivisa. Per ruotare i token, sostituire il file completo tramite rename atomico. Eseguire:
+```sh
+node src/runner/preflight.mjs endpoint \
+  --env-file=/percorso/privato/access-preflight.env \
+  --url=https://runner.example.org \
+  --origin=https://factory.example.org
+```
+Il comando controlla prima che `GET /healthz` **senza token Access** riceva 302/401/403 senza seguire la Location; poi health 200 con Access, capabilities 401 senza Bearer ma con Access, capabilities 200 con Access **e** Bearer runner, e OPTIONS/CORS con header Access. Tutte le richieste sono GET/OPTIONS e hanno timeout; un service token mancante, scaduto, malformato o un endpoint liberamente accessibile senza token causano un errore statico. Nessun segreto, HTML, URL di redirect o corpo HTTP viene registrato. La modalità **senza Access** rimane invariata.
+
+**Importante:** questo controlla il percorso dell'operatore machine-to-machine, **non** la fruibilità via browser. Le web app dietro Cloudflare Access possono usare una cookie `CF-Authorization` e richiedono regole dedicate per preflight browser `OPTIONS` e CORS. Non inserire service token Access in `sessionStorage`, JS, URL, ZIP, GitHub Actions o nella SPA; verificare separatamente il login dell'utente, redirect, cookie, OPTIONS e CORS da un browser reale sul dominio pubblicato, oltre alle policy e ai log di Cloudflare. Una GET non autenticata bloccata non prova da sola che sia stato proprio Cloudflare a bloccarla. Consultare <https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/> e <https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/cors/>. VM dedicata rootless e Access browser rimangono aperti in #2 (ADR 0023).
