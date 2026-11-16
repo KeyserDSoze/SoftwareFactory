@@ -589,3 +589,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `preflight host` accetta `--runner-key-file` o `--tenants` (esclusivi) e `--operator-registry` solo con chiave globale; niente chiave inline fittizia o fallback fra profili. I directory source del file key/tenant/operators devono essere canonici, UID 1000 e 0700, disgiunti da data/work e fra loro, ogni segmento senza symlink. I file sono owner-only, nlink=1, regolari, con FD O_NOFOLLOW e rilettura bounded/stabile.
 - Il `preflight endpoint` per profili non-inline legge soltanto `RUNNER_PROBE_BEARER` da `--env-file` privato 0600 dell'operatore: non deve accedere ai registry tenant, copiare segreti in output o accettare token da HTTP/browser. Il controllo endpoint prova HTTPS/auth/CORS non la VM rootless o la validità off-host del tenant (#2).
+
+## Canary Docker: provenienza script e namespace (#75)
+
+- `safeConfig` deve ispezionare `Config.Cmd=["-e", sentinel]` esatto, oltre all'entrypoint Node, per il canary e la riconciliazione: il marker stdout senza lo script non è prova.
+- `SecurityOpt` ammette un unico no-new-privileges serializzato da Docker; negare `seccomp/apparmor=unconfined`, namespace condivisi, DNS/hosts/links, gruppi/device/volumi e tmpfs extra. Riprova rootless prima di ciascun comando Docker, non usare daemon rootful eccetto nello smoke confinato CI. Il risultato non è attestazione off-host né prova VM reale (ADR 0032, #2).

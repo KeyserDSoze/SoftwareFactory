@@ -6,11 +6,12 @@ const image = "node@sha256:" + "a".repeat(64);
 const id = "c1234567-1234-4234-8234-123456789012";
 const name = "sf-canary-" + id;
 const containerId = "b".repeat(64);
+const approvedCmd = buildRootlessCanaryArgs(image, name).slice(-2);
 function candidate(state = "created") {
   return {
     Id: containerId, Name: "/" + name,
     Config: { User: "65534:65534",
-      Entrypoint: ["node"], Tty: false, OpenStdin: false,
+      Entrypoint: ["node"], Cmd: approvedCmd, Tty: false, OpenStdin: false,
       Labels: { "softwarefactory.canary": name } },
     HostConfig: {
       NetworkMode: "none", ReadonlyRootfs: true, Privileged: false,
@@ -201,6 +202,28 @@ test("canary rejects unsafe Docker inspect and never starts the container", asyn
     { Config: { ...candidate().Config, Labels: {} } },
     { HostConfig: { ...candidate().HostConfig, Binds: ["/:/host:rw"] } },
     { HostConfig: { ...candidate().HostConfig, CapDrop: [] } },
+    { Config: { ...candidate().Config, Cmd: ["-e", "console.log('SF_ROOTLESS_CANARY_OK')"] } },
+    { Config: { ...candidate().Config, Cmd: ["--version"] } },
+    { Config: { ...candidate().Config, Cmd: [] } },
+    { HostConfig: { ...candidate().HostConfig, SecurityOpt: [
+      "no-new-privileges:true", "seccomp=unconfined"] } },
+    { HostConfig: { ...candidate().HostConfig, SecurityOpt: [
+      "no-new-privileges", "apparmor=unconfined"] } },
+    { HostConfig: { ...candidate().HostConfig, SecurityOpt: [
+      "no-new-privileges:true", "no-new-privileges:true"] } },
+    { HostConfig: { ...candidate().HostConfig, PidMode: "host" } },
+    { HostConfig: { ...candidate().HostConfig, IpcMode: "host" } },
+    { HostConfig: { ...candidate().HostConfig, UTSMode: "host" } },
+    { HostConfig: { ...candidate().HostConfig, UsernsMode: "host" } },
+    { HostConfig: { ...candidate().HostConfig, CgroupnsMode: "host" } },
+    { HostConfig: { ...candidate().HostConfig, DeviceRequests: [{ Driver: "nvidia" }] } },
+    { HostConfig: { ...candidate().HostConfig, GroupAdd: ["docker"] } },
+    { HostConfig: { ...candidate().HostConfig, Dns: ["203.0.113.53"] } },
+    { HostConfig: { ...candidate().HostConfig, ExtraHosts: ["origin:203.0.113.9"] } },
+    { HostConfig: { ...candidate().HostConfig, Sysctls: { "net.ipv4.ip_forward": "1" } } },
+    { HostConfig: { ...candidate().HostConfig, CgroupParent: "/host" } },
+    { HostConfig: { ...candidate().HostConfig, Tmpfs: {
+      "/tmp": "rw,nosuid,nodev,noexec,size=16m", "/etc": "rw" } } },
   ];
   for (const patch of unsafe) {
     const base = candidate(), fake = fakeDocker({ before: { ...base, ...patch } });
@@ -218,6 +241,27 @@ test("canary rejects unsafe Docker inspect and never starts the container", asyn
     else assert.equal(fake.calls.at(-1)?.[0], "rm",
       "verified identity must be cleaned even if security settings rejected");
   }
+});
+
+
+test("canary accepts only inert Docker namespace defaults and one NNP option", async () => {
+  for (const [key, value] of [
+    ["PidMode", ""], ["PidMode", "private"], ["IpcMode", "private"],
+    ["UTSMode", ""], ["UsernsMode", ""], ["CgroupnsMode", "private"],
+  ]) {
+    const before = candidate(); before.HostConfig[key] = value;
+    const after = { ...before, State: candidate("exited").State };
+    const mock = fakeDocker({ before, after });
+    const report = await runRootlessCanary({ image, id, confirmed: true,
+      probeDocker: async () => true, runDocker: mock.runDocker });
+    assert.equal(report.status, "passed", key + " " + value);
+  }
+  const before = candidate();
+  before.HostConfig.SecurityOpt = ["no-new-privileges"];
+  const mock = fakeDocker({ before,
+    after: { ...before, State: candidate("exited").State } });
+  assert.equal((await runRootlessCanary({ image, id, confirmed: true,
+    probeDocker: async () => true, runDocker: mock.runDocker })).status, "passed");
 });
 
 test("canary rejects stdout spoofing, start timeouts and nonzero container exit", async () => {

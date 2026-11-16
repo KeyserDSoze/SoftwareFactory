@@ -579,3 +579,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Supporto ai flag espliciti host/endpoint `--runner-key-file` e `--tenants`, no fallback alla key inline. Validazione directory private host UID 1000, mode 0700, parent no-symlink, non-overlap e lettura sicura di key/tenant/operator file con FD O_NOFOLLOW, metadati stabili e rotazione tramite rename.
 - Per endpoint remoto usare soltanto `RUNNER_PROBE_BEARER` off-host in env 0600 del singolo operatore: nessuna lettura o esposizione del tenant registry completo. Suite test reali/simulati + ADR 0031. I controlli non attestano Cloudflare o VM rootless reale; #2 resta aperta.
+
+## v0.2 — Canary con provenienza dello script e namespace limitati (#75)
+
+- `docker inspect` del canary e reconciler verifica `Config.Cmd` esatto, non soltanto l'entrypoint e un marker stdout contraffabile.
+- Security_opt univoco `no-new-privileges`, solo namespace privati, nessun DNS/hosts custom, gruppo/device/mount/sysctl/cgroup extra; nuovi test Node di tampering e smoke vero Docker rootful CI-only, ADR 0032. Test VM rootless/Cloudflare reali e attestazione off-host ancora aperti in #2.

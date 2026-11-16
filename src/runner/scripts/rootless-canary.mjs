@@ -31,6 +31,14 @@ console.log("SF_ROOTLESS_CANARY_OK");`;
 
 function fail(code) { throw new Error("Rootless canary " + code); }
 function arrayEmpty(value) { return value == null || (Array.isArray(value) && value.length === 0); }
+// Docker default namespace modes are empty or "private"; shared host or
+// container namespaces invalidate an otherwise plausible canary result.
+const privateNamespace = value => value == null || value === "" || value === "private";
+const emptyRecord = value => value == null ||
+  (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
+const noNewPrivilegesOnly = value => Array.isArray(value) &&
+  value.length === 1 &&
+  ["no-new-privileges", "no-new-privileges:true"].includes(value[0]);
 function safeIdentity(container, name, id) {
   return container && container.Id === id && CONTAINER_ID.test(id) &&
     container.Name === "/" + name && container.Config?.Labels?.[LABEL] === name;
@@ -38,22 +46,35 @@ function safeIdentity(container, name, id) {
 export function safeConfig(container, name, id) {
   if (!safeIdentity(container, name, id)) return false;
   const config = container.Config, host = container.HostConfig;
+  // The inspected script must be the audited sentinel itself. The entrypoint
+  // and success-marker stdout alone do not prove that the assertions ran.
   return config.User === "65534:65534" &&
     Array.isArray(config.Entrypoint) && config.Entrypoint.length === 1 &&
     config.Entrypoint[0] === "node" &&
+    Array.isArray(config.Cmd) && config.Cmd.length === 2 &&
+    config.Cmd[0] === "-e" && config.Cmd[1] === sentinel &&
     !config.Tty && !config.OpenStdin &&
     host && host.NetworkMode === "none" && host.ReadonlyRootfs === true &&
     host.Privileged === false && host.PublishAllPorts === false &&
     host.PidsLimit === 32 && host.Memory === 134217728 &&
     host.NanoCpus === 500000000 &&
-    Array.isArray(host.CapDrop) && host.CapDrop.includes("ALL") &&
+    Array.isArray(host.CapDrop) && host.CapDrop.length === 1 &&
+    host.CapDrop[0] === "ALL" &&
     arrayEmpty(host.CapAdd) && arrayEmpty(host.Binds) &&
     arrayEmpty(host.Mounts) && arrayEmpty(host.VolumesFrom) &&
-    arrayEmpty(host.Devices) && arrayEmpty(container.Mounts) &&
-    (host.PortBindings === null || Object.keys(host.PortBindings).length === 0) &&
-    Array.isArray(host.SecurityOpt) && host.SecurityOpt.some(opt =>
-      opt === "no-new-privileges" || opt === "no-new-privileges:true") &&
-    typeof host.Tmpfs?.["/tmp"] === "string" &&
+    arrayEmpty(host.Devices) && arrayEmpty(host.DeviceRequests) &&
+    arrayEmpty(host.GroupAdd) && arrayEmpty(container.Mounts) &&
+    arrayEmpty(host.Dns) && arrayEmpty(host.DnsOptions) &&
+    arrayEmpty(host.DnsSearch) && arrayEmpty(host.ExtraHosts) &&
+    arrayEmpty(host.Links) && emptyRecord(host.Sysctls) &&
+    privateNamespace(host.PidMode) && privateNamespace(host.IpcMode) &&
+    privateNamespace(host.UTSMode) && privateNamespace(host.UsernsMode) &&
+    privateNamespace(host.CgroupnsMode) &&
+    (host.CgroupParent == null || host.CgroupParent === "") &&
+    emptyRecord(host.PortBindings) &&
+    noNewPrivilegesOnly(host.SecurityOpt) &&
+    host.Tmpfs && Object.keys(host.Tmpfs).length === 1 &&
+    typeof host.Tmpfs["/tmp"] === "string" &&
     ["rw", "nosuid", "nodev", "noexec", "size=16m"].every(flag =>
       host.Tmpfs["/tmp"].split(",").includes(flag));
 }

@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { main, reconcileRootlessCanary } from "../scripts/canary-reconcile.mjs";
+import { buildRootlessCanaryArgs } from "../scripts/rootless-canary.mjs";
 
 const canaryId = "c1234567-1234-4234-8234-123456789012";
 const name = "sf-canary-" + canaryId;
 const id = "a".repeat(64);
 const other = "b".repeat(64);
+const approvedCmd = buildRootlessCanaryArgs(
+  "node@sha256:" + "a".repeat(64), name).slice(-2);
 
 function candidate({ dockerId = id, nameOverride = name,
   label = name, state = "created", running = false,
@@ -14,7 +17,8 @@ function candidate({ dockerId = id, nameOverride = name,
   return {
     Id: dockerId, Name: "/" + nameOverride,
     Config: {
-      User: "65534:65534", Entrypoint: ["node"], Tty: false, OpenStdin: false,
+      User: "65534:65534", Entrypoint: ["node"], Cmd: approvedCmd,
+      Tty: false, OpenStdin: false,
       Labels: { "softwarefactory.canary": label, ...extraLabels },
     },
     HostConfig: {
@@ -143,6 +147,15 @@ test("never delete spoofed canaries, running containers or unsafe mount/network 
     candidate({ unsafe: { NetworkMode: "bridge" } }),
     candidate({ unsafe: { Privileged: true } }),
     candidate({ unsafe: { Binds: ["/:/host:rw"] } }),
+    candidate({ unsafe: { PidMode: "host" } }),
+    candidate({ unsafe: { IpcMode: "host" } }),
+    candidate({ unsafe: { UsernsMode: "host" } }),
+    candidate({ unsafe: { CgroupnsMode: "host" } }),
+    candidate({ unsafe: { SecurityOpt: [
+      "no-new-privileges", "seccomp=unconfined"] } }),
+    candidate({ unsafe: { Dns: ["203.0.113.53"] } }),
+    { ...candidate(), Config: { ...candidate().Config,
+      Cmd: ["-e", "console.log('SF_ROOTLESS_CANARY_OK')"] } },
     candidate({ extraLabels: { "softwarefactory.runner": "job" } }),
   ];
   for (const before of invalid) {
