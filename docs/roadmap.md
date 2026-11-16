@@ -616,3 +616,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Nginx statico e generato applicano `Cache-Control: no-store` con CSP e referrer policy su tutte le risposte, compresa la callback PKCE; trade-off esplicito: cache asset statici disabilitata.
 - Build fail-closed se `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID`, `VITE_OIDC_AUDIENCE` sono parziali o whitespace-only; restano i vincoli URL HTTPS già presenti e l'eccezione soltanto per CI privata.
 - Test Vitest sul vero script Nginx generato e Chromium sul vero header HTTP per `/` e `/auth/callback`; ADR 0038. Epica #9 aperta per federazione con IdP esterno, revisione threat model browser/CSP/BFF, CDN/TLS e rollout operativo.
+
+## v0.3 — Compose local-only e configurazione deploy OIDC esplicita (#82)
+
+- Frontend generato non più su `0.0.0.0:3000`: bind `127.0.0.1:3000:80`, API/database già loopback. `APP_ENVIRONMENT` mappato all'ASP.NET Core runtime (default Development solo per locale), `PUBLIC_API_URL` impostabile per browser HTTPS e CSP.
+- `OIDC_PUBLIC_AUDIENCE` separata da `AUTH_AUDIENCE` per eliminare la regressione #81 in build legacy/dev; validazione CSP 0-o-3 completa preservata. Aggiornati `docker/.env.example` e README dello scaffold.
+- Test Vitest della generazione e `docker compose config --format json` in CI sulle modalità locale/HTTPS senza avviare servizi; ADR 0039. Per l'epica #9 restano IdP reale su HTTPS, edge TLS/CORS/CDN certificati, BFF e modello sessione production.

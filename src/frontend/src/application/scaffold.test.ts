@@ -383,6 +383,101 @@ describe("application scaffold", () => {
       }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+  it("renders dev and HTTPS OIDC production Compose with safe browser origins", () => {
+    const files = generateFiles(example());
+    const compose = files["docker/compose.yml"];
+    const envExample = files["docker/.env.example"];
+    const readme = files["README.md"];
+    expect(compose).toContain('      ASPNETCORE_ENVIRONMENT: "${APP_ENVIRONMENT:-Development}"');
+    expect(compose).toContain('        VITE_API_URL: "${PUBLIC_API_URL:-http://localhost:8080}"');
+    expect(compose).toContain('        VITE_OIDC_AUDIENCE: "${OIDC_PUBLIC_AUDIENCE:-}"');
+    expect(compose).not.toContain('        VITE_OIDC_AUDIENCE: "${AUTH_AUDIENCE:-}"');
+    expect(compose).toContain('      - "127.0.0.1:3000:80"');
+    expect(compose).not.toContain('      - "3000:80"');
+    expect(compose).toContain('      - "127.0.0.1:8080:8080"');
+    expect(envExample).toContain("APP_ENVIRONMENT=Development");
+    expect(envExample).toContain("PUBLIC_API_URL=http://localhost:8080");
+    expect(envExample).toContain("OIDC_PUBLIC_AUDIENCE=");
+    expect(readme).toContain("APP_ENVIRONMENT=Production");
+    expect(readme).toContain("PUBLIC_API_URL=https://api.example");
+    expect(readme).toContain("OIDC_PUBLIC_AUDIENCE");
+
+    // Render the actual generated Compose with the Docker CLI where installed.
+    // Do not contact Docker daemon or run any service; local frontend-only
+    // developers without Docker can still run the pure template assertions.
+    const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
+      HOME: process.env.HOME || "/tmp" };
+    const available = spawnSync("docker", ["compose", "version"], {
+      encoding: "utf8", timeout: 6000, maxBuffer: 65536, env: processEnv,
+    });
+    if (available.error &&
+        (available.error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (process.env.CI === "true") throw Error("Docker Compose required by CI");
+      return;
+    }
+    expect(available.status, available.stderr).toBe(0);
+    const directory = mkdtempSync(path.join(tmpdir(), "sf-composed-oidc-"));
+    const dockerDir = path.join(directory, "docker");
+    mkdirSync(dockerDir);
+    const composeFile = path.join(dockerDir, "compose.yml");
+    const envFile = path.join(dockerDir, ".env");
+    writeFileSync(composeFile, compose, { mode: 0o600 });
+    const render = (envLines: string[]) => {
+      writeFileSync(envFile, envLines.join("\n") + "\n", { mode: 0o600 });
+      const output = spawnSync("docker", [
+        "compose", "-f", composeFile, "--env-file", envFile,
+        "config", "--format", "json",
+      ], { encoding: "utf8", timeout: 12000,
+        maxBuffer: 1_000_000, env: processEnv });
+      expect(output.status, output.stderr).toBe(0);
+      return JSON.parse(output.stdout) as {
+        services: {
+          api: { environment: Record<string, string>;
+            ports: Array<{ host_ip: string; published: string }> };
+          web: { build: { args: Record<string, string> };
+            ports: Array<{ host_ip: string; published: string }> };
+        };
+      };
+    };
+    try {
+      const local = render([
+        "DB_PASSWORD=ci-local-only-placeholder",
+        "AUTH_MODE=legacy", "AUTH_AUDIENCE=factory-web",
+        "AUTH_SIGNING_KEY=ci-local-only-placeholder-key-xxxxxxxxxxxxxxxxxxxxxxxx",
+      ]);
+      expect(local.services.api.environment.ASPNETCORE_ENVIRONMENT).toBe("Development");
+      expect(local.services.web.build.args.VITE_API_URL).toBe("http://localhost:8080");
+      expect(local.services.web.build.args.VITE_OIDC_AUTHORITY).toBe("");
+      expect(local.services.web.build.args.VITE_OIDC_CLIENT_ID).toBe("");
+      expect(local.services.web.build.args.VITE_OIDC_AUDIENCE).toBe("");
+      expect(local.services.web.ports[0].host_ip).toBe("127.0.0.1");
+      expect(String(local.services.web.ports[0].published)).toBe("3000");
+      expect(local.services.api.ports[0].host_ip).toBe("127.0.0.1");
+
+      const production = render([
+        "DB_PASSWORD=ci-production-only-placeholder",
+        "APP_ENVIRONMENT=Production",
+        "PUBLIC_API_URL=https://api.example.test",
+        "AUTH_MODE=oidc",
+        "AUTH_AUDIENCE=resource-app",
+        "AUTH_AUTHORITY=https://login.example.test",
+        "OIDC_PUBLIC_AUTHORITY=https://login.example.test",
+        "OIDC_PUBLIC_CLIENT_ID=public-browser",
+        "OIDC_PUBLIC_AUDIENCE=resource-app",
+      ]);
+      expect(production.services.api.environment.ASPNETCORE_ENVIRONMENT).toBe("Production");
+      expect(production.services.api.environment.Auth__Mode).toBe("oidc");
+      expect(production.services.api.environment.Auth__Authority)
+        .toBe("https://login.example.test");
+      expect(production.services.web.build.args.VITE_API_URL).toBe("https://api.example.test");
+      expect(production.services.web.build.args.VITE_OIDC_AUTHORITY)
+        .toBe("https://login.example.test");
+      expect(production.services.web.build.args.VITE_OIDC_CLIENT_ID).toBe("public-browser");
+      expect(production.services.web.build.args.VITE_OIDC_AUDIENCE).toBe("resource-app");
+      expect(production.services.web.ports[0].host_ip).toBe("127.0.0.1");
+      expect(String(production.services.web.ports[0].published)).toBe("3000");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it("can target Kubernetes and optional services", () => {
     const p = example(); p.config.deployment = "kubernetes";
     p.config.services.queue.development = "rabbitmq";

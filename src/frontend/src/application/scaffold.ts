@@ -16,7 +16,7 @@ function dockerCompose(c: ProjectConfig): string {
     "    ports:",
     '      - "127.0.0.1:8080:8080"',
     "    environment:",
-    "      ASPNETCORE_ENVIRONMENT: Development",
+    '      ASPNETCORE_ENVIRONMENT: "${APP_ENVIRONMENT:-Development}"',
     "      Database__Provider: " + c.database,
     c.database === "postgresql" ? '      Database__ConnectionString: "Host=db;Port=5432;Database=app;Username=app;Password=${DB_PASSWORD:?Set DB_PASSWORD in .env}"' : '      Database__ConnectionString: "${DATABASE_URL:-}"',
   ];
@@ -32,11 +32,11 @@ function dockerCompose(c: ProjectConfig): string {
   if (deps.length) services.push("    depends_on:", "      db:", "        condition: " + (c.database === "postgresql" ? "service_healthy" : "service_started"));
   services.push(
     "  web:", "    build:", "      context: ..", "      dockerfile: docker/Web.Dockerfile",
-    "      args:", "        VITE_API_URL: http://localhost:8080",
+    "      args:", '        VITE_API_URL: "${PUBLIC_API_URL:-http://localhost:8080}"',
     c.database === "postgresql" ? '        VITE_OIDC_AUTHORITY: "${OIDC_PUBLIC_AUTHORITY:-}"' : "",
     c.database === "postgresql" ? '        VITE_OIDC_CLIENT_ID: "${OIDC_PUBLIC_CLIENT_ID:-}"' : "",
-    c.database === "postgresql" ? '        VITE_OIDC_AUDIENCE: "${AUTH_AUDIENCE:-}"' : "",
-    "    ports:", '      - "3000:80"',
+    c.database === "postgresql" ? '        VITE_OIDC_AUDIENCE: "${OIDC_PUBLIC_AUDIENCE:-}"' : "",
+    "    ports:", '      - "127.0.0.1:3000:80"',
   );
   if (c.database === "postgresql") {
     services.push("  db:", "    image: postgres:17-alpine", "    environment:",
@@ -246,7 +246,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "- Frontend: " + c.frontends.join(", "), "- Database: " + c.database,
       "- Deploy target: " + c.deployment, "", "## Rischi e alternative", "", done("adversarial")),
     "docker/compose.yml": dockerCompose(c),
-    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "OIDC_PUBLIC_AUTHORITY=", "OIDC_PUBLIC_CLIENT_ID=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
+    "docker/.env.example": lines("# Copiare in docker/.env; NON committare il file reale", "DB_PASSWORD=replace-with-a-strong-password", "DB_ROOT_PASSWORD=replace-with-a-strong-password", "APP_ENVIRONMENT=Development", "PUBLIC_API_URL=http://localhost:8080", "AUTH_MODE=oidc", "AUTH_AUTHORITY=", "OIDC_PUBLIC_AUTHORITY=", "OIDC_PUBLIC_CLIENT_ID=", "OIDC_PUBLIC_AUDIENCE=", "AUTH_ISSUER=factory-local", "AUTH_AUDIENCE=factory-web", "AUTH_SIGNING_KEY=", "DATABASE_URL=", "MINIO_USER=localadmin", "MINIO_PASSWORD=replace-with-a-strong-password"),
     "docker/Api.Dockerfile": lines("FROM mcr.microsoft.com/dotnet/sdk:" + c.dotnetVersion + " AS build",
       "WORKDIR /app", "COPY src/backend/ ./src/backend/", "RUN dotnet publish src/backend/applications/Api/Api.csproj -c Release -o /out",
       "FROM mcr.microsoft.com/dotnet/aspnet:" + c.dotnetVersion, "WORKDIR /app", "COPY --from=build /out ./",
@@ -388,9 +388,9 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "",
       "Per impostazione predefinita la API richiede Auth__Mode=oidc e Auth__Authority (issuer OIDC), Auth__Audience e i JWT di accesso firmati con chiave asimmetrica RS256 pubblicata su JWKS.",
       "Configura un client pubblico Authorization Code + PKCE nel provider identita con redirect URI dell'app /auth/callback, post-logout URI / e origini CORS per il token endpoint.",
-      "Nel docker/.env imposta AUTH_MODE=oidc, AUTH_AUTHORITY=https://issuer.example, AUTH_AUDIENCE, OIDC_PUBLIC_AUTHORITY=https://issuer.example, OIDC_PUBLIC_CLIENT_ID=<client-id>.",
-      "Le ultime tre variabili VITE_OIDC_* sono parametri pubblici del client, NON chiavi segrete. Non esporre signing key o client secret in React.",
-      "La SPA usa oidc-client-ts per redirect con PKCE, validazione di state/nonce, callback e logout; Nginx permette il fallback SPA su /auth/callback.",
+      "Nel docker/.env imposta AUTH_MODE=oidc, AUTH_AUTHORITY=https://issuer.example, AUTH_AUDIENCE, OIDC_PUBLIC_AUTHORITY=https://issuer.example, OIDC_PUBLIC_CLIENT_ID=<client-id> e OIDC_PUBLIC_AUDIENCE (uguale all\u0027audience API). Le tre variabili OIDC_PUBLIC_* sono pubbliche, non chiavi segrete.",
+      "Le variabili VITE_OIDC_* sono parametri pubblici del client, NON chiavi segrete. Non esporre signing key o client secret in React. In sviluppo legacy le tre OIDC_PUBLIC_* devono essere vuote anche quando AUTH_AUDIENCE e valorizzata.",
+      "La SPA usa oidc-client-ts per redirect con PKCE, validazione di state/nonce, callback e logout; Nginx permette il fallback SPA su /auth/callback. Docker Compose e solo un default locale: web e API ascoltano su 127.0.0.1 e non espongono HTTP sulla rete esterna. APP_ENVIRONMENT=Development abilita il demo locale; per un deploy dietro reverse proxy HTTPS impostare APP_ENVIRONMENT=Production, PUBLIC_API_URL=https://api.example (URL raggiungibile dal browser, NON host Docker interno), AUTH_MODE=oidc con issuer HTTPS e le tre OIDC_PUBLIC_* complete. Configurare a parte TLS, proxy, CORS e redirect URI con IdP reale.",
       "La modalita Auth__Mode=legacy con Auth__SigningKey e disponibile solo in Development per test senza identity provider, e rifiutata in Production.",
       "HTTPS e obbligatorio per authority/discovery OIDC in Production. E2E con provider di test HTTP solo sulla rete Docker interna della CI.",
       "La distribuzione Nginx rigenera una CSP applicata alla build usando gli origin pubblici VITE_API_URL e VITE_OIDC_AUTHORITY. Script inline/eval vietati, HTTP remoto vietato salvo fixture CI privata. Le tre variabili pubbliche OIDC (authority/client ID/audience) devono essere tutte presenti oppure tutte assenti: la build rifiuta configurazioni parziali. Nginx applica Cache-Control no-store a tutte le risposte, inclusa /auth/callback, impedendo cache HTTP di callback e HTML; anche gli asset statici non saranno cacheable. Configura HTTPS con provider reale e TLS/reverse proxy/CDN senza riabilitare la cache delle callback per un deploy pubblico.",
