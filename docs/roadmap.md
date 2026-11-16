@@ -516,3 +516,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Proteggere `preflight.mjs --env-file`: un solo FD O_NOFOLLOW, owner euid, mode esatto 0600, nlink=1, dimensione 1..32768 byte, lettura esatta e secondo fstat vincolato a inode, permessi e timestamp; errori statici senza leak di credenziali.
 - Test Node deterministici su symlink, mode/link/owner/size invalidi, mutate durante read (rewrite same-size, append/truncate/chmod/hardlink), short read e fstat spoof; mantenere parser e preflight host/HTTPS preesistenti.
 - ADR 0021. La prova vera su VM Docker rootless, Cloudflare Tunnel/Access, IAM, fencing e firma off-host resta in #2.
+
+
+## v0.2 — Preflight Compose: allowlist dei servizi e isolamento mount (#65)
+
+- Rifiutare ogni servizio aggiuntivo al Compose risolto oltre a API, worker e tunnel opzionale; impedire il falso `status:passed` di un progetto con sidecar privilegiato o porte pubbliche non validate.
+- Denegare a `cloudflared` qualsiasi mount, device o namespace condiviso; imporre path host canonici sicuri e data/work non sovrapposti. Preservare solo il socket dedicato `/run/user/1000/docker.sock` del worker.
+- Regressioni Node su override sidecar, tunnel host mount, path traversal e profili validi, più smoke Compose CI. ADR 0022; VM rootless e Cloudflare Access reali non ancora attestati (#2).

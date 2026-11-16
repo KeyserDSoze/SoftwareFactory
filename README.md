@@ -335,3 +335,9 @@ La [#63](https://github.com/KeyserDSoze/SoftwareFactory/issues/63) aggiunge un c
 ## Avanzamento #64 — lettura sicura del file di preflight VM (16 novembre 2026)
 
 La [#64](https://github.com/KeyserDSoze/SoftwareFactory/issues/64) protegge la configurazione privata del preflight di deploy (`--env-file`), che può contenere `RUNNER_API_KEY`: la precedente sequenza `lstat(path)` / `readFile(path)` poteva controllare un inode e leggerne un altro dopo una sostituzione concorrente, senza alcun limite di dimensione. Ora la CLI usa **un solo file descriptor `O_NOFOLLOW`** con owner/euid, mode esatto 0600, nlink=1, massimo 32KiB e confronto pre/post lettura di inode/metadati. Un file modificato nel mezzo, troncato, allungato o sostituito non produce una configurazione utilizzabile. I test simulano race e letture corrotte, senza stampare credenziali. La CLI conserva i controlli rootless/HTTPS esistenti; occorre ancora eseguirli su VM reale con Cloudflare Access e attestazione indipendente (#2).
+
+
+---
+## Avanzamento #65 — preflight Compose completo senza sidecar inattesi (16 novembre 2026)
+
+La [#65](https://github.com/KeyserDSoze/SoftwareFactory/issues/65) corregge un bypass del preflight di deployment: prima era possibile aggiungere un servizio Compose non previsto, anche privilegiato e con porte pubbliche, e ottenere comunque `status:passed` perché il verificatore ignorava i sidecar. Ora il Compose risolto può contenere **solo** `runner-api`, `runner-worker` e l'eventuale `cloudflared`. Il tunnel non può montare volumi o directory host, dispositivi o namespace di altri servizi; le mount API/worker richiedono sorgenti canoniche non di sistema e directory data/work separate. L'unico socket rootless ammesso è quello montato dal worker. I test rifiutano configurazioni con debug proxy, container estranei, secret mount e path non canonici. La validazione statica non equivale a una prova di isolamento su VM rootless o Cloudflare Access reale (#2).
