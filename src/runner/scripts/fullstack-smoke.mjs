@@ -260,7 +260,17 @@ try {
     "--env=E2E_WEB_SERVER_EXTERNAL=false",
   );
   assert.ok(!args.some(a => a.startsWith("-p") || a.startsWith("--publish")));
-  const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack");
+  // Trusted rootful GitHub-hosted CI exception for the fullstack test only.
+  // Production runner-worker uses the default rootless guard on every step.
+  const ciRootfulSmokeProbe = async () => {
+    assert.equal(process.env.GITHUB_ACTIONS, "true");
+    assert.equal(process.env.CI, "true");
+    assert.notEqual(uid, 0);
+    return true;
+  };
+  const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack", {
+    probeDocker: ciRootfulSmokeProbe,
+  });
   if (outcome.state !== "passed" || !/17 passed/.test(outcome.stdout)) {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
     const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
