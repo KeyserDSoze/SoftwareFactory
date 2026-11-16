@@ -233,3 +233,8 @@ Le app React/PostgreSQL generate ora trattano il logout come una **barriera term
 ## Retry-After corretto dopo riduzione del rate limit (#46)
 
 Riducendo `RUNNER_MAX_ACCEPTED_PER_MINUTE` mentre ci sono ancora job accettati nel minuto precedente, il runner continua a contare **tutti** i job conservati e ora indica un `Retry-After` coerente con il nuovo limite. Con 3 job recenti e nuovo limite 1, aspetta che scadano abbastanza accettazioni, non soltanto quella più vecchia. L'header resta limitato a 1–60 secondi e non crea alcuna prenotazione. La suite Node prova due API con volume condiviso e catene di evidenza valide, senza modificare idempotenza o permessi. Non è un rate limiter per tenant o multi-host (#2).
+
+
+## Letture heartbeat senza falsi 503 durante rename atomico (#47)
+
+Sui filesystem POSIX un'API può aprire il vecchio heartbeat poco prima che il worker lo sostituisca: `fstat` sul file già aperto vede allora `nlink=0`, pur se il nuovo heartbeat è perfettamente valido. Il runner ora distingue questa rotazione da un hardlink sospetto e ripete brevemente **l'intera lettura sicura** del nuovo inode, senza mai accettare l'inode scollegato. I casi di file non sicuri, danneggiati, scaduti o daemon non rootless restano 503. Test Node coprono l'inode POSIX e due API sotto aggiornamenti rapidi; non è verifica di Docker rootless su VM reale (#2).

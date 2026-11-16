@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, symlink, chmod, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, chmod, writeFile, open } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
 import { atomicWrite } from "../common.mjs";
-import { startWorkerHeartbeat, readWorkerHeartbeat, readDockerExecutionReadiness,
-  isPrivateWorkerHeartbeatFile } from "../heartbeat.mjs";
+import { startWorkerHeartbeat, readWorkerHeartbeat, readWorkerHeartbeatForHttp,
+  readDockerExecutionReadiness, isPrivateWorkerHeartbeatFile,
+  isRotatedWorkerHeartbeatFile } from "../heartbeat.mjs";
 
 const key = "runner-heartbeat-integration-key-abcdefghijklmnopqrstuvwxyz";
 const origin = "http://localhost:5173";
@@ -23,6 +24,41 @@ test("heartbeat is an owner-only regular single-inode file owned by effective UI
   assert.equal(isPrivateWorkerHeartbeatFile({ ...stat, mode: 0o100644 }, 1000), false);
   assert.equal(isPrivateWorkerHeartbeatFile({ ...stat, size: 1100 }, 1000), false);
   assert.equal(isPrivateWorkerHeartbeatFile({ ...stat, isFile: () => false }, 1000), false);
+});
+
+test("atomic rename unlinks an already-open heartbeat FD without creating a hardlink", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-heartbeat-rotated-inode-"));
+  const file = path.join(dataDir, "worker-heartbeat.json");
+  let fd;
+  try {
+    const old = { version: 1, instanceId: randomUUID(),
+      startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    await atomicWrite(file, old);
+    fd = await open(file, "r");
+    assert.equal((await fd.stat()).nlink, 1);
+    await atomicWrite(file, { ...old, updatedAt: new Date().toISOString() });
+    const oldInode = await fd.stat();
+    assert.equal(oldInode.nlink, 0,
+      "an opened inode is unlinked once atomically replaced by rename()");
+    assert.equal(isRotatedWorkerHeartbeatFile(oldInode), true);
+    assert.equal(isPrivateWorkerHeartbeatFile(oldInode), false,
+      "never trust a stale unlinked inode as the current heartbeat");
+    const current = await readWorkerHeartbeatForHttp(dataDir);
+    assert.equal(current.version, 1, "fresh open reads the new valid file");
+    const newlyOpened = await open(file, "r");
+    try {
+      assert.equal(isRotatedWorkerHeartbeatFile(await newlyOpened.stat()), false);
+    } finally { await newlyOpened.close(); }
+    await chmod(file, 0o644);
+    await assert.rejects(readWorkerHeartbeatForHttp(dataDir),
+      "reopen must still reject unsafe permissions");
+    assert.equal(isRotatedWorkerHeartbeatFile(
+      { isFile: () => true, nlink: 2 }), false,
+      "a hardlinked inode is a security error, not a retryable rotation");
+  } finally {
+    if (fd) await fd.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("two APIs distinguish live HTTP liveness from authenticated worker readiness", async () => {
@@ -73,6 +109,13 @@ test("two APIs distinguish live HTTP liveness from authenticated worker readines
       assert.equal(ready.headers.get("cache-control"), "no-store");
       assert.equal((await request(i, "/v1/execution-readiness")).status, 503,
         "worker liveness alone must not claim a rootless Docker daemon");
+    }
+    // Many authenticated GETs overlap repeated atomic renames on both API
+    // replicas; an unlinked-but-open inode must trigger a fresh full read.
+    for (let i = 0; i < 100; i++) {
+      const ready = await request(i % 2, "/v1/readiness");
+      assert.equal(ready.status, 200,
+        "no false worker_unavailable during atomic heartbeat inode replacement");
     }
     // A long awaited Docker operation must not suspend the independent timer.
     await sleep(130);

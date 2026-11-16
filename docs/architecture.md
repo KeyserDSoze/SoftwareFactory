@@ -278,3 +278,8 @@ Dopo la verifica RS256/JWKS dell'access token, le policy ASP.NET Core dei WorkIt
 ### Rate-limit rolling: Retry-After dopo configurazioni ridotte (#46)
 
 La quota di ammissione globale è valutata sotto lo stesso lock POSIX condiviso. Una nuova configurazione più restrittiva può osservare N job recenti dove N supera il nuovo cap C; il calcolo della scadenza usa l'elemento cronologico `N-C` e non il timestamp minimo, perché soltanto dopo la scadenza di N-C+1 accettazioni rimangono meno di C record nella finestra. Ogni timestamp è derivato da report/journal SHA verificato; record futuri continuano a pesare conservativamente e `Retry-After` rimane un hint HTTP 1–60s. Nessuna nuova credenziale, storage o IAM tenant è introdotta e la #2 rimane aperta.
+
+
+### Inode heartbeat rimpiazzato dopo open e prima di fstat (#47)
+
+La scrittura atomica mediante rename sostituisce l'inode. Su POSIX un FD già aperto sul vecchio file può riportare `nlink=0` pur in presenza del nuovo file regolare; il precedente validator `nlink===1` lo trattava come un heartbeat invalido senza nuovo tentativo, generando 503 intermittenti durante polling rapido. L'API ora identifica il solo caso di inode regolare *unlinked* e ripete la verifica completa con un nuovo FD, fino a tre tentativi, senza mai dichiarare ready su inode non collegati. Hardlink, symlink, permessi e UID errati, JSON invalido, timestamp futuri/scaduti o probe Docker non-rootless non diventano autorizzati. Non cambia il confine di fiducia del daemon né fornisce prove off-host (#2).

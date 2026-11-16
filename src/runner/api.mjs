@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
-import { readWorkerHeartbeat, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
+import { readWorkerHeartbeatForHttp, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -94,7 +94,7 @@ export function createRunnerServer({
       // Readiness is not liveness. Do not expose host paths or internal
       // exceptions, and do not claim Docker rootless/SDK/test attestation.
       try {
-        await readWorkerHeartbeat(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
+        await readWorkerHeartbeatForHttp(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
         send(200, { status: "ready", worker: "responsive" });
       } catch {
         res.writeHead(503, { ...headers, "Retry-After": "5" });

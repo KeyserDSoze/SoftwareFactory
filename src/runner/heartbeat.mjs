@@ -14,8 +14,17 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const FILE = "worker-heartbeat.json";
 const stale = () => new Error("Worker heartbeat unavailable");
+const rotated = () => Object.assign(stale(), { code: "HEARTBEAT_ROTATED" });
 export const DEFAULT_WORKER_HEARTBEAT_INTERVAL_MS = 5000;
 
+/** open() may precede an atomic rename: the old FD is still readable but
+ * its inode is unlinked (nlink=0). This is NOT a safe current snapshot;
+ * retry with a NEW open() rather than accepting it as a valid heartbeat.
+ * An actual hardlink (nlink>1) remains a permanent security rejection.
+ */
+export function isRotatedWorkerHeartbeatFile(stat) {
+  return stat.isFile() && stat.nlink === 0;
+}
 export function isPrivateWorkerHeartbeatFile(stat, effectiveUid = process.geteuid?.()) {
   return Number.isSafeInteger(effectiveUid) && effectiveUid >= 0 &&
     stat.isFile() && stat.uid === effectiveUid && stat.nlink === 1 &&
@@ -38,6 +47,7 @@ export async function readWorkerHeartbeat(dataDir, maxAgeMs = 30_000, nowMs = un
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const info = await fd.stat();
+    if (isRotatedWorkerHeartbeatFile(info)) throw rotated();
     if (!isPrivateWorkerHeartbeatFile(info)) throw stale();
     const raw = await fd.readFile("utf8");
     if (Buffer.byteLength(raw, "utf8") > 1024) throw stale();
@@ -71,6 +81,20 @@ export async function readWorkerHeartbeat(dataDir, maxAgeMs = 30_000, nowMs = un
     return value;
   } finally {
     await fd.close();
+  }
+}
+
+/** Every attempt opens and checks a fresh inode. Only the POSIX rename race
+ * is retryable here; missing, stale, corrupt, symlinked, insecure or hardlinked
+ * files never turn into 200 through this wrapper.
+ */
+export async function readWorkerHeartbeatForHttp(dataDir, maxAgeMs = 30_000) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await readWorkerHeartbeat(dataDir, maxAgeMs); }
+    catch (error) {
+      if (error.code !== "HEARTBEAT_ROTATED" || attempt === 2) throw error;
+      await sleep(15);
+    }
   }
 }
 

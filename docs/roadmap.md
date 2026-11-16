@@ -389,3 +389,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Calcolo di backoff dopo riduzione `RUNNER_MAX_ACCEPTED_PER_MINUTE` da 3 a 1 senza scartare job già accettati: attendere la scadenza del record ordinato `N - cap` nella finestra, non `min(recent)`.
 - Prove su cap 0, scadenze esatte, array non ordinati, acceptedAt duplicati/futuri e due API con tre journal/report SHA validi; HTTP 429 e nessuna directory aggiunta. Limite global POSIX, non tenant/IP e non un token bucket distribuito: #2 resta aperta.
+
+
+## v0.2 — Reader POSIX heartbeat resilient a rename atomico (#47)
+
+- Distinguere l'FD aperto prima di un rename (`fstat.nlink=0`) da un hardlink o un file persistentemente insicuro. Non accettare inode unlinked: soltanto l'errore mirato può provocare fino a tre nuovi `open+verify` in `/v1/readiness`.
+- Test Node controllano l'effetto POSIX reale e due API con cento GET mentre il writer esegue rename a 20ms. Continuano i rifiuti fail-closed per permessi errati, hardlink, timestamp e daemon rootful; l'epica #2 rimane aperta.
