@@ -509,3 +509,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Aggiungere CLI di riconciliazione canary separata dal cleanup dei job, con UUID non segreto emesso prima di `create`, dry-run di default, `--apply --confirm-canary` esplicito e divieto di cleanup generico.
 - Verificare che ogni `ps`/`inspect`/`rm` usi un probe rootless fresco e lo stesso socket Unix locale. Accettare un unico container con label/nome/ID completi, configurazione di sicurezza esatta, stato `created/exited` non-running; doppia ispezione e `rm -f <ID completo>` soltanto dopo conferma.
 - Test Node positivi/negativi su rootful/lost daemon, credenziali nei messaggi Docker, rimpiazzo ID e stato, container malevoli, parsing CLI e non-root. Nessun delete per label falsa o job container. ADR 0020; l'epica #2 resta aperta per host rootless effettivo e attestazione indipendente.
+
+
+## v0.2 — Preflight .env privato con file descriptor stabile (#64)
+
+- Proteggere `preflight.mjs --env-file`: un solo FD O_NOFOLLOW, owner euid, mode esatto 0600, nlink=1, dimensione 1..32768 byte, lettura esatta e secondo fstat vincolato a inode, permessi e timestamp; errori statici senza leak di credenziali.
+- Test Node deterministici su symlink, mode/link/owner/size invalidi, mutate durante read (rewrite same-size, append/truncate/chmod/hardlink), short read e fstat spoof; mantenere parser e preflight host/HTTPS preesistenti.
+- ADR 0021. La prova vera su VM Docker rootless, Cloudflare Tunnel/Access, IAM, fencing e firma off-host resta in #2.
