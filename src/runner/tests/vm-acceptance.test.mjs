@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { readPrivateEnv } from "../preflight.mjs";
 import { main, runVmAcceptance } from "../scripts/vm-acceptance.mjs";
 
 const image = "node@sha256:" + "a".repeat(64);
@@ -13,6 +17,10 @@ const host = { mode: "host", status: "passed", uid: 1000,
 const canary = { status: "passed", dockerRootless: true,
   network: "none", readonlyRootfs: true,
   capsDropped: true, cleanup: "verified" };
+const privateEnv = Object.freeze({
+  RUNNER_API_KEY: "k".repeat(40),
+  RUNNER_ALLOWED_ORIGINS: "https://factory.example.net",
+});
 const receipt = (mode = "inline", operators = false) => ({
   version: 1, scope: "local-vm", status: "passed",
   authMode: mode, operatorRegistry: operators, canaryId: id,
@@ -26,7 +34,7 @@ const flags = (mode, operators) => [
   ...(operators ? ["--operator-registry"] : []),
 ];
 const fixture = (mode = "inline", operators = false) => {
-  const calls = [], recovered = [];
+  const calls = [], recovered = [], envReads = [];
   const preflightCheck = async argv => {
     calls.push(["preflight", ...argv]);
     if (argv[0] === "compose") return compose;
@@ -43,7 +51,12 @@ const fixture = (mode = "inline", operators = false) => {
     recovered.push(value);
     calls.push(["recovery", value]);
   };
-  return { calls, recovered, preflightCheck, canaryCheck, writeRecovery };
+  const readEnv = async filename => {
+    envReads.push(filename);
+    return { ...privateEnv };
+  };
+  return { calls, recovered, envReads, readEnv,
+    preflightCheck, canaryCheck, writeRecovery };
 };
 
 test("VM acceptance checks Compose, host and real rootless canary in that exact order", async () => {
@@ -53,6 +66,8 @@ test("VM acceptance checks Compose, host and real rootless canary in that exact 
     ...f,
   });
   assert.deepEqual(result, receipt());
+  assert.deepEqual(f.envReads, [envFile, envFile, envFile, envFile],
+    "secure private env must be checked before and after each gate");
   assert.deepEqual(f.calls, [
     ["preflight", "compose", ...flags("inline", false)],
     ["preflight", "host", ...flags("inline", false)],
@@ -190,6 +205,128 @@ test("failing or misleading canary never produces passed receipt; recovery UUID 
     }), error => error.message === "VM acceptance denied; manual investigation required");
     assert.deepEqual(f.recovered, ["ROOTLESS_CANARY_ID=" + id + "\n"]);
     assert.equal(f.calls.at(-1)[0], "canary");
+  }
+});
+
+
+test("VM acceptance rejects drift after Compose before any host or canary probe", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.readEnv = async () => {
+    reads++;
+    return reads === 1 ? privateEnv : { ...privateEnv, RUNNER_API_KEY: "x".repeat(40) };
+  };
+  await assert.rejects(runVmAcceptance({
+    envFile, image, confirmed: true, uid: 1000, id, ...f,
+  }), error => error.message === "VM acceptance denied; manual investigation required");
+  assert.equal(reads, 2);
+  assert.deepEqual(f.calls.map(x => x[0]), ["preflight"]);
+  assert.deepEqual(f.recovered, []);
+});
+
+test("VM acceptance detects missing or changed key after host, before canary", async () => {
+  for (const revision of [
+    { ...privateEnv, RUNNER_API_KEY: "z".repeat(40) },
+    { RUNNER_ALLOWED_ORIGINS: privateEnv.RUNNER_ALLOWED_ORIGINS },
+    null,
+  ]) {
+    const f = fixture();
+    let reads = 0;
+    f.readEnv = async () => {
+      reads++;
+      return reads === 3 ? revision : privateEnv;
+    };
+    await assert.rejects(runVmAcceptance({
+      envFile, image, confirmed: true, uid: 1000, id, ...f,
+    }), /VM acceptance denied/);
+    assert.equal(reads, 3);
+    assert.deepEqual(f.calls.map(x => x[0]), ["preflight", "preflight"]);
+    assert.deepEqual(f.recovered, []);
+  }
+});
+
+test("VM acceptance denies a rotated env after successful canary/cleanup", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.readEnv = async () => {
+    reads++;
+    return reads === 4
+      ? { ...privateEnv, RUNNER_ALLOWED_ORIGINS: "https://other.example.net" }
+      : privateEnv;
+  };
+  await assert.rejects(runVmAcceptance({
+    envFile, image, confirmed: true, uid: 1000, id, ...f,
+  }), /VM acceptance denied/);
+  assert.equal(reads, 4);
+  assert.deepEqual(f.calls.map(x => x[0]),
+    ["preflight", "preflight", "recovery", "canary"]);
+  assert.deepEqual(f.recovered, ["ROOTLESS_CANARY_ID=" + id + "\n"]);
+});
+
+test("VM acceptance accepts equivalent reordered env keys without exposing them", async () => {
+  const f = fixture();
+  let reads = 0;
+  f.readEnv = async () => {
+    reads++;
+    return reads % 2 === 0
+      ? { RUNNER_ALLOWED_ORIGINS: privateEnv.RUNNER_ALLOWED_ORIGINS,
+          RUNNER_API_KEY: privateEnv.RUNNER_API_KEY }
+      : privateEnv;
+  };
+  const report = await runVmAcceptance({
+    envFile, image, confirmed: true, uid: 1000, id, ...f,
+  });
+  assert.deepEqual(report, receipt());
+  assert.equal(reads, 4);
+  assert.ok(!JSON.stringify(report).includes(privateEnv.RUNNER_API_KEY));
+  assert.ok(!JSON.stringify(report).includes(privateEnv.RUNNER_ALLOWED_ORIGINS));
+});
+
+test("VM acceptance fails closed on private env read errors without leaking secrets", async () => {
+  for (const at of [1, 2, 3, 4]) {
+    const f = fixture();
+    let reads = 0;
+    f.readEnv = async () => {
+      reads++;
+      if (reads === at) throw Error("RUNNER_API_KEY=private-secret-never-log");
+      return privateEnv;
+    };
+    await assert.rejects(runVmAcceptance({
+      envFile, image, confirmed: true, uid: 1000, id, ...f,
+    }), error => error.message === "VM acceptance denied; manual investigation required");
+    assert.equal(reads, at);
+    assert.equal(f.calls.some(x => x[0] === "canary"), at === 4);
+    assert.equal(f.recovered.length, at === 4 ? 1 : 0);
+  }
+});
+
+test("VM acceptance detects actual atomic private env file rename between gates", {
+  skip: process.platform !== "linux",
+}, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-vm-acceptance-"));
+  try {
+    const filename = path.join(dir, "operator.env");
+    const rotated = path.join(dir, "incoming.env");
+    await writeFile(filename, "RUNNER_API_KEY=" + "k".repeat(40) + "\n", { mode: 0o600 });
+    await writeFile(rotated, "RUNNER_API_KEY=" + "r".repeat(40) + "\n", { mode: 0o600 });
+    const f = fixture();
+    f.readEnv = readPrivateEnv;
+    f.preflightCheck = async argv => {
+      f.calls.push(["preflight", ...argv]);
+      // Real rename changes the file path to a different private inode.
+      if (argv[0] === "compose") {
+        await rename(rotated, filename);
+        return compose;
+      }
+      assert.fail("host must not run after env rotation");
+    };
+    await assert.rejects(runVmAcceptance({
+      envFile: filename, image, confirmed: true, uid: 1000, id, ...f,
+    }), error => error.message === "VM acceptance denied; manual investigation required");
+    assert.deepEqual(f.calls.map(x => x[0]), ["preflight"]);
+    assert.deepEqual(f.recovered, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

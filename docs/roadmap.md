@@ -594,3 +594,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Nuova CLI manuale/operator-only con UID 1000, flag `--confirm`, env 0600 e digest Node immutabile pre-cached; controlla sequenzialmente Compose, host e canary reale **sulla socket del daemon rootless host**. Tutti i gate devono passare e la cleanup essere verificata prima di emettere receipt minimale priva di segreti.
 - Test Node su profili, ordering, cancellazione/abort, receipt e no secret leak; ADR 0034, README e runner guide. Non è prova VM reale finché non è eseguita da un operatore sulla VM; CI usa Docker rootful solo per component smoke. Sono ancora aperti la verifica HTTPS/Cloudflare off-host, il fencing cross-host e l'attestazione indipendente in #2.
+
+## v0.2 — Acceptance VM con rilevamento rotazione env tra gate (#78)
+
+- `vm-acceptance` valida subito il private env con single-FD stabile, mode 0600 e UID del proprietario; confronta tutti i valori dopo Compose, host e canary. Fail-closed su rotazione, eliminazione, path non sicuro e read errors; nessuna credenziale/impronta in ricevuta.
+- Test Node per differenze, reordered equivalenti, failure con segreti, rename atomico reale su filesystem privato; ADR 0035. Resta da collaudare sulla vera VM rootless e dietro Cloudflare esterno, senza fingere transazioni/fencing atomici (#2).

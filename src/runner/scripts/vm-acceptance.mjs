@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { main as preflight } from "../preflight.mjs";
+import { main as preflight, readPrivateEnv } from "../preflight.mjs";
 import { runRootlessCanary } from "./rootless-canary.mjs";
 
 const IMAGE = /^node@sha256:[a-f0-9]{64}$/;
@@ -16,6 +16,19 @@ const validPrivateEnvPath = value => typeof value === "string" &&
   value.length > 1 && value.length <= 4096 &&
   !/[\0\r\n]/.test(value) && path.isAbsolute(value) &&
   path.resolve(value) === value;
+
+// Both preflight stages resolve the operator .env separately. Pin its
+// *effective* private configuration across each gate with fresh, single-FD
+// readPrivateEnv checks; never return, print or persist secrets/fingerprints.
+// This catches ordinary atomic rotation but cannot prevent a swap+restore
+// between two point-in-time reads.
+const stableEnvironment = value => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) refused();
+  const keys = Object.keys(value).sort();
+  if (keys.some(key => !/^[A-Z][A-Z0-9_]*$/.test(key) ||
+      typeof value[key] !== "string")) refused();
+  return JSON.stringify(keys.map(key => [key, value[key]]));
+};
 
 const isComposeProof = proof => proof?.mode === "compose" &&
   proof.status === "passed" && proof.apiLoopbackOnly === true &&
@@ -41,12 +54,14 @@ const profileFlags = (authMode, operators) => [
 ];
 
 /** All injectable callbacks are trusted Node TEST seams, not CLI arguments.
- * The real CLI always performs the actual preflight and Docker operations.
+ * The real CLI always performs the actual single-FD private env reads,
+ * preflight and Docker operations.
  */
 export async function runVmAcceptance({
   envFile, image, authMode = "inline", operatorRegistry = false,
   confirmed = false, uid = process.getuid?.(), id = randomUUID(),
   preflightCheck = (argv) => preflight(argv, { write: () => {} }),
+  readEnv = readPrivateEnv,
   canaryCheck = runRootlessCanary,
   writeRecovery = value => process.stderr.write(value),
 } = {}) {
@@ -60,9 +75,17 @@ export async function runVmAcceptance({
   const flags = ["--env-file=" + envFile,
     ...profileFlags(authMode, operatorRegistry)];
   try {
+    // Reject an unsafe/non-private env *before* even running Compose.
+    // Check for replacement after every gate, including Docker canary.
+    const initialEnv = stableEnvironment(await readEnv(envFile));
+    const unchanged = async () => {
+      if (stableEnvironment(await readEnv(envFile)) !== initialEnv) refused();
+    };
     const compose = await preflightCheck(["compose", ...flags]);
+    await unchanged();
     if (!isComposeProof(compose)) refused();
     const host = await preflightCheck(["host", ...flags]);
+    await unchanged();
     if (!isHostProof(host, authMode, operatorRegistry)) refused();
     // Printed *after* both preflight gates but *before* Docker create:
     // operator can investigate an interrupted create with canary-reconcile.
@@ -70,6 +93,7 @@ export async function runVmAcceptance({
     const canary = await canaryCheck({
       image, confirmed: true, host: VM_DOCKER_HOST, id,
     });
+    await unchanged();
     if (!isCanaryProof(canary)) refused();
     // A local, unsigned summary, NOT independent attestation or Cloudflare proof.
     return {
