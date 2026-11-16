@@ -395,3 +395,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Distinguere l'FD aperto prima di un rename (`fstat.nlink=0`) da un hardlink o un file persistentemente insicuro. Non accettare inode unlinked: soltanto l'errore mirato può provocare fino a tre nuovi `open+verify` in `/v1/readiness`.
 - Test Node controllano l'effetto POSIX reale e due API con cento GET mentre il writer esegue rename a 20ms. Continuano i rifiuti fail-closed per permessi errati, hardlink, timestamp e daemon rootful; l'epica #2 rimane aperta.
+
+
+## v0.2 — Hardening dei file Ed25519 sulla postazione esterna (#48)
+
+- Eliminare `lstat→readFile` su evidence, receipt e key PEM: aprire una FD con `O_NOFOLLOW`, verificare `fstat`, leggere con limite, ripetere `fstat` per rilevare modifica/unlink durante la lettura, chiudere FD sempre.
+- Vincoli owner/mode, hardlink e lunghezza per private signing key e public trust anchor; export JSON fino a 4 MB, receipt limitata a 20 KB. La firma/manual verification rimangono retrocompatibili, senza alcuna chiave privata nel runner.
+- CI con file realmente symlinked/hardlinked, chiavi pubbliche scrivibili, evidence oversize e file validi; prove VM rootless, servizio di firma remoto e anchor indipendente persistente ancora in #2.

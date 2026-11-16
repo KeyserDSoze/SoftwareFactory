@@ -3,7 +3,8 @@
  * prove that a Docker run happened or that the signer inspected real hardware.
  */
 import { KeyObject, createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
-import { lstat, readFile, writeFile } from "node:fs/promises";
+import { open, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyEvidenceExport } from "./evidence.mjs";
@@ -74,18 +75,62 @@ export function verifySignedEvidence(bundle, receipt, trustedPublicKeySource) {
       signerKeySha256: receipt.signerKeySha256 };
   } catch { throw invalid(); }
 }
-async function readBoundedJson(filename) {
-  const info = await lstat(filename);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 4_000_000)
-    throw invalid();
-  return JSON.parse(await readFile(filename, "utf8"));
+// All security metadata belongs to the opened inode, not the pathname. The
+// offline signer/verifier intentionally refuses platforms without O_NOFOLLOW.
+const FILE_LIMITS = Object.freeze({
+  evidence: 4_000_000,
+  receipt: 20_000,
+  "private-key": 20_000,
+  "public-key": 20_000,
+});
+export function isSafeAttestationFile(stat, kind, effectiveUid = process.geteuid?.()) {
+  const limit = FILE_LIMITS[kind];
+  if (!limit || stat?.isFile?.() !== true || stat.nlink !== 1 ||
+      !Number.isSafeInteger(stat.size) || stat.size < 1 || stat.size > limit)
+    return false;
+  if (kind === "private-key")
+    return Number.isSafeInteger(effectiveUid) && stat.uid === effectiveUid &&
+      (stat.mode & 0o077) === 0;
+  if (kind === "public-key")
+    return Number.isSafeInteger(effectiveUid) && stat.uid === effectiveUid &&
+      (stat.mode & 0o022) === 0;
+  return true;
 }
-async function readPrivateKey(filename) {
-  const info = await lstat(filename);
-  if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 ||
-      info.size > 20_000 || info.size === 0)
-    throw invalid();
-  return await readFile(filename);
+/** Single O_NOFOLLOW fd for fstat + bounded read. A growing file must not
+ * bypass the initial size limit, and an unlinked or modified fd must not be
+ * silently accepted as the file the operator approved.
+ */
+async function readAttestationFile(filename, kind) {
+  if (typeof constants.O_NOFOLLOW !== "number") throw invalid();
+  let fd;
+  try {
+    fd = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const first = await fd.stat();
+    if (!isSafeAttestationFile(first, kind)) throw invalid();
+    const limit = FILE_LIMITS[kind];
+    const chunks = [];
+    let total = 0;
+    while (total <= limit) {
+      const chunk = Buffer.alloc(Math.min(32768, limit + 1 - total));
+      const { bytesRead } = await fd.read(chunk, 0, chunk.length, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    if (!total || total > limit) throw invalid();
+    const last = await fd.stat();
+    if (!isSafeAttestationFile(last, kind) ||
+        first.dev !== last.dev || first.ino !== last.ino ||
+        first.size !== last.size || first.mtimeMs !== last.mtimeMs ||
+        first.ctimeMs !== last.ctimeMs || total !== first.size)
+      throw invalid();
+    return Buffer.concat(chunks, total);
+  } catch { throw invalid(); }
+  finally { await fd?.close().catch(() => {}); }
+}
+async function readBoundedJson(filename, kind) {
+  try { return JSON.parse((await readAttestationFile(filename, kind)).toString("utf8")); }
+  catch { throw invalid(); }
 }
 /** Exact argv vocabulary: no secret bytes in args or logs. */
 export async function main(argv = process.argv.slice(2)) {
@@ -101,9 +146,9 @@ export async function main(argv = process.argv.slice(2)) {
     flags[m[1]] = m[2];
   }
   if (expected.some(k => !flags[k])) throw invalid();
-  const bundle = await readBoundedJson(flags.evidence);
+  const bundle = await readBoundedJson(flags.evidence, "evidence");
   if (mode === "sign") {
-    const key = await readPrivateKey(flags["private-key"]);
+    const key = await readAttestationFile(flags["private-key"], "private-key");
     const receipt = signEvidenceBundle(bundle, key);
     await writeFile(flags.out, JSON.stringify(receipt, null, 2) + "\n", {
       mode: 0o600, flag: "wx",
@@ -111,8 +156,8 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write("RUNNER_ATTESTATION_SIGNED\n");
     return receipt;
   }
-  const receipt = await readBoundedJson(flags.receipt);
-  const pub = await readFile(flags["public-key"], "utf8");
+  const receipt = await readBoundedJson(flags.receipt, "receipt");
+  const pub = (await readAttestationFile(flags["public-key"], "public-key")).toString("utf8");
   const status = verifySignedEvidence(bundle, receipt, pub);
   process.stdout.write("RUNNER_ATTESTATION_VERIFIED\n");
   return status;

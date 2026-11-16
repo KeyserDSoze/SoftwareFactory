@@ -238,3 +238,8 @@ Riducendo `RUNNER_MAX_ACCEPTED_PER_MINUTE` mentre ci sono ancora job accettati n
 ## Letture heartbeat senza falsi 503 durante rename atomico (#47)
 
 Sui filesystem POSIX un'API può aprire il vecchio heartbeat poco prima che il worker lo sostituisca: `fstat` sul file già aperto vede allora `nlink=0`, pur se il nuovo heartbeat è perfettamente valido. Il runner ora distingue questa rotazione da un hardlink sospetto e ripete brevemente **l'intera lettura sicura** del nuovo inode, senza mai accettare l'inode scollegato. I casi di file non sicuri, danneggiati, scaduti o daemon non rootless restano 503. Test Node coprono l'inode POSIX e due API sotto aggiornamenti rapidi; non è verifica di Docker rootless su VM reale (#2).
+
+
+## Attestazione offline con letture sicure della chiave (#48)
+
+Il comando `src/runner/attest.mjs` per firmare e verificare le prove con Ed25519 legge ora export, ricevuta, chiave privata e chiave pubblica **dallo stesso file descriptor che ha verificato**, senza seguire symlink. Impone dimensioni limitate, rifiuta hardlink e controlla proprietario/permessi dei file-chiave; la chiave pubblica di fiducia non può essere scrivibile da altri. Eventuali modifiche o sostituzioni del file durante la lettura provocano un errore, senza esporre materiale sensibile nei log. Le firme precedenti restano compatibili: questo hardening non equivale a firma remota automatica o prova di isolamento rootless, ancora nella #2.

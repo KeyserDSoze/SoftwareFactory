@@ -283,3 +283,8 @@ La quota di ammissione globale è valutata sotto lo stesso lock POSIX condiviso.
 ### Inode heartbeat rimpiazzato dopo open e prima di fstat (#47)
 
 La scrittura atomica mediante rename sostituisce l'inode. Su POSIX un FD già aperto sul vecchio file può riportare `nlink=0` pur in presenza del nuovo file regolare; il precedente validator `nlink===1` lo trattava come un heartbeat invalido senza nuovo tentativo, generando 503 intermittenti durante polling rapido. L'API ora identifica il solo caso di inode regolare *unlinked* e ripete la verifica completa con un nuovo FD, fino a tre tentativi, senza mai dichiarare ready su inode non collegati. Hardlink, symlink, permessi e UID errati, JSON invalido, timestamp futuri/scaduti o probe Docker non-rootless non diventano autorizzati. Non cambia il confine di fiducia del daemon né fornisce prove off-host (#2).
+
+
+### File offline Ed25519 legati all'inode verificato (#48)
+
+L'attestatore non deve fare `lstat` su un percorso e poi un `readFile` distinto: una sostituzione tra le due operazioni può sfuggire al controllo su symlink, ownership e size. Adesso ogni input (bundle, receipt, signing key privata e public key trusted) è aperto mediante `O_NOFOLLOW`, controllato con `fstat` sul descriptor, letto bounded sul medesimo inode e controllato di nuovo dopo la lettura. File regolari con `nlink=1`, dimensione 1..limite, UID/mode specifici delle chiavi e assenza di modifica simultanea sono obbligatori. La verifica pubblica accetta 0644 solo se il file è dell'operatore e non group/world writable. Il signing key PEM rimane esclusivamente nella postazione separata dal worker e dall'API; questa misura non attesta l'esecuzione Docker/VM e non pubblica prove in modo automatico (#2).
