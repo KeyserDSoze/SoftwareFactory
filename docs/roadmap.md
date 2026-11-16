@@ -431,3 +431,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Il bearer determina `tenantId` hash-chained del report; GET di ID altrui 404, replay idempotente per tenant, quota queued/retained/minuto tenant-specific in aggiunta al tetto globale, reauthorization e reload quote sotto lock POSIX.
 - Test Node con due API e due tenant dimostrano isolamento JSON/evidence, rifiuto letture incrociate, quote separate, chiave revocata, rate 429, replay e rifiuto del registro non sicuro. Route repair disabilitate in modalità tenant, in attesa di ruolo operator approver specifico.
 - Mancano IAM di utenti e organizzazioni, scheduling/fairness per tenant, multi-host fencing, VM rootless, Cloudflare Access e attestazioni remote indipendenti: #2 resta aperta.
+
+
+## v0.2 — Input del worker letto da FD stabile, limitata e non-follow (#53)
+
+- Protezione `jobs/<id>/input.json` in worker con `O_NOFOLLOW`, `fstat` pre/post, UID owner, hardlink/symlink vietati, mode non group/other writable, cap 8MB e lettura bounded sulla stessa FD; rifiutare JSON e inode instabili.
+- Controllo digest invariato contro report/journal hash-chain, niente Docker su input unsafe, errori generici senza sorgenti. Test Node di lettura POSIX e integrazione `executeJob`; legacy 0644 non scrivibili compatibili.
+- Resta #2 per attestazione off-host, VM Docker rootless, IAM tenant, fencing distribuito e Cloudflare Access realmente verificati.

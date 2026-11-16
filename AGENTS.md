@@ -440,3 +440,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Lettura GET di report/evidence solo per `report.tenantId === principal.id`; ID stranieri 404. In modalità tenant anche un file corrotto risponde 404 per non rivelare esistenza di job stranieri, ma blocca comunque la quota globale al successivo POST. Job legacy privi di tenantId non diventano visibili. **Disabilitare completamente gli operatori e le route repair** in questa prima modalità finché non esistano scope operator/approval per tenant. È una prima separazione client, non IAM utente, VM rootless, attestation indipendente o Cloudflare Access.
 
 - Una riconfigurazione accidentale dalla modalità tenant alla modalità legacy globale NON può esporre i job tenant: GET report/evidence tenant-owned restituisce 404 anche con la vecchia key globale; in modalità legacy il coordinatore repair rifiuta report tenant-owned in begin/retest/approval (409). L'API globale conserva accesso ai vecchi job privi di tenantId.
+
+
+## Input dei job: lettura sicura del worker (#53)
+
+- Il worker legge `jobs/<uuid>/input.json` soltanto tramite `readRunnerInput` (`src/runner/input.mjs`): singola FD `O_NOFOLLOW`, `fstat` prima/dopo, owner UID effettivo, file regolare con `nlink=1`, non group/world writable, 1..8.000.000 byte, inode/size/mode/mtime/ctime invariati.
+- Non sostituire la lettura limitata con `readFile(path)`. Accettare input legacy 0644 solo se non scrivibili da altri; output ed errori non devono contenere sorgenti o percorsi sensibili. Input malformato/unsafe impedisce l'avvio del primo step Docker e non può dare `passed`.
+- Mantenere `validateRequest` e il confronto digest del job rispetto al report+journal verificati, oltre ai test Node POSIX su symlink/hardlink, FD unlinked dopo rename, size, mode e integrazione `executeJob`. Non equivale a isolamento filesystem da un host admin malevolo o a rootless proof (epica #2).

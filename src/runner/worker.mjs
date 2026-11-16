@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from "./common.mjs";
@@ -6,6 +6,7 @@ import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep }
 import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 import { withAdmissionLock } from "./admission.mjs";
 import { startWorkerHeartbeat } from "./heartbeat.mjs";
+import { readRunnerInput } from "./input.mjs";
 
 /** Redact results before either report.json or the evidence journal sees them. */
 function safeStepResult(value) {
@@ -80,7 +81,7 @@ async function executeClaimedJob(id, {
   const reportFile = path.join(dir, "report.json");
   let report = (await verifyJobEvidence(dataDir, id)).report;
   if (report.state !== "queued") return report;
-  const input = JSON.parse(await readFile(path.join(dir, "input.json"), "utf8"));
+  const input = await readRunnerInput(dataDir, id);
   const { request, digest } = validateRequest(input);
   if (digest !== report.digest) throw new Error("Input digest mismatch");
   const destination = path.resolve(workspaceRoot, id);

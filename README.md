@@ -263,3 +263,9 @@ I file `report.json` e `evidence.jsonl` vengono ora letti e verificati **dallo s
 ## Runner multi-tenant sperimentale (#52)
 
 La runner API supporta ora una modalità opt-in `RUNNER_TENANTS_FILE` con credenziali differenti per tenant e quote di ammissione autonome, **aggiuntive** ai limiti globali. Ogni job registra un `tenantId` derivato dalla chiave verificata nel journal SHA, e GET report/evidence respinge con 404 gli ID di altri tenant. La stessa chiave idempotente può essere usata da tenant diversi senza confondere i job. Un registry privato `O_NOFOLLOW` si ricarica a ogni richiesta, consentendo rotazione e revoca senza riavviare due API; la chiave è montata solo nel container API. Il primo milestone **disabilita gli operatori repair** in modalità tenant finché non avranno un IAM esplicito per ambito; modalità a chiave globale rimane invariata. Sono ancora necessari Cloudflare Access, ruoli/identità utenti, approvazioni per tenant, rootless VM reale e attestation off-host (#2).
+
+
+---
+## Avanzamento #53 — input del worker letto su inode fidato (16 novembre 2026)
+
+L'hardening del runner prosegue con la [#53](https://github.com/KeyserDSoze/SoftwareFactory/issues/53): `input.json` viene letto dal worker con `O_NOFOLLOW`, `fstat` prima/dopo e lettura bounded (8MB), senza seguire symlink/hardlink o file sostituiti. Il digest sorgenti viene comunque confrontato col report verificato prima dell'esecuzione; un input non fidato non autorizza Docker o un esito `passed`. Test Node POSIX proteggono file owner/permessi/inode/dimensioni, rollback e integrazione worker. Le prove locali/CI non certificano un host Docker rootless di produzione, attestazioni indipendenti o IAM tenant: la #2 resta aperta.
