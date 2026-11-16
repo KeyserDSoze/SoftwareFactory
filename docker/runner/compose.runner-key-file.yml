@@ -1,0 +1,13 @@
+# API-only hot-rotatable runner secret. Use alongside compose.yml.
+# Bind-mount the DIRECTORY: file mounts pin the old inode after a rename.
+# Worker and cloudflared must NOT receive the secret volume.
+services:
+  runner-api:
+    environment:
+      RUNNER_API_KEY: ""
+      RUNNER_API_KEY_FILE: /run/secrets/runner-api/runner-key
+    volumes:
+      - type: bind
+        source: "${RUNNER_API_KEY_DIR:?Set a private host API-key directory}"
+        target: /run/secrets/runner-api
+        read_only: true
