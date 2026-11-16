@@ -178,3 +178,8 @@ Una regressione CI su due API e worker heartbeat ha mostrato che un record nuovo
 
 
 L'endpoint HTTP della #43 impiega inoltre al massimo tre verifiche **completamente autonome** del record heartbeat con un intervallo di 15ms tra i tentativi quando una revisione viene sostituita in concorrenza. Non memorizza mai un `ready` da uno snapshot precedente e non modifica i file: l'unico 200 consentito richiede tutti i controlli su un record valido durante lo stesso tentativo; l'incoerenza persistente conserva 503.
+
+
+## Addendum — accuratezza del Retry-After dopo riduzione del cap (#46, 16 novembre 2026)
+
+La policy di rate della #35 ha mantenuto integrità e limiti di ammissione, ma su un restart con cap ridotto poteva emettere un `Retry-After` troppo breve: con tre timestamp accettati ancora validi e cap nuovo 1, la scadenza del più vecchio non libera alcun posto. Decisione: ordinare esplicitamente i timestamp recenti verificati e indicare la scadenza dell'elemento a indice zero-based `N - cap`, ossia quando sono usciti abbastanza job dalla finestra da consentire la prima nuova accettazione. Nessun record viene manipolato, accettato, ignorato o eliminato; il calcolo conserva il bound HTTP 1–60s, il trattamento conservativo dei timestamp nel futuro e la precedenza del replay idempotente. Test con cap ridotto, tre report/job SHA-chain validi e due API sullo stesso volume POSIX. Il valore non promette disponibilità futura né tenant quota, fencing cross-host o prova off-host: #2 resta aperta.

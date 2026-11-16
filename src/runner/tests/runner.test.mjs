@@ -320,6 +320,24 @@ test("global minute rate gate expires at 60 seconds and counts future timestamps
     now, 2), 10);
   assert.equal(admissionRateLimitRetryAfter([iso(-50_000), iso(-1_000)],
     now + 10_000, 2), null);
+  // A previously configured limit may be lowered while 3 verified recent
+  // jobs remain. With cap=1, the *third* expiration opens the next slot,
+  // not the first expiration at T+10s.
+  const history = [iso(-50_000), iso(-30_000), iso(-10_000)];
+  assert.equal(admissionRateLimitRetryAfter(history, now, 1), 50);
+  assert.equal(admissionRateLimitRetryAfter([...history].reverse(), now, 1), 50,
+    "the hint cannot depend on filesystem enumeration order");
+  assert.equal(admissionRateLimitRetryAfter(history, now, 2), 30);
+  assert.equal(admissionRateLimitRetryAfter(history, now, 3), 10);
+  assert.equal(admissionRateLimitRetryAfter(history, now, 4), null);
+  assert.equal(admissionRateLimitRetryAfter(history, now + 10_000, 1), 40);
+  assert.equal(admissionRateLimitRetryAfter(history, now + 30_000, 1), 20);
+  assert.equal(admissionRateLimitRetryAfter(history, now + 50_000, 1), null,
+    "after enough entries expire, a new job is admissible");
+  assert.equal(admissionRateLimitRetryAfter([iso(-30_000), iso(-30_000),
+    iso(-30_000)], now, 1), 30, "identical acceptedAt timestamps are counted");
+  assert.equal(admissionRateLimitRetryAfter([iso(-50_000), iso(120_000)],
+    now, 1), 60, "a future-dated retained job cannot evade a reduced cap");
   assert.equal(admissionRateLimitRetryAfter([iso(120_000)], now, 1), 60,
     "clock drift must not evade the limit; HTTP hint remains bounded");
   assert.equal(admissionRateLimitRetryAfter(["garbage"], now, 0), null,
@@ -331,6 +349,54 @@ test("global minute rate gate expires at 60 seconds and counts future timestamps
   for (const bad of [-1, 1.5, 101, NaN])
     assert.throws(() => createRunnerServer({ apiKey: key, allowedOrigins: [origin],
       maxAcceptedPerMinute: bad }), /RUNNER_MAX_ACCEPTED_PER_MINUTE/);
+});
+
+test("lowered admission rate cap advertises the LAST required expiration across API replicas", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-rate-reduced-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir,
+    maxQueued: 8, maxRetained: 10, maxAcceptedPerMinute: 1,
+  }));
+  try {
+    // Recreate three valid SHA-chain-backed historical acceptances. A restart
+    // with a lower cap must count ALL of them, not trust the old configuration.
+    const now = Date.now(), checked = validateRequest(job());
+    const offsets = [-50_000, -30_000, -10_000];
+    for (const offset of offsets) {
+      const id = randomUUID();
+      await mkdir(jobDirectory(dataDir, id), { recursive: true, mode: 0o700 });
+      const report = { id, schemaVersion: 1, label: checked.request.label,
+        digest: checked.digest, state: "queued",
+        acceptedAt: new Date(now + offset).toISOString(),
+        startedAt: null, finishedAt: null, fileCount: checked.fileCount,
+        bytes: checked.bytes, steps: checked.request.steps, results: [],
+        summary: "In attesa del worker",
+      };
+      await recordJobEvidence(dataDir, id, report, "accepted");
+      assert.equal((await verifyJobEvidence(dataDir, id)).report.acceptedAt, report.acceptedAt);
+    }
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const submit = index => fetch(urls[index] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(job()),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+    });
+    const responses = await Promise.all([submit(0), submit(1)]);
+    for (const response of responses) {
+      assert.equal(response.status, 429, "lowering cap must not admit an extra job");
+      assert.deepEqual(await response.json(), { error: "rate_limited" });
+      const seconds = Number(response.headers.get("Retry-After"));
+      assert.ok(seconds >= 49 && seconds <= 50,
+        "three retained jobs and cap=1 need the newest job to expire, not the oldest: " + seconds);
+    }
+    assert.equal((await readdir(path.join(dataDir, "jobs")))
+      .filter(name => !name.startsWith(".")).length, 3,
+      "denied submissions must not allocate snapshots or alter valid evidence");
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("minute admission rate is global across two APIs, while idempotent replay is free", async () => {

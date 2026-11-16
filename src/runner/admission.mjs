@@ -53,8 +53,15 @@ export function admissionRateLimitRetryAfter(acceptedAtValues, nowMs, maxPerMinu
     if (at > nowMs - 60_000) recent.push(at);
   }
   if (recent.length < maxPerMinute) return null;
+  // When an operator reduces the cap, there may already be MORE than the
+  // new maximum in the verified 60s window. Expiring the oldest alone would
+  // still leave the queue rate-limited. Wait for the (N - cap + 1)th
+  // expiration, i.e. the element at zero-based index N - cap.
+  // Sorting also makes the hint independent of filesystem enumeration order.
+  recent.sort((a, b) => a - b);
+  const enoughExpiredAt = recent[recent.length - maxPerMinute] + 60_000;
   return Math.min(60, Math.max(1,
-    Math.ceil((Math.min(...recent) + 60_000 - nowMs) / 1000)));
+    Math.ceil((enoughExpiredAt - nowMs) / 1000)));
 }
 
 export async function withAdmissionLock(dataDir, operation, waitMs = 1500) {

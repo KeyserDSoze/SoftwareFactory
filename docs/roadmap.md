@@ -383,3 +383,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Rendere il logout terminale per il documento browser fino a nuovo login interattivo: `userLoaded`/getUser/callback arrivati dopo disconnessione multi-tab non possono reinserire credenziali; lo storage riscritto da una vecchia risposta viene ripulito senza broadcast loop.
 - Pulizia di dati e bozze a **ogni** transizione token (anche account A→B), mantenendo le barriere `sessionEpoch` per mutate/401 già introdotte.
 - E2E Chromium con provider OIDC effimero, due tab, `signinSilent` e risposta refresh ritardata fino a logout; fullstack gate da 16 a 17 test. Non è revoca server-side o sessione BFF: l'epica #9 rimane aperta.
+
+
+## v0.2 — Retry-After esatto con cap globale ridotto (#46)
+
+- Calcolo di backoff dopo riduzione `RUNNER_MAX_ACCEPTED_PER_MINUTE` da 3 a 1 senza scartare job già accettati: attendere la scadenza del record ordinato `N - cap` nella finestra, non `min(recent)`.
+- Prove su cap 0, scadenze esatte, array non ordinati, acceptedAt duplicati/futuri e due API con tre journal/report SHA validi; HTTP 429 e nessuna directory aggiunta. Limite global POSIX, non tenant/IP e non un token bucket distribuito: #2 resta aperta.

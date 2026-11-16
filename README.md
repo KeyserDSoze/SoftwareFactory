@@ -228,3 +228,8 @@ La API PostgreSQL generata non concede più permessi per la sola presenza di `ed
 ## Logout OIDC resistente a refresh tardivi (#45)
 
 Le app React/PostgreSQL generate ora trattano il logout come una **barriera terminale per la scheda corrente**. Un refresh OIDC partito prima della disconnessione non può far ricomparire token o elementi nella UI dopo un logout in un'altra scheda; eventuali credenziali riscritte in ritardo dal client OIDC vengono eliminate. La sostituzione di un token con un altro pulisce immediatamente dati e bozze della sessione precedente. Un test Chromium usa due tab e un vero provider OIDC di test: blocca la consegna della risposta di rinnovo fino al logout e verifica che login e dati non siano ripristinati dopo il rilascio. Questo protegge solo il browser: **non revoca JWT già emessi**, né implementa BFF/cookie HttpOnly o sessioni server-side, ancora nella #9.
+
+
+## Retry-After corretto dopo riduzione del rate limit (#46)
+
+Riducendo `RUNNER_MAX_ACCEPTED_PER_MINUTE` mentre ci sono ancora job accettati nel minuto precedente, il runner continua a contare **tutti** i job conservati e ora indica un `Retry-After` coerente con il nuovo limite. Con 3 job recenti e nuovo limite 1, aspetta che scadano abbastanza accettazioni, non soltanto quella più vecchia. L'header resta limitato a 1–60 secondi e non crea alcuna prenotazione. La suite Node prova due API con volume condiviso e catene di evidenza valide, senza modificare idempotenza o permessi. Non è un rate limiter per tenant o multi-host (#2).
