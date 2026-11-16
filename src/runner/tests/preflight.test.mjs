@@ -21,10 +21,11 @@ const apiEnv = { RUNNER_API_KEY: secret,
 function service(extra = {}) {
   return { user: "1000:1000", read_only: true,
     security_opt: ["no-new-privileges:true"], cap_drop: ["ALL"],
-    ...extra };
+    networks: { default: null }, ...extra };
 }
 function composeConfig() {
-  return { services: {
+  return { name: "runner", networks: { default: { name: "runner_default" } },
+    services: {
     "runner-api": service({
       build: { context: checkoutRoot, dockerfile: "docker/runner/Dockerfile.api" },
       volumes: [{ type: "bind", source: apiEnv.RUNNER_DATA_DIR, target: "/data" }],
@@ -46,7 +47,8 @@ function composeConfig() {
     cloudflared: {
       image: "cloudflare/cloudflared:latest",
       cap_drop: ["ALL"], security_opt: ["no-new-privileges:true"],
-      profiles: ["tunnel"], command: "tunnel run --token not-a-real-token",
+      profiles: ["tunnel"], networks: { default: null },
+      command: "tunnel run --token not-a-real-token",
     },
   } };
 }
@@ -59,6 +61,65 @@ test("resolved Compose enforces isolated worker socket and loopback-only API wit
   const noTunnel = composeConfig();
   delete noTunnel.services.cloudflared;
   assert.equal(inspectComposeConfig(noTunnel).tunnelServiceChecked, false);
+});
+
+test("Compose network gate accepts only implicit or explicit private default for every reviewed service", () => {
+  const baseline = composeConfig();
+  assert.equal(inspectComposeConfig(baseline).status, "passed");
+  const implicit = composeConfig();
+  for (const svc of Object.values(implicit.services)) delete svc.networks;
+  assert.equal(inspectComposeConfig(implicit).status, "passed");
+  const arrays = composeConfig();
+  for (const svc of Object.values(arrays.services)) svc.networks = ["default"];
+  assert.equal(inspectComposeConfig(arrays).status, "passed");
+  const empty = composeConfig();
+  for (const svc of Object.values(empty.services)) svc.networks = { default: {} };
+  assert.equal(inspectComposeConfig(empty).status, "passed");
+  const noTunnel = composeConfig();
+  delete noTunnel.services.cloudflared;
+  assert.equal(inspectComposeConfig(noTunnel).status, "passed");
+});
+
+test("Compose network gate denies external/renamed/extra networks even without network_mode", () => {
+  const mutations = [
+    c => { c.networks.debug = { name: "shared_debug", external: true }; },
+    c => { c.networks.default.external = true; },
+    c => { c.networks.default.external = "false"; },
+    c => { c.networks.default.name = "unrelated_default"; },
+    c => { c.networks.default.driver = "host"; },
+    c => { c.networks.default.internal = false; },
+    c => { c.networks.default.ipam = { config: [{ subnet: "10.1.0.0/16" }] }; },
+    c => { c.name = "../runner"; },
+    c => { c.name = "Runner"; },
+    c => { c.networks = null; },
+    c => { c.networks = []; },
+    c => { c.networks = { debug: { external: true } }; },
+  ];
+  for (const mutate of mutations) {
+    const conf = composeConfig();
+    mutate(conf);
+    assert.throws(() => inspectComposeConfig(conf), error => {
+      assert.match(error.message, /Compose (default )?network/);
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return true;
+    });
+  }
+});
+
+test("Compose network gate denies attachments, aliases and overrides on API, worker and tunnel", () => {
+  for (const name of ["runner-api", "runner-worker", "cloudflared"]) {
+    for (const joined of [
+      { default: null, external: null }, { external: {} }, ["default", "external"],
+      ["external"], [], {}, "default", 10, { default: { aliases: ["docker"] } },
+      { default: { priority: 100 } }, { default: { ipv4_address: "10.0.0.2" } },
+      { default: { link_local_ips: ["169.254.1.1"] } },
+    ]) {
+      const conf = composeConfig();
+      conf.services[name].networks = joined;
+      assert.throws(() => inspectComposeConfig(conf),
+        /network attachment/, name + " " + JSON.stringify(joined));
+    }
+  }
 });
 
 test("Compose preflight rejects insecure port, privileges, mounts, socket, network and worker identity", () => {

@@ -111,6 +111,46 @@ const noPublicPorts = (name, svc) => {
   if (Array.isArray(svc.ports) && svc.ports.length) fail(name + ": unexpected host ports");
   if (svc.network_mode === "host") fail(name + ": host networking forbidden");
 };
+// "network_mode" is not the only way to cross the daemon's network trust
+// boundary. A standard Compose override may attach a reviewed service to an
+// external bridge/overlay alongside unrelated containers. Validate BOTH the
+// resolved project networks and each service attachment, including tunnel.
+const plainRecord = item =>
+  item !== null && typeof item === "object" && !Array.isArray(item);
+const safeNetworkTopology = config => {
+  const project = config.name;
+  const networks = config.networks;
+  const validProject = typeof project === "string" &&
+    /^[a-z0-9][a-z0-9_-]{0,62}$/.test(project);
+  if (!validProject || !plainRecord(networks) ||
+      Object.keys(networks).length !== 1 ||
+      !Object.hasOwn(networks, "default"))
+    fail("Compose network policy requires a single private default network");
+  const defaultNetwork = networks.default;
+  if (!plainRecord(defaultNetwork) ||
+      Object.keys(defaultNetwork).some(key => !["name", "external"].includes(key)) ||
+      defaultNetwork.name !== project + "_default" ||
+      (defaultNetwork.external != null && defaultNetwork.external !== false))
+    fail("Compose default network is external or unapproved");
+  for (const [name, svc] of Object.entries(config.services)) {
+    const joined = svc.networks;
+    if (joined == null) continue; // implicit default on Compose v2
+    if (Array.isArray(joined)) {
+      if (joined.length !== 1 || joined[0] !== "default")
+        fail(name + ": unexpected network attachment");
+    } else if (plainRecord(joined)) {
+      if (Object.keys(joined).length !== 1 ||
+          !Object.hasOwn(joined, "default"))
+        fail(name + ": unexpected network attachment");
+      const options = joined.default;
+      if (options != null &&
+          (!plainRecord(options) || Object.keys(options).length !== 0))
+        fail(name + ": custom network attachment options forbidden");
+    } else {
+      fail(name + ": malformed network attachment");
+    }
+  }
+};
 const isSocketMount = volume => /docker\.sock$/.test(volume.target) ||
   /docker\.sock$/.test(volume.source);
 
@@ -130,6 +170,7 @@ export function inspectComposeConfig(config) {
   const known = new Set(["runner-api", "runner-worker", "cloudflared"]);
   if (Object.keys(svcs).some(name => !known.has(name)))
     fail("Unexpected Docker Compose service");
+  safeNetworkTopology(config);
   const api = svcs["runner-api"], worker = svcs["runner-worker"];
   safeService("runner-api", api);
   safeService("runner-worker", worker);
