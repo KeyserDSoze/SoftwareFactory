@@ -136,6 +136,72 @@ test("Compose tunnel may not mount host secrets or join other namespaces", () =>
   assert.equal(inspectComposeConfig(harmless).tunnelServiceChecked, true);
 });
 
+test("Compose fail-closes for namespace sharing even without host networking", () => {
+  for (const name of ["runner-api", "runner-worker", "cloudflared"]) {
+    for (const [field, value] of [
+      ["network_mode", "service:runner-worker"],
+      ["network_mode", "container:abcdef123456"],
+      ["network_mode", "host"],
+      ["network_mode", "bridge"],
+      ["pid", "service:runner-worker"],
+      ["pid", "container:abcdef123456"],
+      ["pid", "host"],
+      ["ipc", "service:runner-worker"],
+      ["ipc", "host"],
+      ["uts", "host"],
+      ["userns_mode", "host"],
+      ["cgroup", "host"],
+      ["cgroupns_mode", "host"],
+      ["isolation", "default"],
+    ]) {
+      const config = composeConfig();
+      config.services[name][field] = value;
+      assert.throws(() => inspectComposeConfig(config),
+        /unsafe|networking forbidden/, name + "." + field + "=" + value);
+    }
+  }
+  const noTunnel = composeConfig();
+  delete noTunnel.services.cloudflared;
+  assert.equal(inspectComposeConfig(noTunnel).status, "passed");
+});
+
+test("Compose requires exact no-new-privileges and cap-drop profiles, without security overrides", () => {
+  const originalProfile = ["no-new-privileges:true"];
+  for (const serviceName of ["runner-api", "runner-worker", "cloudflared"]) {
+    for (const [field, value] of [
+      ["security_opt", ["no-new-privileges:true", "seccomp=unconfined"]],
+      ["security_opt", ["no-new-privileges:true", "apparmor=unconfined"]],
+      ["security_opt", ["no-new-privileges:true", "label=disable"]],
+      ["security_opt", ["no-new-privileges:false", "no-new-privileges:true"]],
+      ["security_opt", ["no-new-privileges:true", "no-new-privileges:true"]],
+      ["security_opt", []],
+      ["security_opt", "no-new-privileges:true"],
+      ["cap_drop", ["ALL", "NET_ADMIN"]],
+      ["cap_drop", ["CHOWN"]],
+      ["cap_drop", ["ALL", "ALL"]],
+      ["cap_drop", "ALL"],
+      ["privileged", "false"],
+      ["privileged", "true"],
+      ["privileged", true],
+      ["device_cgroup_rules", ["a *:* rwm"]],
+      ["device_requests", [{ capabilities: [["gpu"]] }]],
+      ["gpus", "all"],
+      ["group_add", ["docker"]],
+      ["sysctls", { "kernel.unprivileged_userns_clone": "1" }],
+      ["expose", ["5432"]],
+    ]) {
+      const config = composeConfig();
+      config.services[serviceName][field] = value;
+      assert.throws(() => inspectComposeConfig(config),
+        /unsafe|mount/, serviceName + "." + field);
+    }
+    const approved = composeConfig();
+    approved.services[serviceName].security_opt = [...originalProfile];
+    approved.services[serviceName].cap_drop = ["ALL"];
+    assert.equal(inspectComposeConfig(approved).status, "passed");
+  }
+});
+
 test("Compose rejects inherited/implicit mounts that could hand the API the worker socket", () => {
   for (const service of ["runner-api", "runner-worker", "cloudflared"]) {
     for (const [field, value] of [

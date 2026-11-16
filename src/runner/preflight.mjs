@@ -12,19 +12,33 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const fail = message => { throw new Error(message); };
 const isSecureUser = user => user === "1000:1000";
 const contains = (items, name) => Array.isArray(items) && items.includes(name);
+// The security profiles are exact, not merely inclusive: appending
+// seccomp=unconfined or apparmor=unconfined must not retain a green check.
+const single = (items, name) =>
+  Array.isArray(items) && items.length === 1 && items[0] === name;
+const noNamespaceOverrides = svc => [
+  "network_mode", "pid", "ipc", "uts", "userns_mode",
+  "cgroup", "cgroupns_mode", "isolation",
+].every(field => svc[field] == null);
 // Docker Compose mounts can bypass service.volumes via volumes_from,
-// secrets/configs and tmpfs. These services require *only* the explicit
-// reviewed bind mounts; no inherited or implicit file mounts.
+// secrets/configs and tmpfs. Device rules and supplemental groups can also
+// relax container isolation without appearing in the reviewed bind list.
 const noExtraMounts = value =>
   value == null || (Array.isArray(value) && value.length === 0);
+const noExtraCapabilities = svc => [
+  "cap_add", "devices", "device_cgroup_rules", "device_requests", "gpus",
+  "group_add", "sysctls", "volumes_from", "tmpfs", "secrets", "configs",
+  "expose",
+].every(field => noExtraMounts(svc[field]));
+const unprivilegedProfile = svc =>
+  svc && typeof svc === "object" && !Array.isArray(svc) &&
+  (svc.privileged == null || svc.privileged === false) &&
+  single(svc.cap_drop, "ALL") &&
+  single(svc.security_opt, "no-new-privileges:true") &&
+  noExtraCapabilities(svc) && noNamespaceOverrides(svc);
 const safeService = (name, svc) => {
-  if (!svc || !isSecureUser(svc.user) || svc.read_only !== true ||
-      svc.privileged === true || !contains(svc.cap_drop, "ALL") ||
-      !contains(svc.security_opt, "no-new-privileges:true") ||
-      !noExtraMounts(svc.cap_add) || !noExtraMounts(svc.devices) ||
-      !noExtraMounts(svc.volumes_from) || !noExtraMounts(svc.tmpfs) ||
-      !noExtraMounts(svc.secrets) || !noExtraMounts(svc.configs) ||
-      svc.network_mode === "host" || svc.pid === "host" || svc.ipc === "host")
+  if (!unprivilegedProfile(svc) || !isSecureUser(svc.user) ||
+      svc.read_only !== true)
     fail(name + ": unsafe runtime permissions or hidden mounts");
 };
 // Reject obvious host-system bind targets and noncanonical paths. An
@@ -127,15 +141,7 @@ export function inspectComposeConfig(config) {
     fail("runner-api: daemon access or worker ports forbidden");
   if (svcs.cloudflared) {
     const tunnel = svcs.cloudflared;
-    if (!tunnel || typeof tunnel !== "object" || Array.isArray(tunnel) ||
-        tunnel.privileged || tunnel.network_mode || tunnel.pid || tunnel.ipc ||
-        !noExtraMounts(tunnel.cap_add) || !noExtraMounts(tunnel.devices) ||
-        !contains(tunnel.cap_drop, "ALL") ||
-        !contains(tunnel.security_opt, "no-new-privileges:true") ||
-        !noExtraMounts(tunnel.volumes) || !noExtraMounts(tunnel.tmpfs) ||
-        !noExtraMounts(tunnel.volumes_from) ||
-        !noExtraMounts(tunnel.secrets) || !noExtraMounts(tunnel.configs) ||
-        !noExtraMounts(tunnel.expose))
+    if (!unprivilegedProfile(tunnel) || !noExtraMounts(tunnel.volumes))
       fail("cloudflared: unsafe runtime permissions or mounts");
     noPublicPorts("cloudflared", tunnel);
   }
