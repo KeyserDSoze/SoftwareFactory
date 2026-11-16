@@ -502,3 +502,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Non affidarsi al probe iniziale del canary: richiedere `probeRootlessDocker({host}) === true` appena prima di ogni `create`, `inspect`, `start --attach` e `rm`, senza session cache.
 - Negare l'esecuzione anche con daemon che cambia a metà ciclo, output diverso da `true`, errori o timeout, senza secret leak. Se il container non è stato verificato o il daemon non è più rootless al cleanup, non cancellare e lasciare investigazione manuale operator-only.
 - Test Node deterministici per tutte le transizioni, mantenimento degli argomenti Docker immutabili e CI real-Docker rootful via script di smoke trusted. ADR 0019. La #2 richiede ancora VM rootless e Cloudflare Tunnel/Access reali, fencing e attestazione indipendente.
+
+
+## v0.2 — Canary rootless: cleanup operator-only del container residuo (#63)
+
+- Aggiungere CLI di riconciliazione canary separata dal cleanup dei job, con UUID non segreto emesso prima di `create`, dry-run di default, `--apply --confirm-canary` esplicito e divieto di cleanup generico.
+- Verificare che ogni `ps`/`inspect`/`rm` usi un probe rootless fresco e lo stesso socket Unix locale. Accettare un unico container con label/nome/ID completi, configurazione di sicurezza esatta, stato `created/exited` non-running; doppia ispezione e `rm -f <ID completo>` soltanto dopo conferma.
+- Test Node positivi/negativi su rootful/lost daemon, credenziali nei messaggi Docker, rimpiazzo ID e stato, container malevoli, parsing CLI e non-root. Nessun delete per label falsa o job container. ADR 0020; l'epica #2 resta aperta per host rootless effettivo e attestazione indipendente.
