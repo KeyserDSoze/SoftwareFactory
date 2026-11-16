@@ -13,7 +13,19 @@ import { execFile as execFileCallback } from "node:child_process";
 import { reconcileRunnerContainers, runnerContainerIdentity } from "../orphans.mjs";
 import { atomicWrite, jobDirectory, readReport, validateRequest } from "../common.mjs";
 import { executeJob } from "../worker.mjs";
+import { runDockerStep } from "../docker.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "../evidence.mjs";
+
+/** Trusted rootful CI exception to test real Docker behavior. Never expose as
+ * a runner-worker env/config switch or permit untrusted job input to select it.
+ * The deployed worker always uses runDockerStep's default rootless probe.
+ */
+async function ciRootfulSmokeProbe() {
+  assert.equal(process.env.GITHUB_ACTIONS, "true", "Only hosted GitHub CI may bypass rootless for Docker smoke");
+  assert.equal(process.env.CI, "true", "Only hosted GitHub CI may bypass rootless for Docker smoke");
+  assert.notEqual(process.getuid?.(), 0, "Root-owned CI smoke forbidden");
+  return true;
+}
 
 const dataDir = await mkdtemp(path.join(tmpdir(), "sf-real-runner-data-"));
 const work = await mkdtemp(path.join(tmpdir(), "sf-real-runner-work-"));
@@ -32,7 +44,11 @@ async function submit(files, steps) {
     steps, acceptedAt: new Date().toISOString(), results: [],
   });
   await recordJobEvidence(dataDir, id, await readReport(dataDir, id), "accepted");
-  const report = await executeJob(id, { dataDir, workspaceRoot: work, environment: {
+  const report = await executeJob(id, { dataDir, workspaceRoot: work,
+    executeStep: (plan, jobId, step) => runDockerStep(plan, jobId, step, {
+      probeDocker: ciRootfulSmokeProbe,
+    }),
+    environment: {
     RUNNER_NODE_IMAGE: "node:22-bookworm-slim", RUNNER_ALLOW_NET_DEPS: "false",
     RUNNER_CONTAINER_UID: process.getuid() + ":" + process.getgid(),
   } });

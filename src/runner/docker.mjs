@@ -2,6 +2,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { scrub } from "./common.mjs";
 import { runnerContainerIdentity } from "./orphans.mjs";
+import { probeRootlessDocker } from "./docker-probe.mjs";
 
 const SAFE_IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{2,180}$/;
 const TIME_LIMIT_MS = 120_000;
@@ -132,7 +133,19 @@ export function isInfrastructureFailure(result) {
     (result.exitCode === null || result.exitCode === 125 || result.exitCode === 126 ||
       INFRA_FAILURE.test((result.stderr || "") + "\n" + (result.stdout || "")));
 }
-export function runDockerStep(plan, id, step, { spawnProcess = spawn, timeoutMs = plan.timeoutMs } = {}) {
+/** Last-mile daemon guard. A heartbeat only describes past readiness;
+ * every real Docker process must first verify the CURRENT local daemon is
+ * rootless. The probe callback is a trusted Node-only test seam, never an
+ * API/job payload setting. Reject failures without daemon details.
+ */
+export async function runDockerStep(plan, id, step, {
+  spawnProcess = spawn, timeoutMs = plan.timeoutMs,
+  probeDocker = probeRootlessDocker,
+} = {}) {
+  let ready = false;
+  try { ready = (await probeDocker()) === true; }
+  catch { /* Do not expose socket paths or Docker diagnostics. */ }
+  if (!ready) throw new Error("Docker rootless execution guard unavailable");
   const { name, labels } = runnerContainerIdentity(id, step);
   const args = [...plan.args];
   args.splice(2, 0, "--name", name, ...labels.flatMap(([key, value]) => ["--label", key + "=" + value]));
@@ -140,7 +153,7 @@ export function runDockerStep(plan, id, step, { spawnProcess = spawn, timeoutMs 
   return new Promise(resolve => {
     let stdout = "", stderr = "", settled = false, timedOut = false;
     const child = spawnProcess("docker", args, { stdio: ["ignore", "pipe", "pipe"], env: {
-      PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST || "unix:///run/docker.sock", HOME: "/tmp",
+      PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST || "unix:///run/docker.sock", HOME: "/tmp", DOCKER_CONFIG: "/tmp",
     } });
     child.stdout?.on("data", b => { stdout = (stdout + b.toString("utf8")).slice(-12_000); });
     child.stderr?.on("data", b => { stderr = (stderr + b.toString("utf8")).slice(-12_000); });

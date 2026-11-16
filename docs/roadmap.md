@@ -459,3 +459,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Derivare ultimo servizio per tenant dai `startedAt` dei report già verificati e conservati; scegliere prima tenant mai serviti, poi quelli serviti meno recentemente, FIFO tra job di uno stesso tenant. UUID tie break.
 - Job `queued` claimed esclusi, report terminali/running con `startedAt` validi utilizzati, rejected senza avvio non contati. Gruppo legacy FIFO globale in assenza di tenant, quote/admission/claim e classificazione esiti invariati.
 - Node test unitario e integrazione worker con giornali SHA, A-B-A-B-A, claim, legacy e no retry. ADR 0013; fairness best-effort su volume POSIX singolo, non SLA o fencing multi-host. #2 aperta per VM rootless e Cloudflare/IAM/attestazione.
+
+
+## v0.2 — Fail-closed rootless immediatamente prima di docker run (#57)
+
+- Invocare `probeRootlessDocker` obbligatoriamente e just-in-time in `runDockerStep` per ogni step reale, compresa preparazione npm; negare Docker senza `true` esatto. Nessun risultato `passed`, né leakage del messaggio originale quando manca il daemon.
+- Verifiche Node su no-spawn rootful/probe fallito, positivo, secondo step dopo rootless loss; job terminale `incomplete` con journal hash-chain e AI repair negato. Nessun bypass configurabile dal payload utente.
+- Gli smoke Docker/Chromium su GitHub hosted sono rootful per definizione e usano una seam test Node esplicita nei soli script CI (CI/GITHUB_ACTIONS, uid nonroot), senza modificare il worker di produzione. ADR 0014; restano rootless VM reale e attestazione off-host nella #2.

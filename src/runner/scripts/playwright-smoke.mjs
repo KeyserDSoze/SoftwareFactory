@@ -27,7 +27,17 @@ assert.ok(!plan.skip, "Playwright was skipped: " + plan.skip);
 assert.ok(plan.args.includes("none"), "Browser must not access external network");
 assert.ok(plan.args.includes("--read-only"));
 assert.ok(plan.args.includes("--cap-drop=ALL"));
-const result = await runDockerStep(plan, randomUUID(), "playwright");
+// Deliberate rootful exception for trusted GitHub-hosted browser CI only.
+// No runner API configuration or submitted job can select this callback.
+const ciRootfulSmokeProbe = async () => {
+  assert.equal(process.env.GITHUB_ACTIONS, "true");
+  assert.equal(process.env.CI, "true");
+  assert.notEqual(process.getuid?.(), 0);
+  return true;
+};
+const result = await runDockerStep(plan, randomUUID(), "playwright", {
+  probeDocker: ciRootfulSmokeProbe,
+});
 if (result.state !== "passed") {
   console.error("PLAYWRIGHT_BROWSER_SMOKE_FAILED", JSON.stringify(result, null, 2));
   process.exitCode = 1;

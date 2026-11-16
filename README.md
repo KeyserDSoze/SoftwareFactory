@@ -287,3 +287,9 @@ La [#55](https://github.com/KeyserDSoze/SoftwareFactory/issues/55) estende la co
 ## Avanzamento #56 — fairness multi-tenant del worker (16 novembre 2026)
 
 I limiti di ammissione per tenant della #52 non garantivano una selezione equa dei job: il worker consumava una sola coda FIFO globale. La [#56](https://github.com/KeyserDSoze/SoftwareFactory/issues/56) seleziona ora un turno per il tenant meno recentemente servito fra i report conservati con evidenze hash-chain verificate; un tenant mai servito viene preferito e ogni tenant mantiene FIFO per data di accettazione. La cronologia deriva dai `startedAt` realmente registrati, non da memoria volatile né da nuovi contatori controllabili dal client. Test Node verificano A-B-A-B-A, claim, storico, assenza di retry e compatibilità con coda legacy FIFO. È scheduling best-effort sullo stesso volume POSIX, non orchestration multi-host o VM rootless attestata: #2 resta aperta.
+
+
+---
+## Avanzamento #57 — esecuzione Docker condizionata a probe rootless fresco (16 novembre 2026)
+
+La [#57](https://github.com/KeyserDSoze/SoftwareFactory/issues/57) chiude una differenza pericolosa tra readiness ed esecuzione effettiva. Ora **ogni** invocazione di `runDockerStep` verifica direttamente che il daemon locale attivo dichiari `name=rootless`, con socket allowlisted e probe bounded, **prima** di avviare `docker run`. Daemon rootful, irraggiungibile, probe in errore o host non autorizzato impediscono qualunque step, con report `incomplete` e senza false evidenze o dettagli riservati. Anche un secondo step verifica nuovamente il daemon. I test unitari provano no-spawn e lo scenario in cui il primo step passa e il daemon non è più rootless. Gli smoke Docker/Playwright della CI GitHub hosted rimangono deliberatamente **rootful** tramite callback di test *solo nei trusted script CI*, non esposta all'API. Questo gate è una mitigazione locale, non una prova VM rootless realmente certificata (#2).
