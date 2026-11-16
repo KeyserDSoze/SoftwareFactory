@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
-import { mkdtemp, chmod, link, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, chmod, link, mkdir, open, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
-import { isPrivateRepairOperatorFile, loadRepairOperatorsFile, reauthorizeRepairMutation } from "../operator-auth.mjs";
+import { isPrivateRepairOperatorFile, isStableRepairOperatorSnapshot,
+  loadRepairOperatorsFile, reauthorizeRepairMutation } from "../operator-auth.mjs";
 import { beginRepairSession, advanceRepairSession } from "../coordinator.mjs";
 import { readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
@@ -322,4 +323,100 @@ test("ambiguous startup configuration rejects file+inline and nonabsolute file p
   assert.throws(() => createRunnerServer({ ...base,
     repairOperators: "", repairOperatorsFile: "/tmp/x\0bad",
   }), /absolute path/);
+});
+
+
+test("operator snapshot is pinned to one secure inode and unchanged permission, size and timestamps", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-operator-stable-"));
+  const file = path.join(dir, "operators.json");
+  try {
+    await writeFile(file, render(entries()), { mode: 0o600 });
+    const before = await stat(file);
+    assert.equal(isStableRepairOperatorSnapshot(before, before), true);
+    const fake = { ...before, isFile: () => true };
+    for (const change of [
+      { ino: before.ino + 1 }, { dev: before.dev + 1 },
+      { size: before.size + 1 }, { mode: before.mode | 0o020 },
+      { nlink: 2 }, { uid: before.uid + 1 },
+      { ctimeMs: before.ctimeMs + 1 }, { mtimeMs: before.mtimeMs + 1 },
+    ]) {
+      assert.equal(isStableRepairOperatorSnapshot(before, { ...fake, ...change }), false,
+        JSON.stringify(change));
+    }
+    assert.equal((await loadRepairOperatorsFile(file, runnerKey)).length, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("operator registry rejects same-length valid in-place rewrite while reading and accepts atomic rename on next request", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-operator-inplace-"));
+  const file = path.join(dir, "operators.json");
+  const old = render(entries());
+  const updated = old.replace('"editor"', '"auditor"');
+  assert.equal(updated.length, old.length);
+  try {
+    await writeFile(file, old, { mode: 0o600 });
+    let mutated = false;
+    const openFile = async (filename, flags) => {
+      const descriptor = await open(filename, flags);
+      return {
+        stat: () => descriptor.stat(),
+        read: async (...args) => {
+          if (!mutated) {
+            mutated = true;
+            // Rewriting the open inode, not an atomic rename, must be denied
+            // even if the final JSON is still valid and has the same length.
+            const writer = await open(file, "r+");
+            try { await writer.writeFile(updated); }
+            finally { await writer.close(); }
+          }
+          return descriptor.read(...args);
+        },
+        close: () => descriptor.close(),
+      };
+    };
+    await assert.rejects(loadRepairOperatorsFile(file, runnerKey, { openFile }),
+      { code: "REPAIR_AUTH_UNAVAILABLE" });
+    assert.equal(mutated, true);
+    assert.equal((await loadRepairOperatorsFile(file, runnerKey))[0].id, "auditor");
+
+    // Atomic rename swaps a whole credential file on the NEXT request.
+    await saveAtomic(file, old);
+    assert.equal((await loadRepairOperatorsFile(file, runnerKey))[0].id, "editor");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("operator registry rejects early EOF, appended bytes and permission/link changes during descriptor read", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "sf-operator-read-races-"));
+  const file = path.join(root, "operators.json");
+  const alias = path.join(root, "operators.hard");
+  const original = render(entries());
+  try {
+    for (const fault of ["eof", "truncate", "append", "chmod", "link"]) {
+      await rm(file, { force: true });
+      await rm(alias, { force: true });
+      await writeFile(file, original, { mode: 0o600 });
+      let injected = false;
+      const openFile = async (filename, flags) => {
+        const descriptor = await open(filename, flags);
+        return {
+          stat: () => descriptor.stat(),
+          read: async (...args) => {
+            if (!injected) {
+              injected = true;
+              if (fault === "eof") return { bytesRead: 0 };
+              if (fault === "truncate") await writeFile(file, "", { flag: "w" });
+              if (fault === "append") await writeFile(file, " ", { flag: "a" });
+              if (fault === "chmod") await chmod(file, 0o644);
+              if (fault === "link") await link(file, alias);
+            }
+            return descriptor.read(...args);
+          },
+          close: () => descriptor.close(),
+        };
+      };
+      await assert.rejects(loadRepairOperatorsFile(file, runnerKey, { openFile }),
+        { code: "REPAIR_AUTH_UNAVAILABLE" }, fault);
+      assert.equal(injected, true);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

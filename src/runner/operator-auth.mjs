@@ -30,31 +30,55 @@ export function isPrivateRepairOperatorFile(stat, effectiveUid = process.geteuid
  * same-filesystem rename takes effect without an API restart or a stale cache.
  * The API service owns this secret; it must never be mounted in the worker.
  */
-export async function loadRepairOperatorsFile(filePath, runnerKey) {
-  if (typeof filePath !== "string" || !path.isAbsolute(filePath) ||
+/** All security metadata must stay stable across the complete read from
+ * the SAME O_NOFOLLOW file descriptor. This is not a path-level TOCTOU check:
+ * atomic rename rotation is allowed, but editing the opened inode is not.
+ */
+export function isStableRepairOperatorSnapshot(before, after,
+  effectiveUid = process.geteuid?.()) {
+  return isPrivateRepairOperatorFile(before, effectiveUid) &&
+    isPrivateRepairOperatorFile(after, effectiveUid) &&
+    before.dev === after.dev && before.ino === after.ino &&
+    before.uid === after.uid && before.gid === after.gid &&
+    before.nlink === after.nlink && before.mode === after.mode &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
+}
+
+/** openFile is an internal Node-only deterministic test seam. The HTTP/API
+ * configuration NEVER passes it; no client can bypass the descriptor checks.
+ */
+export async function loadRepairOperatorsFile(filePath, runnerKey, {
+  openFile = open,
+} = {}) {
+  if (typeof constants.O_NOFOLLOW !== "number" ||
+      typeof filePath !== "string" || !path.isAbsolute(filePath) ||
       filePath.includes("\0")) throw unavailable();
   let fd;
   try {
-    fd = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = await fd.stat();
-    if (!isPrivateRepairOperatorFile(stat)) throw unavailable();
-    // Bounded even if an administrator modifies a file in place. Rotate only
-    // with atomic rename: in-place writes could yield a transient 503.
+    fd = await openFile(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = await fd.stat();
+    if (!isPrivateRepairOperatorFile(before)) throw unavailable();
+    // Read exactly the pinned size, not "until EOF": an in-place truncate,
+    // append, or rewrite must not yield a usable mixed credential registry.
     const chunks = [];
     let total = 0;
-    while (total <= MAX_FILE_BYTES) {
-      const chunk = Buffer.alloc(Math.min(2048, MAX_FILE_BYTES + 1 - total));
+    while (total < before.size) {
+      const chunk = Buffer.alloc(Math.min(2048, before.size - total));
       const { bytesRead } = await fd.read(chunk, 0, chunk.length, total);
-      if (bytesRead === 0) break;
+      if (!Number.isInteger(bytesRead) || bytesRead <= 0 ||
+          bytesRead > chunk.length) throw unavailable();
       chunks.push(chunk.subarray(0, bytesRead));
       total += bytesRead;
     }
-    if (total > MAX_FILE_BYTES) throw unavailable();
-    return configureRepairOperators(Buffer.concat(chunks).toString("utf8"), runnerKey)
+    const after = await fd.stat();
+    if (total !== before.size ||
+        !isStableRepairOperatorSnapshot(before, after)) throw unavailable();
+    return configureRepairOperators(Buffer.concat(chunks, total).toString("utf8"), runnerKey)
       ?? (() => { throw unavailable(); })();
   } catch {
-    // Not distinguishable to external callers: missing, symlink, permissions,
-    // malformed JSON and interrupted replacement all fail closed.
+    // Missing, symlink, changed metadata, incomplete read, malformed JSON,
+    // and interrupted rotation are indistinguishable to external callers.
     throw unavailable();
   } finally {
     await fd?.close().catch(() => {});
