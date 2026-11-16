@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
-import { mkdtemp, chmod, link, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, chmod, link, mkdir, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
-import { loadRepairOperatorsFile } from "../operator-auth.mjs";
+import { isPrivateRepairOperatorFile, loadRepairOperatorsFile } from "../operator-auth.mjs";
 import { readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
 
@@ -55,6 +55,26 @@ async function environment() {
   };
   return { dir, file, dataDir, request, close };
 }
+
+test("operator registry stat must match the effective API uid, not just owner-only mode bits", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-registry-owner-"));
+  const file = path.join(dir, "operators.json");
+  try {
+    await writeFile(file, render(entries()), { mode: 0o600 });
+    const info = await stat(file);
+    const uid = process.geteuid();
+    assert.equal(info.uid, uid, "test fixture belongs to the current API user");
+    assert.equal(isPrivateRepairOperatorFile(info, uid), true);
+    const candidate = { ...info, isFile: () => true };
+    assert.equal(isPrivateRepairOperatorFile({ ...candidate, uid: uid + 1 }, uid), false);
+    assert.equal(isPrivateRepairOperatorFile(candidate, null), false);
+    assert.equal(isPrivateRepairOperatorFile({ ...candidate, nlink: 2 }, uid), false);
+    assert.equal(isPrivateRepairOperatorFile({ ...candidate, mode: info.mode | 0o044 }, uid), false);
+    assert.equal(isPrivateRepairOperatorFile({ ...candidate, isFile: () => false }, uid), false);
+    assert.equal(isPrivateRepairOperatorFile({ ...candidate, size: 10001 }, uid), false);
+    assert.equal((await loadRepairOperatorsFile(file, runnerKey)).length, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 test("operator registry file validates owner-only regular single-inode files and never reveals keys", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "sf-private-registry-"));

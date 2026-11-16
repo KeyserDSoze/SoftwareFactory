@@ -15,6 +15,17 @@ const MAX_FILE_BYTES = 10000;
 const unavailable = () => Object.assign(new Error("repair_operator_registry_unavailable"),
   { code: "REPAIR_AUTH_UNAVAILABLE" });
 
+/** All registry metadata is checked on the OPEN file descriptor, not a path
+ * that an attacker or atomic rotation might replace between stat and read.
+ * A readable mode-0600 file owned by another identity is not an API secret.
+ */
+export function isPrivateRepairOperatorFile(stat, effectiveUid = process.geteuid?.()) {
+  return Number.isSafeInteger(effectiveUid) && effectiveUid >= 0 &&
+    stat?.isFile?.() === true && stat.uid === effectiveUid &&
+    stat.nlink === 1 && (stat.mode & 0o077) === 0 &&
+    stat.size >= 1 && stat.size <= MAX_FILE_BYTES;
+}
+
 /** Operator registry rotation: every request reads a new fd, so an atomic
  * same-filesystem rename takes effect without an API restart or a stale cache.
  * The API service owns this secret; it must never be mounted in the worker.
@@ -26,9 +37,7 @@ export async function loadRepairOperatorsFile(filePath, runnerKey) {
   try {
     fd = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await fd.stat();
-    if (!stat.isFile() || stat.nlink !== 1 ||
-        (stat.mode & 0o077) !== 0 ||
-        stat.size < 1 || stat.size > MAX_FILE_BYTES) throw unavailable();
+    if (!isPrivateRepairOperatorFile(stat)) throw unavailable();
     // Bounded even if an administrator modifies a file in place. Rotate only
     // with atomic rename: in-place writes could yield a transient 503.
     const chunks = [];
