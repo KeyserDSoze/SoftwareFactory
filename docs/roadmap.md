@@ -530,3 +530,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Aggiungere al comando operator-only `preflight endpoint` supporto facoltativo a `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` da file 0600 O_NOFOLLOW, separati da `RUNNER_API_KEY`, mai distribuiti alla SPA. Pair required/bounded/ASCII, nuovi secret `cfast_` e 64-hex legacy supportati.
 - Prima verificare `GET /healthz` senza Access non 200 (solo 302/401/403, non seguire redirect), poi check 4 richieste già esistenti con entrambi gli header Access, mantenendo validazione API 401/200 e CORS. No POST e nessun token in result/log.
 - Test mock di gateway/HTTP con negativa, credenziali incomplete e injection, token scaduto, CORS, CLI `--env-file` e compatibilità senza Access. ADR 0023; prova vera Cloudflare Access browser + rootless VM ancora in #2.
+
+
+## v0.2 — Compose namespace e profili di sicurezza senza override (#67)
+
+- Rafforzare `inspectComposeConfig` rifiutando namespace personalizzati per API, worker e tunnel: network, PID, IPC, UTS, userns, cgroup e isolation, inclusi riferimenti `service:`/`container:`.
+- Validare `security_opt` `["no-new-privileges:true"]` e `cap_drop` `["ALL"]` **esatti**, non come inclusione; rifiutare ulteriori profili seccomp/AppArmor, device/GPU/extra group/sysctls, privilegi non-boolean e mount già vietati.
+- Test Node positivi e negativi su tutti i servizi, mantenendo il Compose preflight reale e override operator-registry. ADR 0024; mancano VM rootless/Access reali, IAM/fencing e attestazione off-host (#2).
