@@ -9,8 +9,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 if (process.env.CI !== "true" || !process.env.OIDC_CI_SECRET ||
     process.env.OIDC_CI_SECRET.length < 32)
   throw Error("OIDC API rollover test is restricted to ephemeral CI");
-const provider = "http://identity:8999";
-const api = "http://api:8080/api/items";
+// Fixed, private Docker aliases only; no untrusted external URLs allowed.
+const privateTls = process.env.OIDC_TEST_TRANSPORT === "private-tls";
+if (process.env.OIDC_TEST_TRANSPORT && !privateTls)
+  throw Error("Unsupported private OIDC test transport");
+if (privateTls && process.env.NODE_EXTRA_CA_CERTS !== "/ci-tls/ca.crt")
+  throw Error("Production OIDC smoke requires explicit, pinned CI CA trust");
+const provider = privateTls ? "https://identity-tls:9443" : "http://identity:8999";
+const api = privateTls ? "http://api-tls:8080/api/items" : "http://api:8080/api/items";
+
 const controlHeaders = { "x-ci-secret": process.env.OIDC_CI_SECRET };
 
 async function getJson(path, headers = undefined) {
@@ -31,8 +38,8 @@ function header(token) {
   assert.equal(decoded.alg, "RS256");
   return decoded;
 }
-async function status(token, method = "GET") {
-  const response = await fetch(api, {
+async function status(token, method = "GET", endpoint = api) {
+  const response = await fetch(endpoint, {
     method, headers: { Authorization: "Bearer " + token,
       ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
     ...(method === "POST" ? { body: JSON.stringify({ title: "deny post-rollover reader" }) } : {}),
@@ -46,6 +53,12 @@ assert.equal(oldJwks.keys.length, 1);
 const before = await mint("editor");
 assert.equal(header(before).kid, oldJwks.keys[0].kid);
 assert.equal(await status(before), 200, "API must accept original issuer signature");
+if (privateTls) {
+  // A separate real ASP.NET Core Production process without SSL_CERT_FILE
+  // must fail to validate this otherwise-valid JWT from the private TLS CA.
+  assert.equal(await status(before, "GET", "http://api-untrusted:8080/api/items"),
+    401, "Production API must reject JWKS from an untrusted HTTPS authority");
+}
 
 const rotated = await fetch(provider + "/__ci/rotate", {
   headers: controlHeaders, method: "POST", signal: AbortSignal.timeout(4000),
@@ -88,3 +101,5 @@ for (const type of ["mixed-roles", "duplicate-roles", "unknown-role", "empty-rol
     "Ambiguous/unrecognized OIDC role must not grant write: " + type);
 }
 console.log("OIDC_API_JWKS_ROLLOVER_PASS: live ASP.NET Core accepted new kid; bad signature 401; strict unique reader/editor role with five negative variants; transient401=" + transient401);
+if (privateTls)
+  console.log("OIDC_PRODUCTION_HTTPS_CA_PASS: .NET Production trusted ephemeral CA; untrusted TLS API rejected JWKS; RS256+JWKS rollover accepted");

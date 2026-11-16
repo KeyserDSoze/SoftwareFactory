@@ -639,3 +639,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Rimosso il controllo hardcoded del reporter `17 passed`: il test CORS della #84 porta il browser smoke completo a 18 casi. Il gate ora conta i test del fixture generato, richiede esattamente N passed, stato/exitCode/timeout corretti e zero skipped/flaky/failed/interrupted.
 - Test Node per cardinalità 17/18/N e negativi contro riepiloghi manipolati, timeout, skip, file spec non valido; CI con Playwright, PostgreSQL e IdP locale reale. ADR 0042. L'epica #9 resta aperta per validazione IdP/TLS production.
+
+## v0.3 — Test Production TLS OIDC/JWKS con CA e issuer SAN effimeri (#86)
+
+- Alla suite Chromium↔ASP.NET Core/PostgreSQL/OIDC via HTTP privato si aggiunge un test di backend **Production con authority HTTPS** verificata: provider su `identity-tls:9443`, CA+cert SAN ephemeral, API trusted CA e API senza CA (401 obbligatorio).
+- Node senza CA deve respingere la connessione; con CA, l'API trusted deve validare JWT RS256 original/rotated kid, alterazioni firma, reader/editor e negare ruoli ambiguamente firmati. Ripulire i materiali CA privati e tutte le istanze Docker a fine CI.
+- Test Node delle sole origini di issuer consentite, `npm check` e integrazione Docker reale, ADR 0043. Fuori scope: IdP HTTPS commerciale esterno, revoca certificati CRL/OCSP, ingress TLS/CORS production e simulazione VM rootless (#9/#2).

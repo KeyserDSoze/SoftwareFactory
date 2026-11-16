@@ -7,8 +7,9 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID, randomBytes } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, writeFile, mkdtemp, chmod, rm, mkdir, copyFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 
 import { setTimeout as sleep } from "node:timers/promises";
 import { planStep, runDockerStep, PLAYWRIGHT_VERSION } from "../docker.mjs";
@@ -21,9 +22,13 @@ if (!Number.isInteger(uid) || !Number.isInteger(gid)) throw Error("Linux UID/GID
 if (root.includes(",") || /[\r\n:]/.test(root)) throw Error("Unsafe workspace path for Docker bind");
 const network = "sf-int-" + randomUUID().replaceAll("-", "").slice(0, 16);
 const apiName = network + "-api", webName = network + "-web", dbName = network + "-db", idpName = network + "-identity", cspName = network + "-csp";
+const tlsIdpName = network + "-identity-tls", tlsApiName = network + "-api-tls",
+  untrustedApiName = network + "-api-untrusted";
 const dbPassword = randomBytes(24).toString("hex");
 const idpControl = randomBytes(40).toString("hex");
+const tlsIdpControl = randomBytes(40).toString("hex");
 const idpFixturePath = path.resolve("src/runner/scripts/oidc-ci-provider.mjs");
+const transportPath = path.resolve("src/runner/scripts/oidc-ci-transport.mjs");
 const runId = randomUUID();
 const mount = "type=bind,src=" + root + ",dst=/work";
 const framework = (await readFile(path.join(root, "src/backend/applications/Api/Api.csproj"), "utf8"))
@@ -53,7 +58,9 @@ const logs = async name => {
   try { return (await docker(["logs", "--tail", "65", name])).slice(-6000); }
   catch(e) { return String(e.stderr || e.message).slice(-1500); }
 };
-let networkCreated = false, startedApi = false, startedWeb = false, startedDb = false, startedIdp = false, startedCsp = false;
+let networkCreated = false, startedApi = false, startedWeb = false, startedDb = false,
+  startedIdp = false, startedCsp = false, startedTlsIdp = false,
+  startedTlsApi = false, startedUntrustedApi = false, tlsDirectory = null;
 try {
   await docker(["network", "create", "--driver", "bridge", "--internal",
     "--label", "softwarefactory.ci=integration", network]);
@@ -82,6 +89,7 @@ try {
     "--security-opt=no-new-privileges", "--memory=256m", "--cpus=1", "--pids-limit=96",
     "--user=" + uid + ":" + gid, "--tmpfs=/tmp:rw,nosuid,nodev,size=32m",
     "--mount", "type=bind,src=" + idpFixturePath + ",dst=/provider.mjs,readonly",
+    "--mount", "type=bind,src=" + transportPath + ",dst=/oidc-ci-transport.mjs,readonly",
     "--env=CI=true", "--env=OIDC_CI_SECRET=" + idpControl,
     "--env=OIDC_ISSUER=http://identity:8999", "--env=OIDC_CLIENT_ID=factory-web",
     "--env=OIDC_AUDIENCE=factory-client",
@@ -308,6 +316,127 @@ try {
     webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
   assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
   console.log(protocol);
+  // Production-only HTTPS/JWKS exercise: a fresh private CA and issuer SAN
+  // are created OUTSIDE the generated workspace. Only the private CI network
+  // sees these containers; no host ports and no TLS validation bypasses.
+  tlsDirectory = await mkdtemp(path.join(tmpdir(), "sf-ci-oidc-tls-"));
+  const caKey = path.join(tlsDirectory, "ca.key");
+  const caCrt = path.join(tlsDirectory, "ca.crt");
+  const serverKey = path.join(tlsDirectory, "server.key");
+  const serverReq = path.join(tlsDirectory, "server.csr");
+  const serverCrt = path.join(tlsDirectory, "server.crt");
+  const extensions = path.join(tlsDirectory, "server.ext");
+  await writeFile(extensions,
+    "subjectAltName=DNS:identity-tls\nextendedKeyUsage=serverAuth\n" +
+    "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n",
+    { mode: 0o600 });
+  await exec("openssl", ["req", "-x509", "-newkey", "rsa:2048",
+    "-nodes", "-days", "1", "-sha256", "-keyout", caKey,
+    "-out", caCrt, "-subj", "/CN=SoftwareFactory ephemeral CI CA"],
+    { timeout: 25000, maxBuffer: 10000 });
+  await exec("openssl", ["req", "-new", "-newkey", "rsa:2048",
+    "-nodes", "-sha256", "-keyout", serverKey,
+    "-out", serverReq, "-subj", "/CN=identity-tls"],
+    { timeout: 25000, maxBuffer: 10000 });
+  await exec("openssl", ["x509", "-req", "-in", serverReq,
+    "-CA", caCrt, "-CAkey", caKey, "-CAcreateserial",
+    "-out", serverCrt, "-days", "1", "-sha256", "-extfile", extensions],
+    { timeout: 15000, maxBuffer: 10000 });
+  await exec("openssl", ["verify", "-CAfile", caCrt, serverCrt],
+    { timeout: 10000, maxBuffer: 10000 });
+  await Promise.all([caKey, serverKey, serverReq, extensions].map(file =>
+    chmod(file, 0o600)));
+  // No CA private key is ever mounted into a container.
+  // CA certificate and server private key share this private mount, but the
+  // CA private key stays on the host and is never used by any service.
+  const tlsOnly = path.join(tlsDirectory, "runtime");
+  await mkdir(tlsOnly, { mode: 0o700 });
+  for (const file of ["ca.crt", "server.crt", "server.key"]) {
+    const from = path.join(tlsDirectory, file);
+    const into = path.join(tlsOnly, file);
+    await copyFile(from, into);
+    await chmod(into, file.endsWith(".key") ? 0o600 : 0o644);
+  }
+  const tlsMount = "type=bind,src=" + tlsOnly + ",dst=/ci-tls,readonly";
+  await docker(["run", "-d", "--name", tlsIdpName, "--network", network,
+    "--network-alias", "identity-tls", "--read-only", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges", "--pids-limit=96", "--memory=256m", "--cpus=1",
+    "--user=" + uid + ":" + gid, "--tmpfs=/tmp:rw,nosuid,nodev,size=32m",
+    "--mount", "type=bind,src=" + idpFixturePath + ",dst=/provider.mjs,readonly",
+    "--mount", "type=bind,src=" + transportPath + ",dst=/oidc-ci-transport.mjs,readonly",
+    "--mount", tlsMount,
+    "--env=CI=true", "--env=NODE_EXTRA_CA_CERTS=/ci-tls/ca.crt",
+    "--env=OIDC_CI_SECRET=" + tlsIdpControl,
+    "--env=OIDC_ISSUER=https://identity-tls:9443",
+    "--env=OIDC_CLIENT_ID=factory-web", "--env=OIDC_AUDIENCE=factory-client",
+    "--env=OIDC_REDIRECT_URI=http://127.0.0.1:4173/auth/callback",
+    "--env=OIDC_ALLOWED_ORIGIN=http://127.0.0.1:4173",
+    "node:22-bookworm-slim", "node", "/provider.mjs"]);
+  startedTlsIdp = true;
+  let trustedIssuerReady = false;
+  for (let attempt = 0; attempt < 35; attempt++) {
+    try {
+      await docker(["exec", tlsIdpName, "node", "-e",
+        'fetch("https://identity-tls:9443/.well-known/openid-configuration",{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+      ], { timeout: 6000 });
+      trustedIssuerReady = true; break;
+    } catch { await sleep(350); }
+  }
+  if (!trustedIssuerReady) throw Error("Private HTTPS OIDC issuer failed verified TLS readiness");
+
+  const productionApi = async (name, alias, trustCA) =>
+    docker(["run", "-d", "--name", name, "--network-alias", alias, ...common,
+      ...(trustCA ? ["--mount", tlsMount, "--env=SSL_CERT_FILE=/ci-tls/ca.crt"] : []),
+      "--env=ASPNETCORE_URLS=http://0.0.0.0:8080",
+      "--env=ASPNETCORE_ENVIRONMENT=Production",
+      "--env=Auth__Mode=oidc",
+      "--env=Auth__Authority=https://identity-tls:9443",
+      "--env=Auth__Audience=factory-client",
+      "--env=Web__AllowedOrigins=https://app.example.test",
+      "--env=Database__Provider=postgresql",
+      "--env=Database__ConnectionString=Host=db;Port=5432;Database=app;Username=app;Password=" + dbPassword,
+      "mcr.microsoft.com/dotnet/aspnet:" + framework + ".0",
+      "dotnet", "src/backend/applications/Api/bin/Release/net" + framework + ".0/Api.dll"]);
+  await productionApi(tlsApiName, "api-tls", true);
+  startedTlsApi = true;
+  await productionApi(untrustedApiName, "api-untrusted", false);
+  startedUntrustedApi = true;
+  let productionReady = false;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      await docker(["exec", webName, "node", "-e",
+        'Promise.all(["http://api-tls:8080/health","http://api-untrusted:8080/health"].map(u=>fetch(u,{signal:AbortSignal.timeout(2500)}))).then(r=>process.exit(r.every(x=>x.ok)?0:1)).catch(()=>process.exit(1))'
+      ], { timeout: 7500 });
+      productionReady = true; break;
+    } catch { await sleep(450); }
+  }
+  if (!productionReady) throw Error("Both isolated Production ASP.NET Core APIs must start");
+
+  // A client WITHOUT the ephemeral CA must fail the TLS handshake/hostname
+  // verification. Success would invalidate the trust-boundary test.
+  await assert.rejects(docker(["run", "--rm", "--network", network,
+    "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--user=" + uid + ":" + gid, "--memory=128m", "--pids-limit=64",
+    "node:22-bookworm-slim", "node", "-e",
+    'fetch("https://identity-tls:9443/.well-known/openid-configuration",{signal:AbortSignal.timeout(3500)}).then(()=>process.exit(0)).catch(()=>process.exit(17))'
+  ], { timeout: 12000 }), "A client without the CA must reject the HTTPS issuer");
+
+  // Replay the real .NET JWT+JWKS rollover/RBAC test against both Production
+  // API instances. The untrusted API must answer 401 to a correctly signed
+  // token while the API with CA trust accepts the SAME signing key.
+  const tlsRollover = await docker(["run", "--rm", "--network", network,
+    "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--user=" + uid + ":" + gid, "--memory=192m", "--pids-limit=80",
+    "--mount", tlsMount,
+    "--mount", "type=bind,src=" + rolloverPath + ",dst=/ci-api-rollover.mjs,readonly",
+    "--env=CI=true",
+    "--env=OIDC_CI_SECRET=" + tlsIdpControl,
+    "--env=NODE_EXTRA_CA_CERTS=/ci-tls/ca.crt",
+    "--env=OIDC_TEST_TRANSPORT=private-tls",
+    "node:22-bookworm-slim", "node", "/ci-api-rollover.mjs"
+  ], { timeout: 95000 });
+  assert.match(tlsRollover, /OIDC_PRODUCTION_HTTPS_CA_PASS/);
+  console.log(tlsRollover);
   console.log("FULLSTACK_OIDC_POSTGRES_PASS: " + verifiedBrowserTests + " Chromium tests with CORS, multi-tab logout, Nginx CSP, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
@@ -318,6 +447,9 @@ try {
   if (startedCsp) console.error("Nginx CSP logs:", await logs(cspName));
   process.exitCode = 1;
 } finally {
+  if (startedTlsApi) await docker(["rm", "-f", tlsApiName]).catch(() => {});
+  if (startedUntrustedApi) await docker(["rm", "-f", untrustedApiName]).catch(() => {});
+  if (startedTlsIdp) await docker(["rm", "-f", tlsIdpName]).catch(() => {});
   if (startedWeb) await docker(["rm", "-f", webName]).catch(() => {});
   if (startedCsp) await docker(["rm", "-f", cspName]).catch(() => {});
   if (startedApi) await docker(["rm", "-f", apiName]).catch(() => {});
@@ -327,4 +459,5 @@ try {
     console.error("Cleanup network failed:", String(e.message));
     process.exitCode = 1;
   });
+  if (tlsDirectory) await rm(tlsDirectory, { recursive: true, force: true });
 }

@@ -83,7 +83,7 @@ jobs:
         run: |
           docker pull mcr.microsoft.com/playwright:v1.64.1-noble
           timeout 300s node src/runner/scripts/playwright-smoke.mjs src/frontend/generated-fixture
-      - name: Run real React-to-.NET browser integration on private Docker network
+      - name: Run React-to-.NET OIDC browser and Production HTTPS issuer/JWKS integration on private Docker network
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
         run: |

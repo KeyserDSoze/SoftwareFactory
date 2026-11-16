@@ -3,10 +3,12 @@
  * NOT a production identity provider. Only bind on an internal per-job Docker network.
  */
 import http from "node:http";
+import https from "node:https";
+import { readFileSync } from "node:fs";
+import { oidcCiTransport } from "./oidc-ci-transport.mjs";
 import { generateKeyPairSync, randomBytes, createHash, sign, verify, timingSafeEqual } from "node:crypto";
 
-if (process.env.CI !== "true" || !process.env.OIDC_CI_SECRET || process.env.OIDC_CI_SECRET.length < 32)
-  throw Error("CI-only OIDC provider requires a unique ephemeral control secret");
+const transport = oidcCiTransport(process.env);
 const issuer = process.env.OIDC_ISSUER;
 const clientId = process.env.OIDC_CLIENT_ID;
 const audience = process.env.OIDC_AUDIENCE;
@@ -134,7 +136,7 @@ function readJwt(bearer) {
     return claims;
   } catch { return null; }
 }
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
   cors(res, req);
   if (req.method === "OPTIONS") return res.writeHead(204).end();
   const url = new URL(req.url || "/", issuer);
@@ -194,5 +196,9 @@ const server = http.createServer(async (req, res) => {
     }
   }
   return fail(res, 404, "not_found");
-});
-server.listen(8999, "0.0.0.0", () => process.stdout.write("OIDC_CI_PROVIDER_READY\n"));
+};
+const server = transport.secure ? https.createServer({
+  key: readFileSync(transport.key), cert: readFileSync(transport.cert),
+}, handler) : http.createServer(handler);
+server.listen(transport.port, "0.0.0.0", () =>
+  process.stdout.write("OIDC_CI_PROVIDER_READY\n"));
