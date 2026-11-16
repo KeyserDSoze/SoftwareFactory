@@ -12,7 +12,7 @@ Il preflight di Docker Compose considerava solo due servizi noti e l'eventuale t
 ## Decisione
 
 1. Definire una allowlist esatta dei servizi `runner-api`, `runner-worker`, `cloudflared` opzionale. Un servizio nuovo richiede proposta, review, test e ADR, non viene ignorato automaticamente.
-2. Vietare in `cloudflared` mount di qualsiasi tipo, volumi ereditati, tmpfs, dispositivi, namespace condivisi, cap extra e pubblicazione host. Il tunnel mantiene soltanto traffico di rete necessario verso l'API.
+2. Vietare in `cloudflared` mount di qualsiasi tipo, inclusi `volumes_from`, `secrets`, `configs`, `tmpfs`, dispositivi, namespace condivisi, cap extra e pubblicazione host. Vietare anche ad API e worker le alternative ai bind espliciti: `volumes_from` consentirebbe all'API di ereditare il socket del worker senza comparire in `volumes`. Il tunnel mantiene soltanto traffico di rete necessario verso l'API.
 3. Canonicalizzare il controllo degli host bind mount: no path relativi/noncanonici, no mount di `/` o directory di sistema, no data/work sovrapposti. Unica eccezione: `/run/user/1000/docker.sock` montato come `/run/docker.sock` **solo** nel worker, previa verifica host rootless.
 4. Test Node positivi sui Compose noti e negativi su sidecar rootful, tunnel mount/namespace e percorsi problematici. Nessun segreto o JSON Compose va stampato in caso di rifiuto.
 

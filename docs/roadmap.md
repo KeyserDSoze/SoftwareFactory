@@ -521,5 +521,5 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 ## v0.2 — Preflight Compose: allowlist dei servizi e isolamento mount (#65)
 
 - Rifiutare ogni servizio aggiuntivo al Compose risolto oltre a API, worker e tunnel opzionale; impedire il falso `status:passed` di un progetto con sidecar privilegiato o porte pubbliche non validate.
-- Denegare a `cloudflared` qualsiasi mount, device o namespace condiviso; imporre path host canonici sicuri e data/work non sovrapposti. Preservare solo il socket dedicato `/run/user/1000/docker.sock` del worker.
+- Denegare a `cloudflared` qualsiasi mount incluso `volumes_from`, `secrets`, `configs`, `tmpfs`, device o namespace condiviso; negare questi mount impliciti anche a API/worker per evitare che l'API erediti il socket del worker; imporre path host canonici sicuri e data/work non sovrapposti. Preservare solo il socket dedicato `/run/user/1000/docker.sock` del worker.
 - Regressioni Node su override sidecar, tunnel host mount, path traversal e profili validi, più smoke Compose CI. ADR 0022; VM rootless e Cloudflare Access reali non ancora attestati (#2).
