@@ -495,3 +495,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Il coordinatore non deve iniziare repair su ultimo evento `recovered` anche se vecchi report portano `failed` con exit code di step precedente: respingere con `REPAIR_NOT_FAILED`.
 - La retention controlla l'ultimo evento del journal verificato prima e *sotto il lock* di cancellazione; i `recovered` scaduti si conservano finché un operatore non riconcilia container/journal con worker e API fermati. I terminali normali scaduti rimangono eleggibili per retention.
 - Test Node con export, API GET, journal legacy/moderni, repair negato, claimed job, no retry e retention. ADR 0018; quota preservata a costo di spazio non limitato per orfani finché non interviene l'operatore. #2 aperta per fencing e VM Docker rootless reale.
+
+
+## v0.2 — Canary rootless con probe fresco prima di ogni comando (#62)
+
+- Non affidarsi al probe iniziale del canary: richiedere `probeRootlessDocker({host}) === true` appena prima di ogni `create`, `inspect`, `start --attach` e `rm`, senza session cache.
+- Negare l'esecuzione anche con daemon che cambia a metà ciclo, output diverso da `true`, errori o timeout, senza secret leak. Se il container non è stato verificato o il daemon non è più rootless al cleanup, non cancellare e lasciare investigazione manuale operator-only.
+- Test Node deterministici per tutte le transizioni, mantenimento degli argomenti Docker immutabili e CI real-Docker rootful via script di smoke trusted. ADR 0019. La #2 richiede ancora VM rootless e Cloudflare Tunnel/Access reali, fencing e attestazione indipendente.
