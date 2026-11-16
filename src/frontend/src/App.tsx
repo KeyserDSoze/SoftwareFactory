@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
+import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import "./components/code-agent.css";
 import { workspaceFiles } from "./domain/development";
 import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE_OPTIONS, STAGES, updateConfig } from "./domain/defaults";
@@ -348,6 +349,7 @@ export default function App() {
               <label>Runner API key (solo sessione)<SecretInput secretKey="runner.key" placeholder="API key per job build/test"/></label>
               <label>Operatore repair (solo sessione)<SecretInput secretKey="runner.operator.key" placeholder="Chiave personale con ruoli repair"/></label></div>
             <p className="helper">I checkpoint richiedono una credenziale operatore separata dalla chiave dei job. Ruoli: propose per creare patch/re-test, review per dichiarare review, approve per registrare approvazione. Il client può richiedere di cambiare chiave prima della review o approvazione; non è una prova di identità umana o una firma. Se il runner non configura operatori, l'API repair resta disabilitata.</p>
+            <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} />
             <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
