@@ -318,3 +318,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Entrambi i GET protetti ritentano al massimo due volte su `EVIDENCE_INVALID` (25ms tra tentativi), senza bypassare la verification strict, senza mutate/repair automatici; 409 persistenti e 404 invariati.
 - Test Node con vera chain e disallineamento controllato su due istanze API, export verificato e prova che errori persistenti non diventano 200.
 - Nessuna attestation/lock cross-host aggiunta; #2 resta aperta.
+
+
+## v0.2 — Ripresa bounded polling browser (#37)
+
+- Evitare che il primo guasto di rete/503 del runner interrompa per sempre la lettura dei test; classificare HTTP e rete con errore tipizzato e retry deterministico bounded 5 tentativi (2.5s → 30s).
+- Interrompere immediatamente 401/403/404/409, JSON invalido, ID non valido e abort; riprovare solo GET sullo stesso job, con bottone manuale dopo interruzione. Mai trattenere esiti vecchi come passed.
+- Test Vitest su politica decisionale, stato HTTP, rete, abort e limiti backoff, con verifiche CI React/TypeScript e fullstack. L'orchestrazione autonoma autenticata e i veri workload su VM rootless restano nella #2.

@@ -228,3 +228,8 @@ La serializzazione `/data/jobs/.admission` supporta una policy opzionale di **nu
 ### Finestra di consistenza HTTP per evidence journal (#36)
 
 Il writer del runner segue una sequenza di sicurezza `append+fsync(journal) → rename(report)`, per non dichiarare un risultato non ancora registrato. Non essendo un commit transazionale multi-file, i lettori HTTP senza claim possono vedere brevemente journal nuovo/report vecchio. I due GET di job e bundle riprovano la **verifica completa** fino a tre volte, soltanto su `EVIDENCE_INVALID`, per non bloccare il polling su un falso 409 transitorio. Corruzione persistente e assenza di file restano errori; non esiste sincronizzazione distribuita, auto-healing delle prove o garanzia che i test siano stati effettivamente eseguiti su una VM fidata. Restano in #2.
+
+
+### Polling resiliente ma fail-closed del client (#37)
+
+La SPA interroga il report del job con `AbortController` e un timer disattivabile. Un `RunnerRequestError` trasporta status HTTP e classificazione di recuperabilità: rete/408/429/5xx permettono al più 5 retry GET con backoff bounded, azzerati dopo un successo; 401/403/404/409 e JSON errato fermano il ciclo e invalidano la visualizzazione di report non più leggibili. Un pulsante riprende solo il GET dello stesso UUID, mai crea o approva job. I timer e le fetch sono cancellati su variazione di credenziali/endpoint/job o unmount. È una misura UX/affidabilità del control plane browser, non affidabilità del daemon, revoca garantita o attestazione off-host (#2).

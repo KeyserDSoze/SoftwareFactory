@@ -319,3 +319,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `recordJobEvidence` fa `fsync(evidence.jsonl)` **prima** del rename atomico di `report.json`. Un GET durante l'intervallo non deve trasformare automaticamente la discrepanza transitoria in falso `409 evidence_invalid`: usare `verifyJobEvidenceForRead` con massimo **tre letture** separate da 25ms, ritentando solo su `EVIDENCE_INVALID`.
 - Non annacquare `verifyJobEvidence` originale, non cambiare il protocollo o scrivere/riparare file dai GET. Errori di integrity persistenti devono restare HTTP 409, job mancanti 404; export e report devono usare esattamente la **stessa verifica integrale** per ogni tentativo.
 - L'admission (#34), il worker e il coordinatore mantengono le loro policy di integrità; il retry HTTP non fornisce un lock distribuito, una fonte trusted o attenuazione della corruzione. Provare con vera chain valida e report provvisoriamente stale, due API e snapshot esportato verificabile.
+
+
+## Polling client bounded, senza riesecuzioni implicite (#37)
+
+- `RunnerPanel` deve continuare a interrogare il job già esistente dopo rete/HTTP 408,429,5xx transitori con **max 5 retry consecutivi** e backoff 2.5/5/10/20/30s. Un GET valido azzera il budget; `passed/failed/incomplete` fermano il polling. Non fare mai POST al runner, AI o GitHub dal recovery del polling.
+- `runnerPollDecision` classifica solo `RunnerRequestError` di rete oppure HTTP temporaneo; 401/403/404/409, JSON malformato, ID invalido e cancellazioni deliberate restano stop immediato. I motivi di errore si mostrano senza token/headers e non possono essere interpretati come prove di test.
+- Dopo esaurimento della soglia o stop permanente mostrare `Riprova lettura`: una nuova serie di GET, non un nuovo test. Scartare report/verification non validi. Su cambio di job, endpoint, credenziali o unmount abortire fetch in-flight, rimuovere timer e ignorare risposte obsolete. I report realmente passed richiedono ancora verifica di digest/step del codice corrente.

@@ -183,3 +183,8 @@ Il runner supporta `RUNNER_MAX_ACCEPTED_PER_MINUTE` (0 predefinito = disabilitat
 ## Letture del runner resilienti durante la scrittura delle prove (#36)
 
 Il worker scrive prima e sincronizza il journal delle evidenze, poi aggiorna il report con rename atomico. Un polling HTTP che cade nel brevissimo intervallo può vedere journal e report di due revisioni diverse: i GET `/v1/jobs/{id}` e `/v1/jobs/{id}/evidence` effettuano ora **solo in quel caso** un retry bounded (massimo tre letture, pause da 25ms), per non interrompere il polling con falsi `409 evidence_invalid`. Le prove continuano a essere verificate a ogni tentativo, senza ricostruzioni o scritture automatiche. Una manomissione persistente restituisce ancora 409 e un job inesistente 404; il miglioramento non equivale ad attestazione indipendente o fencing multi-host (#2).
+
+
+## Polling resiliente dei job esistenti (#37)
+
+Il pannello Test e compilazione reali riprende automaticamente la **lettura del report** in caso di guasti temporanei al tunnel, alla rete o di HTTP 408/429/5xx, con massimo cinque retry consecutivi e backoff crescente (2,5–30 secondi). La lettura riuscita riattiva il normale polling senza avviare un nuovo job. Per 401/403/404/409 o report non validi il polling si ferma, senza mostrare esiti precedenti come verificati. Dopo un'interruzione prolungata o un errore permanente è disponibile `Riprova lettura`, che invia soltanto GET e **non** riesegue Docker, AI o GitHub. Cambio di job/endpoint/API key e chiusura del pannello annullano le letture precedenti. Non è un meccanismo di alta disponibilità o di attestazione remota (#2).

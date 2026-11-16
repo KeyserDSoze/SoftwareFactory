@@ -30,6 +30,24 @@ export type RunnerVerification = {
   detail: string;
 };
 
+/** Only transient transport/HTTP failures may be polled again. In particular,
+ * 401/403 revoke access, 404 is missing and 409 denotes invalid evidence.
+ * Do not retry a structurally invalid successful JSON response.
+ */
+export class RunnerRequestError extends Error {
+  constructor(message: string, readonly status: number | null, readonly transient: boolean) {
+    super(message);
+    this.name = "RunnerRequestError";
+  }
+}
+export function runnerPollDecision(error: unknown, failures: number):
+  { retry: true; attempt: number; delayMs: number } | { retry: false } {
+  if (!(error instanceof RunnerRequestError) || !error.transient ||
+      !Number.isInteger(failures) || failures < 0 || failures >= 5) return { retry: false };
+  const attempt = failures + 1;
+  return { retry: true, attempt, delayMs: Math.min(30_000, 2500 * 2 ** (attempt - 1)) };
+}
+
 const PATH_ALLOWED = [
   /^src\/backend\/(?:applications\/Api|business|domain|infrastructure)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:cs|csproj|json)$/,
   /^src\/backend\/infrastructure\/Migrations\/[0-9]{4}_[A-Za-z0-9_-]+\.sql$/,
@@ -63,11 +81,21 @@ export async function runnerRequest<T>(baseUrl: string, key: string, endpoint: s
     ...init, mode: "cors", redirect: "error", cache: "no-store",
     headers: { Authorization: "Bearer " + key, ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...(init.headers || {}) },
-  }); } catch { throw new Error("Runner non raggiungibile: verifica URL, tunnel, CORS e connessione."); }
+  }); } catch (error) {
+    // Cancellation caused by changing job, endpoint, credentials or unmount
+    // must never be treated as a retryable tunnel/network failure.
+    if (init.signal?.aborted || (error instanceof Error && error.name === "AbortError"))
+      throw error;
+    throw new RunnerRequestError(
+      "Runner non raggiungibile: verifica URL, tunnel, CORS e connessione.", null, true);
+  }
   if (!response.ok) {
     let detail = "";
     try { const body = await response.json() as { error?: string; detail?: string }; detail = body.detail || body.error || ""; } catch { /* invalid response */ }
-    throw new Error("Runner HTTP " + response.status + (detail ? ": " + detail.slice(0, 300) : ""));
+    const status = response.status;
+    throw new RunnerRequestError(
+      "Runner HTTP " + status + (detail ? ": " + detail.slice(0, 300) : ""),
+      status, status === 408 || status === 429 || status >= 500);
   }
   return response.json() as Promise<T>;
 }

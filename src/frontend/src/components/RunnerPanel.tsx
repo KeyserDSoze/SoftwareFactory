@@ -7,7 +7,7 @@ import { getRepairCheckpoint, prepareRepairRetest, repairPaths, syncRepairRetest
 import { readSecret } from "../infrastructure/store";
 import {
   fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
-  verifyCurrentRunnerReport, type RunnerReport, type RunnerStep, type RunnerVerification,
+  runnerPollDecision, verifyCurrentRunnerReport, type RunnerReport, type RunnerStep, type RunnerVerification,
 } from "../infrastructure/runner";
 
 type Props = {
@@ -31,6 +31,10 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   const [steps, setSteps] = useState<RunnerStep[]>(["dotnet-build", "web-build"]);
   const [report, setReport] = useState<RunnerReport | null>(null);
   const [verification, setVerification] = useState<RunnerVerification | null>(null);
+  const [pollNotice, setPollNotice] = useState<{
+    kind: "retrying" | "paused" | "blocked"; detail: string;
+  } | null>(null);
+  const [pollRestart, setPollRestart] = useState(0);
   const [requesting, setRequesting] = useState(false);
   const [repairing, setRepairing] = useState(false);
   // Preserve an in-flight receipt UUID for manual retry after a lost response.
@@ -58,22 +62,44 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
   useEffect(() => {
     setReport(null);
     setVerification(null);
+    setPollNotice(null);
     if (!jobId || !endpoint || !secret) return;
     let disposed = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveFailures = 0;
     const controller = new AbortController();
     const tick = async () => {
       try {
         const next = await fetchRunnerJob(endpoint, secret, jobId, controller.signal);
         if (disposed) return;
+        consecutiveFailures = 0;
+        setPollNotice(null);
         setReport(next);
         if (!terminal(next.state)) timer = setTimeout(() => void tick(), 2500);
-      } catch (e) {
-        if (!disposed) onError("Report runner: " + (e instanceof Error ? e.message : String(e)));
+      } catch (error) {
+        if (disposed || controller.signal.aborted) return;
+        const decision = runnerPollDecision(error, consecutiveFailures);
+        if (decision.retry) {
+          consecutiveFailures = decision.attempt;
+          setPollNotice({ kind: "retrying",
+            detail: "Connessione temporaneamente indisponibile. Nuova lettura " +
+              decision.attempt + "/5 senza riavviare il job." });
+          timer = setTimeout(() => void tick(), decision.delayMs);
+          return;
+        }
+        // Never show a previous report as verified when a non-recoverable read
+        // fails; 401/403/404/409 and malformed JSON must stop automatic polls.
+        setReport(null);
+        setVerification(null);
+        setPollNotice({ kind: consecutiveFailures ? "paused" : "blocked",
+          detail: consecutiveFailures
+            ? "Letture automatiche sospese dopo cinque tentativi senza risposta valida."
+            : "Lettura fermata: il runner ha rifiutato la richiesta o il report non è valido." });
+        onError("Report runner: " + (error instanceof Error ? error.message : String(error)));
       }
     };
     void tick();
     return () => { disposed = true; controller.abort(); if (timer) clearTimeout(timer); };
-  }, [jobId, endpoint, secret, onError]);
+  }, [jobId, endpoint, secret, onError, pollRestart]);
 
   useEffect(() => {
     let disposed = false;
@@ -234,7 +260,16 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     {jobId && <div className="runner-report">
       <div className="runner-report-title"><strong><Activity size={16}/> Job {jobId.slice(0, 8)}</strong>
         {displayedReport && <span className={"runner-state " + kind}>{kind === "awaiting" ? displayedReport.state.toUpperCase() : kind.toUpperCase()}</span>}</div>
-      {!displayedReport ? <p className="helper">Caricamento report dal runner...</p> : <>
+      {pollNotice && <div className="code-agent-warning">
+        <ShieldAlert size={17}/>
+        <span>{pollNotice.detail}</span>
+        {pollNotice.kind !== "retrying" &&
+          <button className="secondary" disabled={busy || requesting || repairing || !endpoint || !secret}
+            onClick={() => setPollRestart(x => x + 1)}>Riprova lettura</button>}
+      </div>}
+      {!displayedReport ? <p className="helper">{pollNotice
+        ? "Nessun report verificato disponibile: non dedurre l'esito dei test."
+        : "Caricamento report dal runner..."}</p> : <>
         <p className="helper">{displayedReport.summary}</p>
         <div className={"runner-verification " + (kind === "passed" ? "ok" : kind === "stale" || kind === "invalid" ? "invalid" : "")}>
           {kind === "passed" ? <CheckCircle2 size={17}/> : kind === "awaiting" ? <Clock size={17}/> : <ShieldAlert size={17}/>}
