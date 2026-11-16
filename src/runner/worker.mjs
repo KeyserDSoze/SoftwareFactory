@@ -5,6 +5,7 @@ import { atomicWrite, jobDirectory, readReport, scrub, validateRequest } from ".
 import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep } from "./docker.mjs";
 import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 import { withAdmissionLock } from "./admission.mjs";
+import { startWorkerHeartbeat } from "./heartbeat.mjs";
 
 /** Redact results before either report.json or the evidence journal sees them. */
 function safeStepResult(value) {
@@ -149,9 +150,12 @@ export async function runWorker({
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   workspaceRoot = process.env.RUNNER_HOST_WORK_DIR || "/srv/softwarefactory/workspaces",
   pollMs = 1500, stop = () => false, executeQueuedJob = executeJob,
+  heartbeatIntervalMs = 5000,
 } = {}) {
   console.log("Runner worker is polling jobs; Docker socket must be rootless and host-isolated");
-  while (!stop()) {
+  const heartbeat = await startWorkerHeartbeat({ dataDir, intervalMs: heartbeatIntervalMs });
+  try {
+    while (!stop()) {
     let entries = [];
     try { entries = await readdir(path.join(dataDir, "jobs")); }
     catch(e) { if(e.code !== "ENOENT") console.error("Queue read error:", e.message); }
@@ -199,6 +203,9 @@ export async function runWorker({
         catch { /* corrupt or incomplete ledger is never repaired silently */ }
       }
     } else await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+  } finally {
+    await heartbeat.stop();
   }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

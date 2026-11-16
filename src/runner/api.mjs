@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
+import { readWorkerHeartbeat } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -13,6 +14,7 @@ export function createRunnerServer({
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
   maxAcceptedPerMinute = Number(process.env.RUNNER_MAX_ACCEPTED_PER_MINUTE ?? 0),
+  workerHeartbeatMaxAgeSeconds = Number(process.env.RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS ?? 30),
   maxRetained = 100,
   admissionWaitMs = 1500,
   repairOperators = process.env.RUNNER_REPAIR_OPERATORS_JSON,
@@ -22,6 +24,9 @@ export function createRunnerServer({
   if (!Number.isInteger(maxAcceptedPerMinute) ||
       maxAcceptedPerMinute < 0 || maxAcceptedPerMinute > 100)
     throw new Error("RUNNER_MAX_ACCEPTED_PER_MINUTE must be an integer between 0 and 100");
+  if (!Number.isInteger(workerHeartbeatMaxAgeSeconds) ||
+      workerHeartbeatMaxAgeSeconds < 10 || workerHeartbeatMaxAgeSeconds > 300)
+    throw new Error("RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS must be 10–300");
   if (!allowedOrigins.length || allowedOrigins.some(origin => !/^https:\/\/[a-z0-9.-]+(?::\d+)?$|^http:\/\/localhost(?::\d+)?$|^http:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin))) {
     throw new Error("Set explicit RUNNER_ALLOWED_ORIGINS (HTTPS or localhost), no wildcard");
   }
@@ -72,6 +77,18 @@ export function createRunnerServer({
       : null;
     if (repairRoute ? !repairOperator : !authenticate(req.headers.authorization, apiKey)) {
       send(401, { error: "unauthorized" }); return;
+    }
+    if (req.method === "GET" && req.url === "/v1/readiness") {
+      // Readiness is not liveness. Do not expose host paths or internal
+      // exceptions, and do not claim Docker rootless/SDK/test attestation.
+      try {
+        await readWorkerHeartbeat(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
+        send(200, { status: "ready", worker: "responsive" });
+      } catch {
+        res.writeHead(503, { ...headers, "Retry-After": "5" });
+        res.end(JSON.stringify({ error: "worker_unavailable" }));
+      }
+      return;
     }
     if (req.method === "GET" && req.url === "/v1/capabilities") {
       send(200, { protocol: 1, steps: ALLOWED_STEPS, execution: "remote-docker", networkDefault: "none" }); return;

@@ -233,3 +233,8 @@ Il writer del runner segue una sequenza di sicurezza `append+fsync(journal) → 
 ### Polling resiliente ma fail-closed del client (#37)
 
 La SPA interroga il report del job con `AbortController` e un timer disattivabile. Un `RunnerRequestError` trasporta status HTTP e classificazione di recuperabilità: rete/408/429/5xx permettono al più 5 retry GET con backoff bounded, azzerati dopo un successo; 401/403/404/409 e JSON errato fermano il ciclo e invalidano la visualizzazione di report non più leggibili. Un pulsante riprende solo il GET dello stesso UUID, mai crea o approva job. I timer e le fetch sono cancellati su variazione di credenziali/endpoint/job o unmount. È una misura UX/affidabilità del control plane browser, non affidabilità del daemon, revoca garantita o attestazione off-host (#2).
+
+
+### Worker readiness separata dall'HTTP API liveness (#38)
+
+La API espone `/healthz` non autenticata soltanto per la propria responsività. Il `runner-worker` aggiorna ogni 5s un file JSON privato tramite rename atomico sul volume condiviso, con instanceId non segreto e timestamp. Un timer indipendente dalla funzione di esecuzione Docker permette segnali di liveness anche mentre il worker aspetta test lunghi. Il GET autenticato `/v1/readiness` apre l'heartbeat con protezioni no-follow/UID/mode/file size e accetta soltanto timestamp canonical ISO entro la soglia 10–300s configurabile (30 default). Altrimenti risponde 503 fail-closed, senza rivelare dettagli, lasciando gli endpoint job e il loro journal indipendenti. Il segnale non autentica il daemon Docker né garantisce che il processo worker terminerà un job, e un crash può restare visibile come ready per l'intera soglia; osservabilità vera/attestation remota e VM rootless richiedono #2.

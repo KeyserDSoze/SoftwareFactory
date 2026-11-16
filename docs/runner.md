@@ -463,3 +463,17 @@ Questa tolleranza limita i falsi errori durante il polling SPA ma non copre una 
 Il client `RunnerPanel` interroga `GET /v1/jobs/{uuid}` ogni 2,5 secondi finché lo stato resta `queued` o `running`. Un problema di rete, Cloudflare Tunnel momentaneamente irraggiungibile o HTTP `408`, `429` o `5xx` non è un fallimento del test: il client riprova fino a cinque volte consecutive, con backoff 2,5 / 5 / 10 / 20 / 30 secondi. Una lettura riuscita resetta l'intero budget; un report terminale valido arresta normalmente il polling. Anche durante l'attesa non viene generata alcuna nuova submission, patch o approvazione automatica.
 
 HTTP `401/403` (autenticazione/autorizzazione), `404` (job inesistente), `409` (evidenza corrotta) e risposte JSON non parseabili **non vengono ritentati automaticamente**: il client mostra che non ci sono prove verificate e sospende il polling, senza mantenere un precedente esito come credibile. Dopo l'esaurimento dei retry compare `Riprova lettura`, che azzera il budget ed esegue **solo un GET del job già noto**, mai un POST. Il cleanup di `AbortController` e timer protegge da risposte obsolete dopo cambio job/endpoint/secret o unmount. Il browser non può distinguere un errore CORS da altri errori di rete: in quei casi si ferma comunque dopo cinque retry e mostra il controllo manuale, senza bypass di sicurezza. L'approvazione repair resta vincolata a report, digest e step realmente verificati (#2).
+
+
+## Readiness autenticata e heartbeat del worker (#38)
+
+La vecchia `GET /healthz` è volutamente **solo liveness API**, senza autenticazione: risponde anche quando il worker è offline. Per verificare il collegamento tra i due container sullo stesso volume, eseguire:
+
+```bash
+curl -fsS -H "Authorization: Bearer $RUNNER_API_KEY" \
+  http://127.0.0.1:8787/v1/readiness
+```
+
+Il worker salva ogni 5 secondi `/data/worker-heartbeat.json` con un `instanceId` casuale e due timestamp ISO; il file è creato via rename atomico con permessi 0600, senza PID, secret, identificativi Docker, sorgenti o dettagli dei job. Un timer indipendente dal poller lo aggiorna anche durante un test Docker atteso. L'API apre il file con `O_NOFOLLOW`, controlla `fstat` sulla FD (file regolare, singolo inode, owner UID efficace, mode privato e dimensione limitata), valida JSON/version/UUID e timestamp. Se tutto è coerente e `updatedAt` è negli ultimi 30s (default), restituisce HTTP 200 `{"status":"ready","worker":"responsive"}`. Se il file manca, è corrotto, non appartiene all'UID dell'API, è stale o nel futuro, risponde HTTP 503 `{"error":"worker_unavailable"}` e `Retry-After: 5`; un Bearer invalido produce 401. La healthz non cambia e gli endpoint job/repair non vengono automaticamente chiusi dal solo heartbeat.
+
+La soglia si configura con `RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS=30` nella `.env` Compose; valore ammesso intero 10–300, errato => avvio API rifiutato. Entrambi i container devono vedere lo stesso volume e l'UID mapping deve permettere la lettura owner-only. Un crash può lasciare un falso 200 fino alla scadenza; un heartbeat valido prova soltanto **worker Node recentemente responsivo e accessibilità del file**, non accesso effettivo al daemon Docker, rootless mode, correttezza CLI, SDK .NET/Playwright, sicurezza dei container, attestazione off-host o reachability pubblica di Cloudflare Access. Il collaudo in VM dedicata e un vero test Docker sono ancora richiesti in #2. Gli endpoint readiness protetti non vanno usati come prova per approvare un patch.

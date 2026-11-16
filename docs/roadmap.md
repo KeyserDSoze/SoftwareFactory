@@ -325,3 +325,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Evitare che il primo guasto di rete/503 del runner interrompa per sempre la lettura dei test; classificare HTTP e rete con errore tipizzato e retry deterministico bounded 5 tentativi (2.5s → 30s).
 - Interrompere immediatamente 401/403/404/409, JSON invalido, ID non valido e abort; riprovare solo GET sullo stesso job, con bottone manuale dopo interruzione. Mai trattenere esiti vecchi come passed.
 - Test Vitest su politica decisionale, stato HTTP, rete, abort e limiti backoff, con verifiche CI React/TypeScript e fullstack. L'orchestrazione autonoma autenticata e i veri workload su VM rootless restano nella #2.
+
+
+## v0.2 — Worker readiness con heartbeat privato (#38)
+
+- Nuovo segnale periodico atomico owner-only `/data/worker-heartbeat.json` aggiornato ogni 5s anche quando il worker attende test lunghi; nessun token, codice, log o socket nel file.
+- `GET /v1/readiness` autenticato con Bearer job: 200 su heartbeat valido/fresco, 503 + Retry-After su worker assente/stale/futuro/JSON ostile/permission mismatch. `healthz` resta pura liveness non autenticata.
+- TTL configurabile con `RUNNER_WORKER_HEARTBEAT_MAX_AGE_SECONDS` 10–300 (default 30), Compose, test two-API e validazione file; liveness non è prova Docker rootless o attestation esterna.
+- Restano #2: vero isolamento VM rootless, verifica engine/SDK/Cloudflare Access su deployment reale, storage/quote per tenant, fencing e prove off-host.
