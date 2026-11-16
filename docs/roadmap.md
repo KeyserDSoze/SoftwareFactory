@@ -589,3 +589,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - Dopo l'ispezione del comando e dei namespace (#75), verificare anche `Config.Env` contro i soli tre default dell'immagine `node:22-bookworm-slim`, negando override `NODE_OPTIONS`/`NODE_PATH`/`LD_PRELOAD`, duplicati, input malformati e qualunque healthcheck non revisionato.
 - Test Node con injection pre/post-start e riconciliazione, smoke vero Docker rootful CI-only, documentazione e ADR 0033. L'epica #2 resta aperta per test VM rootless e Cloudflare veri e attestazione indipendente.
+
+## v0.2 — Acceptance locale VM rootless composita (#77)
+
+- Nuova CLI manuale/operator-only con UID 1000, flag `--confirm`, env 0600 e digest Node immutabile pre-cached; controlla sequenzialmente Compose, host e canary reale **sulla socket del daemon rootless host**. Tutti i gate devono passare e la cleanup essere verificata prima di emettere receipt minimale priva di segreti.
+- Test Node su profili, ordering, cancellazione/abort, receipt e no secret leak; ADR 0034, README e runner guide. Non è prova VM reale finché non è eseguita da un operatore sulla VM; CI usa Docker rootful solo per component smoke. Sono ancora aperti la verifica HTTPS/Cloudflare off-host, il fencing cross-host e l'attestazione indipendente in #2.

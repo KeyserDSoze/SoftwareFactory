@@ -784,3 +784,34 @@ Il canary e `canary-reconcile.mjs` validano adesso `docker inspect.Config.Cmd` r
 Il canary usa l'immagine `node:22-bookworm-slim` identificata tramite riferimento immutabile `node@sha256:...` e già verifica `Config.Cmd` dell'intero script sentinella. L'inspect ora pretende anche un **ambiente ristretto**: esattamente tre voci, `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `NODE_VERSION=22.<minor>.<patch>` e `YARN_VERSION=1.22.<patch>`, senza duplicati. L'ordine non conta; un valore predefinito mancante, l'aggiunta di `NODE_OPTIONS` (preload `--require` o `--import`), `NODE_PATH`, `LD_PRELOAD`, un `HOME` non previsto o un `PATH` iniettato causa rifiuto. `Config.Healthcheck` dev'essere assente o `null` per impedire esecuzioni aggiuntive non approvate.
 
 Questi controlli operano **prima** dello start e nuovamente sul container a fine esecuzione; il riconciliatore usa gli stessi vincoli prima di proporre la rimozione manuale. Un canary legacy creato con immagine/profilo non aggiornato potrebbe richiedere indagine manuale anziché una rimozione automatica. La CI esercita realmente `docker create/inspect/start/rm` con l'immagine Node ufficiale, ma su daemon rootful ospitato da GitHub e con bypass rootless test-only, non su una VM rootless configurata dall'operatore. Il controllo statico delle variabili è vincolato a **Node 22**: aggiornare l'allowlist e ricontrollare su Docker reale prima di cambiare major o immagine (ADR 0033, #2).
+
+### Acceptance unica sulla VM dedicata: Compose → host → canary (#77)
+
+Per evitare che un operatore riporti come completo un deploy dopo aver superato soltanto il preflight statico, il repository offre il comando **operator-only** `src/runner/scripts/vm-acceptance.mjs`. Eseguirlo **sulla vera VM rootless**, come utente non-root dedicato **UID 1000**, dopo aver configurato directory host private, credential mode e file env 0600. La verifica non avvia il deployment; è un gate di accettazione locale prima/nel processo di provisioning.
+
+La Docker CLI dell'utente UID 1000 deve accedere alla socket **`unix:///run/user/1000/docker.sock`** (identica a quella prevista dal preflight host), non alla socket rootful di sistema. Occorre aver già pre-caricato nell'immagine store dello **stesso daemon rootless** l'immagine ufficiale `node:22-bookworm-slim` e aver ricavato il suo **RepoDigest immutabile** in formato `node@sha256:<64hex>` (si può usare `docker --host unix:///run/user/1000/docker.sock image inspect node:22-bookworm-slim --format '{{json .RepoDigests}}'`). Il canary usa `--pull=never` e non scarica immagini o dipendenze.
+
+```sh
+# Esempio: /srv/softwarefactory/operator.env è 0600 e di proprietà UID 1000.
+cd SoftwareFactory
+node src/runner/scripts/vm-acceptance.mjs \
+  --env-file=/srv/softwarefactory/operator.env \
+  --image=node@sha256:<digest-effettivo-di-64-caratteri> --confirm
+
+# Chiave API globale caricata da directory privata; operatori file opzionali.
+node src/runner/scripts/vm-acceptance.mjs \
+  --env-file=/srv/softwarefactory/operator.env \
+  --runner-key-file --operator-registry \
+  --image=node@sha256:<digest-effettivo-di-64-caratteri> --confirm
+
+# Registro tenant privato (mai unito a registro operatori).
+node src/runner/scripts/vm-acceptance.mjs \
+  --env-file=/srv/softwarefactory/operator.env \
+  --tenants --image=node@sha256:<digest-effettivo-di-64-caratteri> --confirm
+```
+
+La CLI esegue in ordine: 1) `preflight compose --env-file=...` con soli override revisionati, 2) `preflight host --env-file=...` per la **stessa modalità di credenziali**, con UID 1000, ownership e socket rootless, 3) `runRootlessCanary` con nuovo controllo rootless *prima di ogni Docker operation*, image digest pin e `rm` mirato dopo controllo d'identità. Blocca qualsiasi passo successivo se un gate fallisce. Poco prima del Docker create viene scritto sullo **stderr** `ROOTLESS_CANARY_ID=<UUID>`: se la sequenza si interrompe e il cleanup non può verificarsi, usare la CLI `canary-reconcile.mjs --canary=<UUID>` prima dry-run, poi `--apply --confirm-canary=<UUID>` secondo procedura. Non utilizzare `docker prune`.
+
+Solo se tutte le verifiche e la cleanup sono confermate, stdout emette `RUNNER_VM_ACCEPTANCE_PASS:` seguito da JSON versione 1, `scope:"local-vm"`, `authMode`, `operatorRegistry`, `canaryId`, `checks:["compose","host","canary"]` e `canaryCleanup:"verified"`. Il JSON **non contiene** API key, registro tenant, nome path host, token Cloudflare, digest immagine o output Docker; è **una ricevuta locale non firmata**, non un'attestazione indipendente né prova di processo immutabile in presenza di un host compromesso. Un failure emette messaggio statico e non una ricevuta di successo.
+
+**Secondo gate distinto:** da una postazione **esterna** alla VM eseguire `preflight endpoint` con `--url=... --origin=...` e un env operatore 0600 (o `--runner-key-file`/`--tenants` con `RUNNER_PROBE_BEARER`) per verificare HTTPS, CORS, auth e Cloudflare Access Service Auth. Non trasferire il tenant registry completo fuori host. La receipt locale non conferma il gate off-host; nessuno dei due fornisce firma di attestazione o fencing cross-host. La CI GitHub usa **Docker rootful** e non va registrata come acceptance VM (#2, ADR 0034).

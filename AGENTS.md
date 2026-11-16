@@ -599,3 +599,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - Non basta controllare `Config.Cmd` / `Entrypoint` e il marker: `docker inspect.Config.Env` deve avere esattamente `PATH` atteso, `NODE_VERSION=22.x.y`, `YARN_VERSION=1.22.x`. Vietare variabili loader come `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, duplicate, valori inattesi e `Config.Healthcheck` non nullo. Non stampare mai ambienti completi negli errori.
 - Canary e reconciler condividono `safeConfig`; controllare il Docker Engine reale via smoke rootful CI-only, senza attribuirgli una certificazione VM rootless. Per altre major Node aggiornare il profilo revisionato, fixture, ADR e smoke prima di usare digest di un'immagine differente (#2, ADR 0033).
+
+## VM acceptance locale e ricevute non attestate (#77)
+
+- `src/runner/scripts/vm-acceptance.mjs` è solo operatore su VM, UID 1000 con `--confirm`, env privato `--env-file=/absolute/path` e immagine cached `node@sha256:...`. Seleziona profilo Compose/host esplicito inline, `--runner-key-file`, `--tenants`, `--operator-registry` solo per globali. Non usare placeholder/fallback o accesso endpoint nello script VM.
+- Ordine obbligatorio: preflight Compose v2 → preflight host rootless UID/socket/secrets → canary Docker reale sul **socket host UID 1000**; gate incompleto o exception non può produrre success receipt. Stampare l'UUID non segreto del canary *prima* del create per possibile `canary-reconcile`, nessun segreto/env in receipt/error.
+- Il comando è una ricevuta **locale non firmata**, non un'attestazione hardware/off-host, non una prova di Cloudflare. Factory CI rootful testa test/seam e componenti Docker separati; solo VM e endpoint Access reali possono attestare il deployment operator-only (#2, ADR 0034).
