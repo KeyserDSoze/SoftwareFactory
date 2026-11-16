@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, mkdir, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
@@ -9,7 +9,7 @@ import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate,
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
-import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport, verifyJobEvidenceForRead, retryEvidenceRead } from "../evidence.mjs";
+import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport, verifyJobEvidenceForRead, retryEvidenceRead, isSafeJobEvidenceFile } from "../evidence.mjs";
 import { withAdmissionLock, admissionRateLimitRetryAfter } from "../admission.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
@@ -122,6 +122,96 @@ test("API rejects tampered report, edited journal, missing journal and unauthent
   }
 });
 
+
+test("job evidence requires inode-bound regular owned single-link files across two APIs", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-evidence-inode-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir,
+  }));
+  try {
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const auth = { Origin: origin, Authorization: "Bearer " + key };
+    const get = (i, pathName) => fetch(urls[i] + pathName, { headers: auth });
+    const accepted = await fetch(urls[0] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(job()),
+      headers: { ...auth, "Content-Type": "application/json" },
+    });
+    assert.equal(accepted.status, 202);
+    const id = (await accepted.json()).id;
+    const dir = jobDirectory(dataDir, id);
+    const report = path.join(dir, "report.json");
+    const journal = path.join(dir, "evidence.jsonl");
+    const originalReport = await readFile(report);
+    const originalJournal = await readFile(journal);
+    const valid = await verifyJobEvidence(dataDir, id);
+    assert.equal(valid.report.id, id);
+    const fd = await open(report, "r");
+    try {
+      const st = await fd.stat();
+      assert.equal(isSafeJobEvidenceFile(st, st.uid), true);
+      assert.equal(isSafeJobEvidenceFile(st, st.uid + 1), false);
+      assert.equal(isSafeJobEvidenceFile({ ...st, isFile: () => true, nlink: 2 }), false);
+      await atomicWrite(report, valid.report);
+      assert.equal((await fd.stat()).nlink, 0,
+        "a report inode unlinked by rename must never be accepted");
+      assert.equal(isSafeJobEvidenceFile(await fd.stat()), false);
+    } finally { await fd.close(); }
+    const assertCorrupt = async () => {
+      for (let i = 0; i < 2; i++) {
+        const urlPath = "/v1/jobs/" + id + (i ? "/evidence" : "");
+        const read = await get(i, urlPath);
+        assert.equal(read.status, 409, "unsafe evidence must fail closed");
+        assert.deepEqual(await read.json(), { error: "evidence_invalid" });
+      }
+      const blocked = await fetch(urls[0] + "/v1/jobs", {
+        method: "POST", body: JSON.stringify(job()),
+        headers: { ...auth, "Content-Type": "application/json",
+          "Idempotency-Key": randomUUID() },
+      });
+      assert.equal(blocked.status, 503, "unsafe retained sibling blocks admission");
+      assert.deepEqual(await blocked.json(), { error: "admission_integrity" });
+    };
+    const cases = [
+      { file: report, payload: originalReport },
+      { file: journal, payload: originalJournal },
+    ];
+    for (const { file, payload } of cases) {
+      const backup = file + ".saved";
+      await rm(file);
+      await writeFile(backup, payload, { mode: 0o600 });
+      await symlink(backup, file);
+      await assertCorrupt();
+      await rm(file);
+      await rm(backup);
+      await writeFile(file, payload, { mode: 0o600 });
+
+      const hardlink = file + ".hardlink";
+      await link(file, hardlink);
+      await assertCorrupt();
+      await rm(hardlink);
+
+      await chmod(file, 0o666);
+      await assertCorrupt();
+      await chmod(file, 0o600);
+
+      await writeFile(file, Buffer.alloc(4_000_001, 0x20));
+      await assertCorrupt();
+      await writeFile(file, payload);
+      assert.equal((await get(0, "/v1/jobs/" + id)).status, 200,
+        "restoring verified evidence must recover the job");
+    }
+    const replay = await get(1, "/v1/jobs/" + id + "/evidence");
+    assert.equal(replay.status, 200);
+    assert.equal(verifyEvidenceExport(await replay.json()).report.id, id);
+    await rm(report);
+    assert.equal((await get(0, "/v1/jobs/" + id)).status, 404,
+      "only genuinely missing report remains a 404");
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
 
 test("HTTP evidence read retries only transient journal/report skew and always rejects lasting corruption", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "sf-evidence-read-retry-"));

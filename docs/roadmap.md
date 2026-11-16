@@ -409,3 +409,10 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Eliminare path TOCTOU e letture JSON non bounded nel coordinatore repair: un'unica FD O_NOFOLLOW, fstat pre/post con owner/link/size/stability, limite 64KB, rifiuto di hardlink/symlink e retry limitato solo per inode unlinked durante rename atomico.
 - Un ledger internamente valido ma il cui ID non coincide con il pathname è `REPAIR_INTEGRITY`, anche su GET/replay/advance; test Node con due API, file swap, over-limit, ID diverso e ripristino.
 - Retrocompatibilità di sola lettura per sessioni legacy e limiti #2 persistenti (firma indipendente, transazioni IAM, VM rootless, quote tenant).
+
+
+## v0.2 — Confinamento dei report e journal evidence (#50)
+
+- Eliminare `readFile(path)` non bounded nella prova per-job: report e journal devono usare FD `O_NOFOLLOW`, `fstat` pre/post, UID/links/mode/size e lettura limitata a 4MB, senza accettare inode sostituiti durante rename.
+- Test su 2 API con symlink/hardlink, file con permessi insicuri, oversize e ripristino, mantenendo 404 soltanto per report mancante, 409 proof corrotta e 503 admission fail-closed; nessuna modifica a digest o schema/numero di step.
+- Firma off-host, VM Docker rootless reale, IAM tenant e Cloudflare Access rimangono in #2.
