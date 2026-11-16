@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { setTimeout as sleep } from "node:timers/promises";
 import { atomicWrite, jobDirectory, readReport } from "./common.mjs";
 
 const ZERO = "0".repeat(64);
@@ -78,6 +79,25 @@ export async function verifyJobEvidence(dataDir, id) {
         error instanceof SyntaxError) throw invalid();
     throw error;
   }
+}
+
+/** A worker fsyncs an appended journal entry BEFORE the atomic report rename.
+ * HTTP readers can briefly observe the new journal with the old report.
+ * Retry only this integrity mismatch; never accept unverified snapshots,
+ * retry missing jobs, truncate a journal, or hide persistent tampering.
+ */
+export async function retryEvidenceRead(read) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await read(); }
+    catch (error) {
+      if (error.code !== "EVIDENCE_INVALID" || attempt === 2) throw error;
+      await sleep(25);
+    }
+  }
+}
+
+export function verifyJobEvidenceForRead(dataDir, id) {
+  return retryEvidenceRead(() => verifyJobEvidence(dataDir, id));
 }
 
 /** Exclusive writer: API owns fresh UUID; worker and recovery hold atomic .claim.

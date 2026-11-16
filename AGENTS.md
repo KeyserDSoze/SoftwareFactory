@@ -312,3 +312,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Nel lock `jobs/.admission`, prima valutare **tutte** le prove SHA-256 del job (#34), poi cercare replay della stessa chiave+digest; un replay valido restituisce 202 anche se il rate è esaurito, una chiave riusata per un payload diverso produce sempre 409.
 - Per nuove accettazioni, contare gli `acceptedAt` ISO canonici degli ultimi 60s **inclusi i job terminati** conservati; timestamp non valido (modalità rate attiva) => `503 admission_integrity`. Timestamp futuri non permettono bypass: contano conservativamente. Raggiunto il limite => `429 rate_limited` + `Retry-After` bounded 1–60s, nessun file/journal aggiunto.
 - È solo un limite **globale** sullo stesso volume POSIX, non per tenant/IP/operatore. Il cleanup manuale o volumi non condivisi possono aggirarlo; la #2 richiede auth/quotas e fencing realmente distribuiti.
+
+
+## Letture HTTP durante il commit journal → report (#36)
+
+- `recordJobEvidence` fa `fsync(evidence.jsonl)` **prima** del rename atomico di `report.json`. Un GET durante l'intervallo non deve trasformare automaticamente la discrepanza transitoria in falso `409 evidence_invalid`: usare `verifyJobEvidenceForRead` con massimo **tre letture** separate da 25ms, ritentando solo su `EVIDENCE_INVALID`.
+- Non annacquare `verifyJobEvidence` originale, non cambiare il protocollo o scrivere/riparare file dai GET. Errori di integrity persistenti devono restare HTTP 409, job mancanti 404; export e report devono usare esattamente la **stessa verifica integrale** per ogni tentativo.
+- L'admission (#34), il worker e il coordinatore mantengono le loro policy di integrità; il retry HTTP non fornisce un lock distribuito, una fonte trusted o attenuazione della corruzione. Provare con vera chain valida e report provvisoriamente stale, due API e snapshot esportato verificabile.

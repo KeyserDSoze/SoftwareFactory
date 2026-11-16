@@ -310,3 +310,11 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Dopo verifica completa journal/report, conservare la precedenza di replay valido (202)/conflitto (409), poi quote di coda e rate (429 + `Retry-After` 1–60s); timestamp errati => 503; config invalida => startup fail-closed.
 - Suite Node di concorrenza su due server e scadenza deterministica della finestra; config Compose/.env e guide aggiornate.
 - Restano in #2: quota per tenant/identità, rate distributed su storage esterno, server rootless/Cloudflare reali e attestation off-host.
+
+
+## v0.2 — GET job/evidence coerenti durante i commit del worker (#36)
+
+- Bug transitorio: journal fsync già eseguito, report rename non ancora eseguito può produrre falso 409 e interrompere polling del client.
+- Entrambi i GET protetti ritentano al massimo due volte su `EVIDENCE_INVALID` (25ms tra tentativi), senza bypassare la verification strict, senza mutate/repair automatici; 409 persistenti e 404 invariati.
+- Test Node con vera chain e disallineamento controllato su due istanze API, export verificato e prova che errori persistenti non diventano 200.
+- Nessuna attestation/lock cross-host aggiunta; #2 resta aperta.

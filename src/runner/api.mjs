@@ -2,7 +2,7 @@ import { createServer as httpServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from "./common.mjs";
-import { portableEvidenceBundle, verifyJobEvidence } from "./evidence.mjs";
+import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -79,7 +79,7 @@ export function createRunnerServer({
     if (req.method === "GET" && /^\/v1\/jobs\/[a-f0-9-]{36}(?:\/evidence)?$/.test(req.url || "")) {
       try {
         const id = req.url.split("/")[3];
-        const verified = await verifyJobEvidence(dataDir, id);
+        const verified = await verifyJobEvidenceForRead(dataDir, id);
         send(200, req.url.endsWith("/evidence")
           ? portableEvidenceBundle(verified)
           : verified.report);

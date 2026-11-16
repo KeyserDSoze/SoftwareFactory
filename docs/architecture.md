@@ -223,3 +223,8 @@ Le quote locali e la deduplicazione della #20 ora usano `verifyJobEvidence` per 
 ### Budget globale di accettazione dei job (#35)
 
 La serializzazione `/data/jobs/.admission` supporta una policy opzionale di **nuove ammissioni negli ultimi 60 secondi** (`RUNNER_MAX_ACCEPTED_PER_MINUTE`, default 0). La scansione già verificata in #34 rende disponibili `acceptedAt` senza indice secondario: le repliche sul medesimo volume serializzano il conteggio, i replay idempotenti non consumano un nuovo slot e i job terminali recenti rimangono nel budget. Su soglia raggiunta HTTP 429 `rate_limited` con `Retry-After`, nessun nuovo record. Timestamp invalidi falliscono con integrità, quelli futuri contano conservativamente. Questo è un controllo globale su volume conservato, non RBAC tenant/IP né un sistema di rate limit distribuito (ancora #2).
+
+
+### Finestra di consistenza HTTP per evidence journal (#36)
+
+Il writer del runner segue una sequenza di sicurezza `append+fsync(journal) → rename(report)`, per non dichiarare un risultato non ancora registrato. Non essendo un commit transazionale multi-file, i lettori HTTP senza claim possono vedere brevemente journal nuovo/report vecchio. I due GET di job e bundle riprovano la **verifica completa** fino a tre volte, soltanto su `EVIDENCE_INVALID`, per non bloccare il polling su un falso 409 transitorio. Corruzione persistente e assenza di file restano errori; non esiste sincronizzazione distribuita, auto-healing delle prove o garanzia che i test siano stati effettivamente eseguiti su una VM fidata. Restano in #2.

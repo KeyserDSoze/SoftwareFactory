@@ -9,7 +9,7 @@ import { jobDirectory, readReport, validateRequest, isAllowedFile, authenticate,
 import { createRunnerServer } from "../api.mjs";
 import { planStep, planWebDependencies, validateNpmManifest, isInfrastructureFailure } from "../docker.mjs";
 import { executeJob, runWorker, recoverUnclaimedJob } from "../worker.mjs";
-import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport } from "../evidence.mjs";
+import { recordJobEvidence, verifyJobEvidence, verifyEvidenceExport, verifyJobEvidenceForRead, retryEvidenceRead } from "../evidence.mjs";
 import { withAdmissionLock, admissionRateLimitRetryAfter } from "../admission.mjs";
 
 const key = "1234567890abcdef1234567890abcdef1234567890abcdef";
@@ -122,6 +122,90 @@ test("API rejects tampered report, edited journal, missing journal and unauthent
   }
 });
 
+
+test("HTTP evidence read retries only transient journal/report skew and always rejects lasting corruption", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "sf-evidence-read-retry-"));
+  const servers = [0, 1].map(() => createRunnerServer({
+    apiKey: key, allowedOrigins: [origin], dataDir,
+  }));
+  try {
+    for (const s of servers) { s.listen(0, "127.0.0.1"); await once(s, "listening"); }
+    const urls = servers.map(s => "http://127.0.0.1:" + s.address().port);
+    const get = (index, suffix) => fetch(urls[index] + suffix, {
+      headers: { Origin: origin, Authorization: "Bearer " + key },
+    });
+    const accepted = await fetch(urls[0] + "/v1/jobs", {
+      method: "POST", body: JSON.stringify(job()),
+      headers: { Origin: origin, Authorization: "Bearer " + key,
+        "Content-Type": "application/json" },
+    });
+    assert.equal(accepted.status, 202);
+    const id = (await accepted.json()).id;
+    const reportPath = path.join(jobDirectory(dataDir, id), "report.json");
+    const journalPath = path.join(jobDirectory(dataDir, id), "evidence.jsonl");
+    const queued = await readFile(reportPath, "utf8");
+    const current = await readReport(dataDir, id);
+    await recordJobEvidence(dataDir, id, {
+      ...current, state: "running", startedAt: new Date().toISOString(),
+      summary: "Worker started",
+    }, "started");
+    const running = await readFile(reportPath, "utf8");
+    const journal = await readFile(journalPath, "utf8");
+
+    // Real skew: the new journal was already durably appended, but the last
+    // report rename has not occurred yet. The strict verifier MUST reject it.
+    await writeFile(reportPath, queued);
+    await assert.rejects(verifyJobEvidence(dataDir, id),
+      { code: "EVIDENCE_INVALID" });
+    let reads = 0;
+    const retried = await retryEvidenceRead(async () => {
+      reads++;
+      try { return await verifyJobEvidence(dataDir, id); }
+      catch (error) {
+        if (reads === 1) await writeFile(reportPath, running);
+        throw error;
+      }
+    });
+    assert.equal(reads, 2, "the first invalid read must be retried");
+    assert.equal(retried.report.state, "running");
+
+    // Both HTTP GET routes use the same bounded retry on each API replica.
+    for (let index = 0; index < 2; index++) {
+      await writeFile(reportPath, queued);
+      const restore = new Promise((resolve, reject) =>
+        setTimeout(() => writeFile(reportPath, running).then(resolve, reject), 15));
+      const response = await get(index, "/v1/jobs/" + id + (index === 0 ? "" : "/evidence"));
+      await restore;
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      if (index === 0) assert.equal(body.state, "running");
+      else assert.equal(verifyEvidenceExport(body).report.state, "running");
+    }
+    // A permanently corrupt journal remains 409 for both endpoints, even
+    // after the bounded retry budget has elapsed; no silent repair is allowed.
+    await writeFile(journalPath, journal.slice(0, -1));
+    assert.equal((await get(0, "/v1/jobs/" + id)).status, 409);
+    assert.equal((await get(1, "/v1/jobs/" + id + "/evidence")).status, 409);
+    let attempts = 0;
+    await assert.rejects(retryEvidenceRead(async () => {
+      attempts++;
+      throw Object.assign(new Error("invalid"), { code: "EVIDENCE_INVALID" });
+    }), { code: "EVIDENCE_INVALID" });
+    assert.equal(attempts, 3, "persistent tampering never becomes a success");
+    attempts = 0;
+    await assert.rejects(retryEvidenceRead(async () => {
+      attempts++;
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }), { code: "ENOENT" });
+    assert.equal(attempts, 1, "missing reports must not incur a retry");
+    assert.equal((await get(0, "/v1/jobs/" + randomUUID())).status, 404);
+    await writeFile(journalPath, journal);
+    assert.equal((await verifyJobEvidenceForRead(dataDir, id)).report.state, "running");
+  } finally {
+    await Promise.all(servers.map(s => new Promise(resolve => s.close(resolve))));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
 
 test("two API instances serialize quota admission and replay the same idempotent receipt", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "sf-admission-data-"));

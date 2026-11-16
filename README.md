@@ -178,3 +178,8 @@ Prima di accettare un nuovo job, l'API del runner controlla la hash-chain **di t
 ## Limite globale opzionale ai nuovi job per minuto (#35)
 
 Il runner supporta `RUNNER_MAX_ACCEPTED_PER_MINUTE` (0 predefinito = disabilitato, interi 1–100): sotto il medesimo lock POSIX condiviso dalle API, considera le accettazioni degli ultimi 60 secondi tra i job conservati, inclusi quelli già terminati. Oltre soglia restituisce HTTP `429 rate_limited` con `Retry-After`, senza creare job. I retry idempotenti sullo stesso snapshot restano permessi anche quando il limite è raggiunto; la convalida del journal rimane obbligatoria per tutti i job. Configurazione in `docker/runner/.env.example` e guida in [docs/runner.md](docs/runner.md). Il limite è **globale** e non definisce quote per tenant/utente/IP né protegge da cancellazioni manuali dei job o volumi separati; per quelle garanzie resta aperta la #2.
+
+
+## Letture del runner resilienti durante la scrittura delle prove (#36)
+
+Il worker scrive prima e sincronizza il journal delle evidenze, poi aggiorna il report con rename atomico. Un polling HTTP che cade nel brevissimo intervallo può vedere journal e report di due revisioni diverse: i GET `/v1/jobs/{id}` e `/v1/jobs/{id}/evidence` effettuano ora **solo in quel caso** un retry bounded (massimo tre letture, pause da 25ms), per non interrompere il polling con falsi `409 evidence_invalid`. Le prove continuano a essere verificate a ogni tentativo, senza ricostruzioni o scritture automatiche. Una manomissione persistente restituisce ancora 409 e un job inesistente 404; il miglioramento non equivale ad attestazione indipendente o fencing multi-host (#2).
