@@ -12,13 +12,20 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const fail = message => { throw new Error(message); };
 const isSecureUser = user => user === "1000:1000";
 const contains = (items, name) => Array.isArray(items) && items.includes(name);
+// Docker Compose mounts can bypass service.volumes via volumes_from,
+// secrets/configs and tmpfs. These services require *only* the explicit
+// reviewed bind mounts; no inherited or implicit file mounts.
+const noExtraMounts = value =>
+  value == null || (Array.isArray(value) && value.length === 0);
 const safeService = (name, svc) => {
   if (!svc || !isSecureUser(svc.user) || svc.read_only !== true ||
       svc.privileged === true || !contains(svc.cap_drop, "ALL") ||
       !contains(svc.security_opt, "no-new-privileges:true") ||
-      (svc.cap_add && svc.cap_add.length) || (svc.devices && svc.devices.length) ||
+      !noExtraMounts(svc.cap_add) || !noExtraMounts(svc.devices) ||
+      !noExtraMounts(svc.volumes_from) || !noExtraMounts(svc.tmpfs) ||
+      !noExtraMounts(svc.secrets) || !noExtraMounts(svc.configs) ||
       svc.network_mode === "host" || svc.pid === "host" || svc.ipc === "host")
-    fail(name + ": unsafe runtime permissions");
+    fail(name + ": unsafe runtime permissions or hidden mounts");
 };
 // Reject obvious host-system bind targets and noncanonical paths. An
 // operator may use /srv or /var/lib for dedicated runner data; symlink and
@@ -122,14 +129,13 @@ export function inspectComposeConfig(config) {
     const tunnel = svcs.cloudflared;
     if (!tunnel || typeof tunnel !== "object" || Array.isArray(tunnel) ||
         tunnel.privileged || tunnel.network_mode || tunnel.pid || tunnel.ipc ||
-        tunnel.cap_add?.length || tunnel.devices?.length ||
+        !noExtraMounts(tunnel.cap_add) || !noExtraMounts(tunnel.devices) ||
         !contains(tunnel.cap_drop, "ALL") ||
         !contains(tunnel.security_opt, "no-new-privileges:true") ||
-        (tunnel.volumes != null &&
-          (!Array.isArray(tunnel.volumes) || tunnel.volumes.length !== 0)) ||
-        (tunnel.tmpfs != null &&
-          (!Array.isArray(tunnel.tmpfs) || tunnel.tmpfs.length !== 0)) ||
-        tunnel.volumes_from?.length || tunnel.expose?.length)
+        !noExtraMounts(tunnel.volumes) || !noExtraMounts(tunnel.tmpfs) ||
+        !noExtraMounts(tunnel.volumes_from) ||
+        !noExtraMounts(tunnel.secrets) || !noExtraMounts(tunnel.configs) ||
+        !noExtraMounts(tunnel.expose))
       fail("cloudflared: unsafe runtime permissions or mounts");
     noPublicPorts("cloudflared", tunnel);
   }

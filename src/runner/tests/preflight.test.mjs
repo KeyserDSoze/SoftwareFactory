@@ -136,6 +136,26 @@ test("Compose tunnel may not mount host secrets or join other namespaces", () =>
   assert.equal(inspectComposeConfig(harmless).tunnelServiceChecked, true);
 });
 
+test("Compose rejects inherited/implicit mounts that could hand the API the worker socket", () => {
+  for (const service of ["runner-api", "runner-worker", "cloudflared"]) {
+    for (const [field, value] of [
+      ["volumes_from", ["runner-worker"]],
+      ["secrets", [{ source: "runner_api_key", target: "/run/secrets/key" }]],
+      ["configs", [{ source: "runner_debug", target: "/etc/debug" }]],
+      ["tmpfs", ["/run"]],
+      ["devices", ["/dev/kvm"]],
+      ["volumes_from", { hidden: "runner-worker" }],
+    ]) {
+      const config = composeConfig();
+      config.services[service][field] = value;
+      assert.throws(() => inspectComposeConfig(config),
+        /unsafe|mount/, service + "." + field + " must not bypass volumes gate");
+    }
+  }
+  const safe = composeConfig();
+  assert.equal(inspectComposeConfig(safe).status, "passed");
+});
+
 test("Compose runner source mounts are canonical, non-system and disjoint", () => {
   const cases = [
     c => { c.services["runner-api"].volumes[0].source = "/"; },
