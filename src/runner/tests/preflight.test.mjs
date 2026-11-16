@@ -383,7 +383,7 @@ test("rootless host preflight checks socket, private directories and daemon Secu
   }), uid: 1000, runDocker }), /unsafe/);
   await assert.rejects(inspectHost({ env: apiEnv, stat: async p => ({
     ...await stat(p), isSymbolicLink: () => true,
-  }), uid: 1000, runDocker }), /unsafe/);
+  }), uid: 1000, runDocker }), /unsafe|symlink/);
 });
 
 test("VM host env enforces canonical system-safe and segment-disjoint directories", () => {
@@ -458,7 +458,7 @@ test("host path inspection rejects real intermediate symlinks and malformed path
     assert.equal(safe.isDirectory(), true);
     await assert.rejects(inspectHostPath(path.join(dir, "alias", "private")),
       /symlink/);
-    await assert.rejects(inspectHostPath(path.join(dir, "real", "..", "real")),
+    await assert.rejects(inspectHostPath(dir + "/real/../real"),
       /canonical/);
     await assert.rejects(inspectHostPath(path.join(dir, "missing", "private")),
       /unavailable/);

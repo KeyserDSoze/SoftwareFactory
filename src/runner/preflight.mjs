@@ -85,7 +85,7 @@ const trustedRuntimeEnvironment = (name, svc, allowed) => {
 // operator may use /srv or /var/lib for dedicated runner data; symlink and
 // directory ownership checks still require live host preflight on the VM.
 const dangerousHostRoots = ["/", "/etc", "/proc", "/sys", "/dev", "/run",
-  "/tmp", "/root"];
+  "/var/run", "/tmp", "/root"];
 const canonicalAbsolutePath = value => typeof value === "string" &&
   path.isAbsolute(value) && !value.includes("\0") &&
   value === path.resolve(value);
