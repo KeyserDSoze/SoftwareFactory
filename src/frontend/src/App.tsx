@@ -39,11 +39,11 @@ function IconStatus({ status }: { status: string }) {
   if (status === "failed") return <ShieldAlert size={18} className="danger" />;
   return <Circle size={18} className="muted" />;
 }
-function SecretInput({ secretKey, placeholder = "Token (solo sessione)" }: { secretKey: string; placeholder?: string }) {
+function SecretInput({ secretKey, placeholder = "Token (solo sessione)", onSecretChange }: { secretKey: string; placeholder?: string; onSecretChange?: () => void }) {
   const [value, setValue] = useState(() => readSecret(secretKey));
   useEffect(() => { setValue(readSecret(secretKey)); }, [secretKey]);
   return <input aria-label={placeholder} type="password" autoComplete="off" value={value} placeholder={placeholder}
-    onChange={e => { setValue(e.target.value); saveSecret(secretKey, e.target.value); }} />;
+    onChange={e => { setValue(e.target.value); saveSecret(secretKey, e.target.value); onSecretChange?.(); }} />;
 }
 function SectionHead({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) {
   return <header className="section-head"><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{text}</p></header>;
@@ -64,6 +64,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [runLog, setRunLog] = useState<string[]>([]);
   const [lastPush, setLastPush] = useState("");
+  const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
   const settingsRef = useRef(settings);
@@ -346,10 +347,10 @@ export default function App() {
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">REMOTE EXECUTION</span><h3>Runner Docker remoto</h3></div><Terminal size={20} /></div>
             <p className="helper">Connetti una API su HTTPS esposta tramite Cloudflare Tunnel e protetta da API key. Il worker Docker deve essere isolato su una macchina dedicata; non inserire credenziali cloud nel runner.</p>
             <div className="form-grid"><label>Runner API URL<input value={settings.runnerEndpoint || ""} placeholder="https://runner.example.com" onChange={e => editSettings(s => { s.runnerEndpoint = e.target.value; })}/></label>
-              <label>Runner API key (solo sessione)<SecretInput secretKey="runner.key" placeholder="API key per job build/test"/></label>
+              <label>Runner API key (solo sessione)<SecretInput secretKey="runner.key" placeholder="API key per job build/test" onSecretChange={() => setRunnerSecretRevision(value => value + 1)}/></label>
               <label>Operatore repair (solo sessione)<SecretInput secretKey="runner.operator.key" placeholder="Chiave personale con ruoli repair"/></label></div>
             <p className="helper">I checkpoint richiedono una credenziale operatore separata dalla chiave dei job. Ruoli: propose per creare patch/re-test, review per dichiarare review, approve per registrare approvazione. Il client può richiedere di cambiare chiave prima della review o approvazione; non è una prova di identità umana o una firma. Se il runner non configura operatori, l'API repair resta disabilitata.</p>
-            <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} />
+            <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} />
             <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
