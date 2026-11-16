@@ -39,6 +39,30 @@ const emptyRecord = value => value == null ||
 const noNewPrivilegesOnly = value => Array.isArray(value) &&
   value.length === 1 &&
   ["no-new-privileges", "no-new-privileges:true"].includes(value[0]);
+// The official node:22-bookworm-slim image's audited startup environment.
+// Extra keys like NODE_OPTIONS, NODE_PATH or LD_PRELOAD can load code before
+// the exact, reviewed "-e" sentinel executes. Reject those even if Docker
+// reports a matching command and stdout marker. Order is not security relevant.
+const imageEnvironment = Object.freeze({
+  PATH: value => value ===
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  NODE_VERSION: value => /^22\.[0-9]{1,3}\.[0-9]{1,3}$/.test(value),
+  YARN_VERSION: value => /^1\.22\.[0-9]{1,3}$/.test(value),
+});
+const reviewedImageEnvironment = env => {
+  if (!Array.isArray(env) || env.length !== 3) return false;
+  const names = new Set();
+  for (const entry of env) {
+    if (typeof entry !== "string" || entry.length > 512) return false;
+    const at = entry.indexOf("=");
+    if (at < 1) return false;
+    const name = entry.slice(0, at), value = entry.slice(at + 1);
+    if (!Object.hasOwn(imageEnvironment, name) || names.has(name) ||
+        !imageEnvironment[name](value)) return false;
+    names.add(name);
+  }
+  return names.size === 3;
+};
 function safeIdentity(container, name, id) {
   return container && container.Id === id && CONTAINER_ID.test(id) &&
     container.Name === "/" + name && container.Config?.Labels?.[LABEL] === name;
@@ -53,6 +77,8 @@ export function safeConfig(container, name, id) {
     config.Entrypoint[0] === "node" &&
     Array.isArray(config.Cmd) && config.Cmd.length === 2 &&
     config.Cmd[0] === "-e" && config.Cmd[1] === sentinel &&
+    reviewedImageEnvironment(config.Env) &&
+    config.Healthcheck == null &&
     !config.Tty && !config.OpenStdin &&
     host && host.NetworkMode === "none" && host.ReadonlyRootfs === true &&
     host.Privileged === false && host.PublishAllPorts === false &&

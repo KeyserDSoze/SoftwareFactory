@@ -12,6 +12,11 @@ function candidate(state = "created") {
     Id: containerId, Name: "/" + name,
     Config: { User: "65534:65534",
       Entrypoint: ["node"], Cmd: approvedCmd, Tty: false, OpenStdin: false,
+      Env: [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "NODE_VERSION=22.16.0", "YARN_VERSION=1.22.22",
+      ],
+      Healthcheck: null,
       Labels: { "softwarefactory.canary": name } },
     HostConfig: {
       NetworkMode: "none", ReadonlyRootfs: true, Privileged: false,
@@ -205,6 +210,32 @@ test("canary rejects unsafe Docker inspect and never starts the container", asyn
     { Config: { ...candidate().Config, Cmd: ["-e", "console.log('SF_ROOTLESS_CANARY_OK')"] } },
     { Config: { ...candidate().Config, Cmd: ["--version"] } },
     { Config: { ...candidate().Config, Cmd: [] } },
+    { Config: { ...candidate().Config, Env: [] } },
+    { Config: { ...candidate().Config, Env: null } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env, "NODE_OPTIONS=--require=/tmp/preload.js"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env, "NODE_PATH=/tmp"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env, "LD_PRELOAD=/lib/evil.so"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env, "LD_LIBRARY_PATH=/tmp"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env, "HOME=/tmp"] } },
+    { Config: { ...candidate().Config, Env: [
+      "PATH=/tmp:/bin", ...candidate().Config.Env.slice(1)] } },
+    { Config: { ...candidate().Config, Env: [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NODE_VERSION=23.0.0", "YARN_VERSION=1.22.22"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env.slice(0,2), "YARN_VERSION=2.0.0"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env.slice(0,2), "NODE_VERSION=22.16.0"] } },
+    { Config: { ...candidate().Config, Env: [
+      ...candidate().Config.Env.slice(0,2), "YARN_VERSION=1.22.22\nNODE_OPTIONS=--require=/tmp/preload"] } },
+    { Config: { ...candidate().Config, Healthcheck: {
+      Test: ["CMD-SHELL", "cat /run/secrets/private"] } } },
+    { Config: { ...candidate().Config, Healthcheck: {} } },
     { HostConfig: { ...candidate().HostConfig, SecurityOpt: [
       "no-new-privileges:true", "seccomp=unconfined"] } },
     { HostConfig: { ...candidate().HostConfig, SecurityOpt: [
@@ -262,6 +293,36 @@ test("canary accepts only inert Docker namespace defaults and one NNP option", a
     after: { ...before, State: candidate("exited").State } });
   assert.equal((await runRootlessCanary({ image, id, confirmed: true,
     probeDocker: async () => true, runDocker: mock.runDocker })).status, "passed");
+});
+
+
+test("canary accepts reordered official image env without loader hooks or healthcheck", async () => {
+  const before = candidate();
+  before.Config.Env = [...before.Config.Env].reverse();
+  const after = candidate("exited");
+  after.Config.Env = [...after.Config.Env].reverse();
+  const fake = fakeDocker({ before, after });
+  assert.equal((await runRootlessCanary({
+    image, id, confirmed: true, probeDocker: async () => true,
+    runDocker: fake.runDocker,
+  })).status, "passed");
+});
+
+test("canary denies late injected Node preload or healthcheck after start", async () => {
+  for (const bad of [
+    c => { c.Config.Env.push("NODE_OPTIONS=--import=/tmp/preload.mjs"); },
+    c => { c.Config.Healthcheck = { Test: ["CMD", "node", "-e", "process.exit(0)"] }; },
+  ]) {
+    const after = candidate("exited");
+    bad(after);
+    const fake = fakeDocker({ after });
+    await assert.rejects(runRootlessCanary({
+      image, id, confirmed: true, probeDocker: async () => true,
+      runDocker: fake.runDocker,
+    }), /verification|mismatch|cleanup/);
+    assert.deepEqual(fake.calls.map(args => args[0]),
+      ["create", "inspect", "start", "inspect", "inspect", "rm"]);
+  }
 });
 
 test("canary rejects stdout spoofing, start timeouts and nonzero container exit", async () => {

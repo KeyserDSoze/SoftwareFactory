@@ -594,3 +594,8 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 
 - `safeConfig` deve ispezionare `Config.Cmd=["-e", sentinel]` esatto, oltre all'entrypoint Node, per il canary e la riconciliazione: il marker stdout senza lo script non è prova.
 - `SecurityOpt` ammette un unico no-new-privileges serializzato da Docker; negare `seccomp/apparmor=unconfined`, namespace condivisi, DNS/hosts/links, gruppi/device/volumi e tmpfs extra. Riprova rootless prima di ciascun comando Docker, non usare daemon rootful eccetto nello smoke confinato CI. Il risultato non è attestazione off-host né prova VM reale (ADR 0032, #2).
+
+## Canary: immagine Node con ambiente e healthcheck revisionati (#76)
+
+- Non basta controllare `Config.Cmd` / `Entrypoint` e il marker: `docker inspect.Config.Env` deve avere esattamente `PATH` atteso, `NODE_VERSION=22.x.y`, `YARN_VERSION=1.22.x`. Vietare variabili loader come `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, duplicate, valori inattesi e `Config.Healthcheck` non nullo. Non stampare mai ambienti completi negli errori.
+- Canary e reconciler condividono `safeConfig`; controllare il Docker Engine reale via smoke rootful CI-only, senza attribuirgli una certificazione VM rootless. Per altre major Node aggiornare il profilo revisionato, fixture, ADR e smoke prima di usare digest di un'immagine differente (#2, ADR 0033).

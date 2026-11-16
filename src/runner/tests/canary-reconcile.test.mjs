@@ -19,6 +19,11 @@ function candidate({ dockerId = id, nameOverride = name,
     Config: {
       User: "65534:65534", Entrypoint: ["node"], Cmd: approvedCmd,
       Tty: false, OpenStdin: false,
+      Env: [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "NODE_VERSION=22.16.0", "YARN_VERSION=1.22.22",
+      ],
+      Healthcheck: null,
       Labels: { "softwarefactory.canary": label, ...extraLabels },
     },
     HostConfig: {
@@ -156,6 +161,12 @@ test("never delete spoofed canaries, running containers or unsafe mount/network 
     candidate({ unsafe: { Dns: ["203.0.113.53"] } }),
     { ...candidate(), Config: { ...candidate().Config,
       Cmd: ["-e", "console.log('SF_ROOTLESS_CANARY_OK')"] } },
+    { ...candidate(), Config: { ...candidate().Config,
+      Env: [...candidate().Config.Env, "NODE_OPTIONS=--require=/tmp/evil"] } },
+    { ...candidate(), Config: { ...candidate().Config,
+      Env: [...candidate().Config.Env.slice(0,2), "NODE_VERSION=22.16.0"] } },
+    { ...candidate(), Config: { ...candidate().Config,
+      Healthcheck: { Test: ["CMD", "true"] } } },
     candidate({ extraLabels: { "softwarefactory.runner": "job" } }),
   ];
   for (const before of invalid) {

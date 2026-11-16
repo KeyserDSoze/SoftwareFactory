@@ -584,3 +584,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 
 - `docker inspect` del canary e reconciler verifica `Config.Cmd` esatto, non soltanto l'entrypoint e un marker stdout contraffabile.
 - Security_opt univoco `no-new-privileges`, solo namespace privati, nessun DNS/hosts custom, gruppo/device/mount/sysctl/cgroup extra; nuovi test Node di tampering e smoke vero Docker rootful CI-only, ADR 0032. Test VM rootless/Cloudflare reali e attestazione off-host ancora aperti in #2.
+
+## v0.2 — Bootstrap canary Docker e policy Env fail-closed (#76)
+
+- Dopo l'ispezione del comando e dei namespace (#75), verificare anche `Config.Env` contro i soli tre default dell'immagine `node:22-bookworm-slim`, negando override `NODE_OPTIONS`/`NODE_PATH`/`LD_PRELOAD`, duplicati, input malformati e qualunque healthcheck non revisionato.
+- Test Node con injection pre/post-start e riconciliazione, smoke vero Docker rootful CI-only, documentazione e ADR 0033. L'epica #2 resta aperta per test VM rootless e Cloudflare veri e attestazione indipendente.

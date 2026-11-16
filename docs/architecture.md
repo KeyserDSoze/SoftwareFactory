@@ -422,3 +422,7 @@ Il preflight host oltre al Compose statico può selezionare esplicitamente chiav
 ### Canary Docker: script effettivo e profilo namespace verificati (#75)
 
 Un inspect che riporti `Entrypoint=node` e uno stdout con marker di successo non dimostra che il container abbia eseguito i controlli di rete, UID e capability revisionati. Ora la funzione condivisa `safeConfig` controlla la corrispondenza integrale `Config.Cmd=["-e", sentinel]` e ammette solo il profilo NNP esatto, namespace privati e assenza di DNS/hosts, gruppi/device e mount extra. Vale sia per canary sia per riconciliazione degli eventuali residui. La CI con Docker reale usa una simulazione **esplicitamente rootful** del solo gate daemon, non una attestazione VM rootless o del provider Cloudflare (#2, ADR 0032).
+
+### Integrità dell'ambiente di bootstrap del canary Docker (#76)
+
+La corrispondenza integrale di `Config.Cmd` non basta se `Config.Env` permette di pre-caricare moduli Node tramite `NODE_OPTIONS`, di cambiare il percorso di risoluzione moduli oppure di iniettare librerie native tramite loader. Il gate condiviso `safeConfig` vincola ora il container dell'immagine ufficiale Node 22 ai soli default `PATH`, `NODE_VERSION` e `YARN_VERSION`, senza duplicati o voci extra; `Config.Healthcheck` deve essere assente. Eseguire la verifica prima/dopo start e nella riconciliazione. Il risultato dimostra solo coerenza con quanto dichiarato dal daemon, non integrità di un host compromesso o attestazione hardware. Il smoke CI è rootful (ADR 0033, #2).
