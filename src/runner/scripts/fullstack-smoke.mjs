@@ -12,6 +12,7 @@ import path from "node:path";
 
 import { setTimeout as sleep } from "node:timers/promises";
 import { planStep, runDockerStep, PLAYWRIGHT_VERSION } from "../docker.mjs";
+import { verifyFullstackPlaywrightOutcome } from "./fullstack-playwright-gate.mjs";
 
 const exec = promisify(execFile);
 const root = path.resolve(process.argv[2] || "src/frontend/generated-fixture");
@@ -271,11 +272,16 @@ try {
   const outcome = await runDockerStep({ ...basePlan, args }, runId, "fullstack", {
     probeDocker: ciRootfulSmokeProbe,
   });
-  if (outcome.state !== "passed" || !/17 passed/.test(outcome.stdout)) {
+  let verifiedBrowserTests;
+  try {
+    verifiedBrowserTests = verifyFullstackPlaywrightOutcome(
+      files["src/frontend/web/e2e/smoke.spec.ts"], outcome);
+  } catch {
     console.error("FULLSTACK_INTEGRATION_FAILED", JSON.stringify(outcome, null, 2));
-    const snippet = outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [];
+    const snippet = typeof outcome.stdout === "string"
+      ? outcome.stdout.match(/OIDC_BROWSER_STAGE[^\\n]*/g) || [] : [];
     console.error("OIDC_BROWSER_DIAGNOSTICS", snippet.slice(-4));
-    throw Error("Playwright integration did not pass all 17 assertions, including OIDC browser refresh and PostgreSQL persistence");
+    throw Error("Playwright integration did not pass every declared scenario, including OIDC browser refresh, CORS and PostgreSQL persistence");
   }
   for (const [action, min] of [["create", 2], ["update", 1], ["delete", 2]]) {
     const count = Number(await docker(["exec", dbName, "psql", "-U", "app", "-d", "app",
@@ -302,7 +308,7 @@ try {
     webName, "node", "/ci-protocol.mjs"], { timeout: 20000 });
   assert.match(protocol, /OIDC_PROTOCOL_SMOKE_PASS/);
   console.log(protocol);
-  console.log("FULLSTACK_OIDC_POSTGRES_PASS: 15 Chromium tests with multi-tab logout, Nginx CSP, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
+  console.log("FULLSTACK_OIDC_POSTGRES_PASS: " + verifiedBrowserTests + " Chromium tests with CORS, multi-tab logout, Nginx CSP, OIDC browser refresh/logout, live ASP.NET Core JWKS rollover, RS256 PKCE login, JWT role/owner isolation and audit");
 } catch(e) {
   console.error("FULLSTACK_INTEGRATION_ERROR:", String(e.message || e));
   if (startedApi) console.error("API logs:", await logs(apiName));

@@ -634,3 +634,8 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Nuovo `BrowserCorsStartup.cs` nello scaffold PostgreSQL: `Web:AllowedOrigins` esplicito e obbligatorio in Production/Staging/QA, solo HTTPS e senza wildcard/credentials; default HTTP soltanto loopback o host CI web in Development.
 - Configurazione Compose `WEB_ALLOWED_ORIGINS`, `docker/.env.example`, README applicazione generata aggiornati; distinguere frontend origin da `PUBLIC_API_URL` dell'API browser.
 - Test Vitest dei template, fail-closed sul binario compilato ASP.NET Core e preflight OPTIONS allow/deny su API fullstack con Playwright/IdP CI. ADR 0041. Da fare nell'epica #9: IdP HTTPS esterno reale, protezioni BFF/sessione, TLS e CORS effettivo su reverse proxy/CDN produzione.
+
+## v0.3 — Gate fullstack Playwright dinamico e fail-closed (#85)
+
+- Rimosso il controllo hardcoded del reporter `17 passed`: il test CORS della #84 porta il browser smoke completo a 18 casi. Il gate ora conta i test del fixture generato, richiede esattamente N passed, stato/exitCode/timeout corretti e zero skipped/flaky/failed/interrupted.
+- Test Node per cardinalità 17/18/N e negativi contro riepiloghi manipolati, timeout, skip, file spec non valido; CI con Playwright, PostgreSQL e IdP locale reale. ADR 0042. L'epica #9 resta aperta per validazione IdP/TLS production.

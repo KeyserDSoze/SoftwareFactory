@@ -649,3 +649,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Development senza configurazione conserva allowlist limitata a localhost:3000, localhost:5173, 127.0.0.1:4173, web:4173 (solo CI). In Development configurato esplicitamente, HTTP soltanto loopback o host `web`, mai dominio remoto. Un reverse proxy HTTPS deve gestire CORS e certificati in modo consistente.
 - L'env Compose `WEB_ALLOWED_ORIGINS` è diverso da `PUBLIC_API_URL`: il primo è l'origin del frontend ammesso dall'API, il secondo l'API raggiungibile dal browser e usata per CSP. Nessuno dei due è una credenziale.
 - Regressioni: test Vitest dei file generati, binario .NET reale lanciato con origin invalidi (QA/Staging/Production/Development) e test Playwright che invia preflight `OPTIONS` all'API reale e controlla ACAO consentito/negato e assenza ACAC. Non dichiarare test con IdP HTTPS esterno o CORS reverse proxy reale senza prove (ADR 0041, #9).
+
+## Gate del fullstack Chromium contro test saltati e contatore obsoleto (#85)
+
+- `src/runner/scripts/fullstack-smoke.mjs` non deve dichiarare un test suite pass usando numeri hardcoded (come `17 passed`). Il conteggio atteso deriva dalle dichiarazioni top-level `test("...")` contenute nel file `src/frontend/web/e2e/smoke.spec.ts` realmente generato e montato, non dal reporter.
+- `verifyFullstackPlaywrightOutcome(spec, report)` richiede almeno 1 dichiarazione, massimo 80, stato passed, `exitCode===0`, `timedOut===false`, summary con esattamente N passed e nessun failed/skipped/flaky/interrupted; un reporter che dice 118 passed non può soddisfare N=18. Test esclusi, occultati o non eseguiti non diventano green.
+- In regressione aggiungere unit tests Node del gate e verificare successivamente il **Docker fullstack reale** con Chromium, PostgreSQL e OIDC CI. Non loggare secret o token per controllare il gate. ADR 0042, issue #85.
