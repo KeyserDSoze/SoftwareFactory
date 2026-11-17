@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: FactorySettings = {
   searchEndpoint: "",
   runnerEndpoint: "",
   git: { owner: "", repo: "", branch: "main", authMode: "pat", appGateway: "", privateRepo: true },
+  githubAutoSync: false,
   cloud: { provider: "google", clientId: "" },
 };
 export function createProject(): FactoryProject {
