@@ -81,8 +81,84 @@ export default function App() {
   const projectRef = useRef(project);
   const settingsRef = useRef(settings);
   const oauthChecked = useRef(false);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   useEffect(() => { projectRef.current = project; persistProject(project); }, [project]);
   useEffect(() => { settingsRef.current = settings; persistSettings(settings); }, [settings]);
+  // GitHub auto-save runs only while this browser tab is open and ONLY after
+  // an explicitly approved first push + an opt-in. A durable, non-secret outbox
+  // remembers retries and a remote conflict stops all unattended attempts.
+  useEffect(() => {
+    if (!settings.githubAutoSync) return;
+    let disposed = false, inFlight = false;
+    const tick = async () => {
+      const current = projectRef.current, config = settingsRef.current;
+      const git = config.git;
+      if (disposed || inFlight || busyRef.current || !config.githubAutoSync ||
+          document.visibilityState === "hidden" || !githubBindingMatches(current, git) ||
+          !githubProjectDirty(current, git) || !readSecret("github.pat")) return;
+      const key = "softwarefactory.github.outbox." + current.id;
+      const due = Date.parse(current.githubSync?.syncedAt || "");
+      if (!Number.isFinite(due) || Date.now() - due < 120000) return;
+      let record: { status: "pending" | "blocked"; attempts: number; retryAt: number;
+        updatedAt: string } = { status: "pending", attempts: 0, retryAt: 0, updatedAt: current.updatedAt };
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) {
+          const v = JSON.parse(saved) as typeof record;
+          if (v && Number.isInteger(v.attempts) && v.attempts >= 0 && v.attempts <= 20 &&
+              Number.isFinite(v.retryAt) && ["pending", "blocked"].includes(v.status)) record = v;
+        }
+      } catch { /* ignore corrupted metadata, never ignore remote HEAD checks */ }
+      if (record.status === "blocked" || Date.now() < record.retryAt) return;
+      if (!navigator.locks?.request) {
+        localStorage.setItem(key, JSON.stringify({ ...record, status: "blocked" }));
+        setError("Autosync GitHub bloccato: Web Locks non disponibili, sincronizza manualmente.");
+        return;
+      }
+      inFlight = true;
+      try {
+        await navigator.locks.request("softwarefactory:github:" + git.owner + "/" + git.repo +
+          "@" + git.branch, { ifAvailable: true }, async lock => {
+          if (!lock || disposed) return;
+          const snapshot = projectRef.current;
+          if (snapshot.id !== current.id || snapshot.updatedAt !== current.updatedAt ||
+              !githubBindingMatches(snapshot, git) || !githubProjectDirty(snapshot, git)) return;
+          // A second tab on this origin may have changed persisted data. No
+          // local last-writer-wins overwrite: ask the user to reconcile.
+          if (JSON.stringify(loadProject()) !== JSON.stringify(snapshot))
+            throw Error("Workspace locale modificato da un'altra scheda: autosync bloccato.");
+          const token = await resolveGithubToken(git, readSecret("github.pat"));
+          const result = await publishGithubWorkspace(snapshot, git, token);
+          if (disposed) return;
+          const latest = projectRef.current;
+          if (latest.id !== snapshot.id) return;
+          // A new local task may have completed during the remote write. Only
+          // confirm the SNAPSHOT revision, not later edits.
+          const binding = { ...result.project.githubSync!,
+            syncedLocalUpdatedAt: snapshot.updatedAt };
+          changeProject({ ...latest, githubSync: binding });
+          localStorage.removeItem(key);
+          setLastPush(result.url);
+          setNotice("GitHub autosync: confermato " + result.sha.slice(0,12) +
+            (latest.updatedAt !== snapshot.updatedAt ? " · altre modifiche locali ancora in coda." : "."));
+        });
+      } catch (error) {
+        if (disposed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        const blocked = /[Cc]onflitto|branch remoto|altra scheda|[Rr]epository|[Cc]heckpoint|[Cc]ambiato/.test(message);
+        const attempts = Math.min(20, record.attempts + 1);
+        localStorage.setItem(key, JSON.stringify({ status: blocked ? "blocked" : "pending",
+          attempts, retryAt: blocked ? 0 : Date.now() + Math.min(300000, attempts * 30000),
+          updatedAt: projectRef.current.updatedAt }));
+        setError("GitHub autosync: " + message + (blocked ?
+          " Salvataggio automatico sospeso: verifica HEAD e risolvi manualmente." :
+          " Nuovo tentativo solo mentre la pagina è aperta."));
+      } finally { inFlight = false; }
+    };
+    const timer = setInterval(() => { void tick(); }, 15000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [settings.githubAutoSync]);
   useEffect(() => {
     if (oauthChecked.current) return;
     oauthChecked.current = true;
@@ -242,6 +318,7 @@ export default function App() {
       const token = await resolveGithubToken(git, readSecret("github.pat"));
       const result = await publishGithubWorkspace(start, git, token);
       setLastPush(result.url);
+      localStorage.removeItem("softwarefactory.github.outbox." + start.id);
       if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
         changeProject(result.project);
         setNotice("Commit " + result.sha.slice(0,12) + " verificato sul branch " + result.branch +
