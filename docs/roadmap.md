@@ -718,3 +718,14 @@ Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
 - [ ] Security acceptance e CI finali complete con link esito, mantenere #91 aperta finché non verificato.
 
 [ADR 0048](../adr/0048-github-pat-project-sync-bookwriter-parity.md) e [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91).
+
+## Audit GitHub/PAT e recovery — #92
+
+- [x] Consenso pubblico riutilizzabile solo sulla stessa owner/repo/branch, con test per cambio destinazione.
+- [x] Evidenze runner, sessioni repair e review pending NON portabili dal checkpoint GitHub; test di esportazione/importazione.
+- [x] Lettura di conferma SHA remoto dopo ref PATCH; un ref cambiato non genera false ricevute, regression test.
+- [x] Anteprima di confronto in sola lettura fra sorgenti generati e controllo identità del progetto, backup JSON obbligatorio con conferma prima di import distruttivo.
+- [x] Mitigazione multi-tab: baseline per-project in localStorage, `storage` listener e gate UI/pipeline; recupero dopo esportazione di sicurezza.
+- [ ] Eliminare ogni gara residua nel read-check-write locale: transazione IndexedDB vera o Web Locks che coprano TUTTI i commit locali; non chiamare il guard sincrono CAS atomico.
+- [ ] Browser E2E con due schede e interleaving reali, prova di recupero e import (incl. backup bloccato dal browser).
+- [ ] End-to-end con PAT/provider e security acceptance prima di chiudere #91/#92; verificare stato degli ultimi workflow su main.
