@@ -428,7 +428,12 @@ export default function App() {
           throw Error("Il progetto è cambiato durante il cambio scheda: rileggi la libreria.");
         localBaselineRef.current.set(id, selectedNow);
         writerLeaseRef.current = lease;
-        if (!changeProject(selected)) return;
+        if (!changeProject(selected)) {
+          // A failed guarded write must not strand the app on the old project
+          // while accidentally holding the destination lease as its active lock.
+          writerLeaseRef.current = previousLease;
+          return;
+        }
         previousLease?.release();
       } catch (error) {
         writerLeaseRef.current = previousLease;
