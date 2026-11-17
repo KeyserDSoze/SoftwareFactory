@@ -737,3 +737,16 @@ Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
 - [x] Pages cerca release pubbliche, preferisce stable, usa prerelease `-rc.N` solo se non c'è stable con i due asset verificati; avviso IT/EN.
 - [ ] Prima pubblicazione effettiva e controlli asset/checksum pubblici, prova archive on-host.
 - [ ] Rootless Docker reboot/systemd/cloudflared VM dedicata, Access+CORS da Pages e supply-chain hardening.
+
+## Exclusive writer Web Locks e prova reale Chromium (#92)
+
+- [x] Un lease `navigator.locks` esclusivo, `ifAvailable:true`, vive per tutta la sessione editor di un progetto. Due schede nella stessa origin non possono contemporaneamente modificarlo. L'assenza di Web Locks blocca il salvataggio (no fallback insicuro).
+- [x] Acquisire prima il lock del progetto destinazione nel cambio, import GitHub con ID diverso e cloud restore; rilasciare il precedente solo dopo commit locale; serializzare i cambi in corso.
+- [x] React StrictMode-safe acquisizione al mount, cleanup/release e retry dopo chiusura scheda concorrente tramite backup JSON e conferme.
+- [x] Bloccare AI Factory, Code Agent, autosync, import e push finché non è attivo un lease, e propagare errore quando un aggiornamento locale non viene persistito.
+- [x] Unit test Web Lock concorrenza, release, progetti diversi, API mancante.
+- [ ] Confermare verde nel workflow Factory CI il nuovo smoke *Chromium reale* sulla SPA, due schede e passaggio del controllo dopo download backup. La CI usa un container senza rete esterna, in sola lettura, cap drop, senza socket Docker.
+- [ ] Test reale due browser profile/dispositivi e migrazione future versioni non cooperative con Web Locks; resta necessaria sincronizzazione GitHub HEAD.
+- [ ] CAS IndexedDB per compatibilità cross-tab con vecchie versioni senza Web Locks; la libreria localStorage da sola resta best-effort.
+
+Decisione: [ADR 0049](../adr/0049-local-project-exclusive-writer-web-locks.md), [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92).
