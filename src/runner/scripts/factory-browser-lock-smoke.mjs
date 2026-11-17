@@ -119,9 +119,19 @@ if (!inside) {
     const third = await context.newPage();
     await third.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
     await expect(third.getByText("Conflitto locale tra schede")).toBeVisible({timeout:15000});
-    await expect(third.getByRole("button",{name:"Nuovo progetto"})).toBeDisabled();
+    // Another tab must be able to work on a DIFFERENT project without stealing
+    // or modifying the first project's lease or snapshot.
+    await expect(third.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
+    third.on("dialog",dialog => void dialog.accept());
+    await third.getByRole("button",{name:"Nuovo progetto"}).click();
+    await expect(third.getByRole("button",{name:"Nuovo progetto"}))
+      .toBeEnabled({timeout:15000});
+    const newId = await third.evaluate(() =>
+      JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").id);
+    assert.notEqual(newId,firstId,"Creating another project must use a separate lease");
+    await expect(second.getByLabel("Nome progetto")).toHaveValue("Tab B recovered project safely");
     await context.close();
-    console.log("FACTORY_BROWSER_LOCK_E2E_PASS: owner → blocked rival → explicit backup → takeover → blocked third tab");
+    console.log("FACTORY_BROWSER_LOCK_E2E_PASS: owner → blocked rival → explicit backup → takeover → concurrent distinct-project editor");
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
