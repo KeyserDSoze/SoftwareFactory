@@ -69,21 +69,20 @@ export function persistProjectIfUnchanged(project: FactoryProject, expected: str
 }
 export function persistProject(project: FactoryProject): void {
   const raw = JSON.stringify(project);
+  // The per-project copy is the concurrency authority. It MUST persist before
+  // advancing the active-project pointer, otherwise a quota error could leave
+  // a seemingly saved project that vanished from the recoverable library.
+  const all = index();
+  if (!all.some(x => x.id === project.id) && all.length >= 40)
+    throw Error("Libreria locale piena (40 progetti): esporta e archivia un progetto prima di aggiungerne altri.");
+  localStorage.setItem(PROJECT_LIBRARY_PREFIX + project.id, raw);
   localStorage.setItem(PROJECT_KEY, raw);
-  // Retain up to 40 nonsecret local projects, never PAT/API credentials.
-  try {
-    localStorage.setItem(PROJECT_LIBRARY_PREFIX + project.id, raw);
-    const all = index();
-    const current = { id: project.id, name: project.config.name,
-      updatedAt: project.updatedAt,
-      repository: project.githubDestination?.owner && project.githubDestination.repo ?
-        project.githubDestination.owner + "/" + project.githubDestination.repo : "" };
-    const selected = [current, ...all.filter(x => x.id !== project.id)].slice(0, 40);
-    localStorage.setItem(PROJECT_INDEX, JSON.stringify(selected));
-  } catch {
-    // The current project remains saved. A full localStorage quota means
-    // the library isn't guaranteed; manual ZIP/Cloud backup is still necessary.
-  }
+  const current = { id: project.id, name: project.config.name,
+    updatedAt: project.updatedAt,
+    repository: project.githubDestination?.owner && project.githubDestination.repo ?
+      project.githubDestination.owner + "/" + project.githubDestination.repo : "" };
+  const selected = [current, ...all.filter(x => x.id !== project.id)].slice(0, 40);
+  localStorage.setItem(PROJECT_INDEX, JSON.stringify(selected));
 }
 export function loadSettings(): FactorySettings {
   try {
