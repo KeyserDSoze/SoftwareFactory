@@ -3,6 +3,7 @@ import type { FactoryProject, FactorySettings, ResearchSource, StageId } from ".
 import { aiComplete } from "../infrastructure/ai";
 import { deduplicateSources, searchWeb } from "../infrastructure/research";
 import { readSecret } from "../infrastructure/store";
+import { resolveAgentRoute, roleSystemInstruction, stageAgentRole } from "../domain/agent-roles";
 
 export const SYSTEM_PROMPT = `Sei SoftwareFactory, team virtuale senior di product manager, tech lead, security engineer e QA.
 Produci in italiano risultati concreti in Markdown con requisiti verificabili e decisioni motivabili.
@@ -43,8 +44,8 @@ export async function runStage(
   project: FactoryProject, settings: FactorySettings, id: StageId, signal?: AbortSignal,
   onSources?: (sources: ResearchSource[]) => void,
 ): Promise<{ output: string; sources: ResearchSource[] }> {
-  const profile = settings.profiles.find(p => p.id === settings.assignments[id] && p.enabled);
-  if (!profile) throw new Error("Associa un endpoint AI abilitato al task " + id + ".");
+  const role = stageAgentRole(id);
+  const { profile, model, thinking } = resolveAgentRoute(settings, role, id);
   let sources: ResearchSource[] = [];
   if (id === "competitors" || id === "technical") {
     const queries = buildQueries(project, id);
@@ -61,7 +62,8 @@ export async function runStage(
       }
     }
   }
-  const output = await aiComplete(profile, readSecret("ai." + profile.id), SYSTEM_PROMPT, promptForStage(project, id, sources), signal);
+  const output = await aiComplete(profile, readSecret("ai." + profile.id), SYSTEM_PROMPT + roleSystemInstruction(role),
+    promptForStage(project, id, sources), signal, { model, thinking });
   return { output, sources };
 }
 export function stageReady(project: FactoryProject, id: StageId): boolean {
