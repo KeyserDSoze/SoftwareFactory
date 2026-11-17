@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decryptRunnerCredential, encryptRunnerCredential, validateRunnerVault } from "./runner-vault";
 import { fetchRunnerHostMetrics, validateRunnerHostMetrics } from "./runner";
 import { saveSecret } from "./store";
@@ -14,7 +14,15 @@ const metrics = () => ({
   diskUsedBytes: 1, diskTotalBytes: 8, uptimeSeconds: 100, cpuTemperatureC: null,
 });
 describe("runner cloud vault E2EE and resource metrics", () => {
-  afterEach(() => { vi.unstubAllGlobals(); saveSecret("runner.key", ""); saveSecret("cloud.google", ""); });
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+      removeItem: (key: string) => { store.delete(key); },
+    });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
   it("encrypts URL and API key locally; passphrase never appears in ciphertext", async () => {
     const a = await encryptRunnerCredential(ENDPOINT, API_KEY, PASSWORD);
     const b = await encryptRunnerCredential(ENDPOINT, API_KEY, PASSWORD);
