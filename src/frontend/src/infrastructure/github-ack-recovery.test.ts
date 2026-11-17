@@ -135,6 +135,6 @@ describe("GitHub lost acknowledgement recovery (read-only)",()=>{
   it("computes exact standard Git UTF-8 blob IDs (not a hash of a JS character count)",async()=>{
     expect(await gitBlobObjectSha("hello\n")).toBe("ce013625030ba8dba906f756967f9e9ca394464a");
     expect(await gitBlobObjectSha("")).toBe("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
-    expect(await gitBlobObjectSha("caffè\n")).toMatch(/^[0-9a-f]{40}$/);
+    expect(await gitBlobObjectSha("caffè\n")).toBe("e431f3aef7e18760c4b7958010f19b6a146f62a7");
   });
 });
