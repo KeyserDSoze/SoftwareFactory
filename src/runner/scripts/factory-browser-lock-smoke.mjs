@@ -5,9 +5,10 @@
  * It serves the pre-built Factory SPA over container-local loopback.
  */
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,27 +37,30 @@ if (!inside) {
   const require = createRequire(path.join(root,
     "src/frontend/generated-fixture/src/frontend/web/package.json"));
   const { chromium, expect } = require("@playwright/test");
-  const vite = path.join(root,"src/frontend/node_modules/vite/bin/vite.js");
-  const server = spawn(process.execPath, [vite,"preview","--host","127.0.0.1",
-    "--port","4174","--strictPort"], {
-    cwd: path.join(root,"src/frontend"), stdio: ["ignore","pipe","pipe"],
-    env: { ...process.env, HOME: "/tmp", NO_COLOR: "1" },
+  // A minimal static server never writes to the read-only checkout. Vite's
+  // preview command would attempt a .vite-temp config file under node_modules.
+  const dist = path.join(root,"src/frontend/dist");
+  const server = createServer(async (req,res) => {
+    let pathname;
+    try { pathname = new URL(req.url || "/", "http://127.0.0.1").pathname; }
+    catch { res.writeHead(400).end(); return; }
+    if (!/^\/(?:|assets\/[A-Za-z0-9._-]+)$/.test(pathname)) {
+      res.writeHead(404).end(); return;
+    }
+    const name = pathname === "/" ? "index.html" : pathname.slice(1);
+    try {
+      const bytes=await readFile(path.join(dist,name));
+      const type=name.endsWith(".js") ? "text/javascript" :
+        name.endsWith(".css") ? "text/css" : "text/html";
+      res.writeHead(200,{"Content-Type":type,"Cache-Control":"no-store"}).end(bytes);
+    } catch {res.writeHead(404).end();}
   });
-  let output = "";
-  server.stdout.on("data", b => { output = (output + String(b)).slice(-2000); });
-  server.stderr.on("data", b => { output = (output + String(b)).slice(-2000); });
+  await new Promise((resolve,reject) => {
+    server.once("error",reject);
+    server.listen(4174,"127.0.0.1",resolve);
+  });
   let browser;
   try {
-    let ready = false;
-    for (let attempt=0;attempt<60;attempt++) {
-      if (server.exitCode !== null) throw Error("Vite preview exited: " + output);
-      try {
-        const response = await fetch("http://127.0.0.1:4174/");
-        if (response.ok) {ready=true;break;}
-      } catch { /* local loopback not listening yet */ }
-      await delay(150);
-    }
-    assert.ok(ready,"Vite preview didn't start on isolated loopback: " + output);
     browser = await chromium.launch({headless:true});
     const context = await browser.newContext({acceptDownloads:true});
     const first = await context.newPage();
@@ -109,6 +113,6 @@ if (!inside) {
     console.log("FACTORY_BROWSER_LOCK_E2E_PASS: owner → blocked rival → explicit backup → takeover → blocked third tab");
   } finally {
     await browser?.close();
-    server.kill("SIGTERM");
+    await new Promise(resolve => server.close(resolve));
   }
 }
