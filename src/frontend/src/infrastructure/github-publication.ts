@@ -5,17 +5,23 @@
 import type { FactoryProject, GitConfig } from "../domain/types";
 import { workspaceFiles } from "../domain/development";
 import { ensureRepository, pushGeneratedFiles } from "./github";
+import { inspectGithubRepository } from "./github-discovery";
 import { encodeGithubWorkspace, inspectGithubWorkspace,
   GITHUB_WORKSPACE_PATH, githubBindingMatches } from "./github-workspace";
 export type PublishedGithubWorkspace = {
   project: FactoryProject; url: string; sha: string; branch: string;
 };
 export async function publishGithubWorkspace(
-  project: FactoryProject, git: GitConfig, token: string,
+  project: FactoryProject, git: GitConfig, token: string, explicitPublicConsent = false,
 ): Promise<PublishedGithubWorkspace> {
   const prepared = { ...workspaceFiles(project),
     [GITHUB_WORKSPACE_PATH]: encodeGithubWorkspace(project) };
+  if (!git.privateRepo && !explicitPublicConsent && !project.githubSync?.publicConsent)
+    throw Error("Repository impostata come PUBBLICA: serve consenso esplicito prima della creazione o della pubblicazione.");
   await ensureRepository(git, token);
+  const target = await inspectGithubRepository(git, token);
+  if (!target.privateRepo && !explicitPublicConsent && !project.githubSync?.publicConsent)
+    throw Error("GitHub conferma che la repository è PUBBLICA: autorizza esplicitamente il contenuto prima di pubblicare.");
   const remote = await inspectGithubWorkspace(git, token);
   if (githubBindingMatches(project, git)) {
     if (project.githubSync?.lastCommit !== remote.headSha)
@@ -28,7 +34,8 @@ export async function publishGithubWorkspace(
     project: { ...project,
       githubSync: { owner: git.owner, repo: git.repo, branch: git.branch,
         lastCommit: pushed.sha, syncedLocalUpdatedAt: project.updatedAt,
-        syncedAt: new Date().toISOString() } },
+        syncedAt: new Date().toISOString(), publicConsent: !target.privateRepo &&
+          (explicitPublicConsent || project.githubSync?.publicConsent === true) } },
     url: pushed.url, sha: pushed.sha, branch: pushed.branch,
   };
 }
