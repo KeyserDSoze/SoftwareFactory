@@ -16,7 +16,8 @@ import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE
 import type { AiProfile, FactoryProject, FactorySettings, FrontendKind, ProjectConfig, StageId } from "./domain/types";
 import { commitStage, invalidateStages, runStage, stageReady } from "./application/pipeline";
 import { generateFiles } from "./application/scaffold";
-import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin } from "./infrastructure/cloud";
+import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
+  saveEncryptedRunnerVault, restoreEncryptedRunnerVault } from "./infrastructure/cloud";
 import { discoverAiModels } from "./infrastructure/ai";
 import { ensureRepository, pushGeneratedFiles, resolveGithubToken } from "./infrastructure/github";
 import { loadProject, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
@@ -69,6 +70,7 @@ export default function App() {
   const [runLog, setRunLog] = useState<string[]>([]);
   const [lastPush, setLastPush] = useState("");
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
+  const [runnerVaultPassphrase, setRunnerVaultPassphrase] = useState("");
   const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
@@ -231,6 +233,34 @@ export default function App() {
       }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
+  }
+  async function runRunnerVaultAction(kind: "save" | "load") {
+    if (busy) return;
+    if (runnerVaultPassphrase.length < 12) {
+      setError("Imposta una passphrase per il vault di almeno 12 caratteri."); return;
+    }
+    if (!readSecret("cloud." + settings.cloud.provider)) {
+      setError("Collega prima Google Drive o OneDrive."); return;
+    }
+    if (!confirm(kind === "save"
+      ? "Cifrare la API key runner nel browser e sovrascrivere il vault cloud precedente? La passphrase non è recuperabile e non viene salvata."
+      : "Sostituire URL e API key runner di questa sessione con quelli letti dal vault cifrato?")) return;
+    clearMessages(); setBusy(true); setOperation("Vault runner cloud");
+    try {
+      if (kind === "save") {
+        await saveEncryptedRunnerVault(settingsRef.current, runnerVaultPassphrase);
+        setNotice("Credenziale runner salvata nel vault cloud cifrato. Conserva la passphrase separatamente.");
+      } else {
+        const recovered = await restoreEncryptedRunnerVault(settingsRef.current, runnerVaultPassphrase);
+        editSettings(s => { s.runnerEndpoint = recovered.endpoint; });
+        saveSecret("runner.key", recovered.apiKey);
+        setRunnerSecretRevision(v => v + 1);
+        setNotice("Runner collegato da vault cloud: URL ripristinato e API key caricata soltanto per questa sessione.");
+      }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally {
+      setRunnerVaultPassphrase(""); setBusy(false); setOperation("");
+    }
   }
   const progress = Math.round(completed / STAGES.length * 100);
   return <div className="shell">
@@ -414,6 +444,26 @@ export default function App() {
               <label>OAuth SPA client ID<input value={settings.cloud.clientId} placeholder="Client ID registrato sul provider" onChange={e => editSettings(s => { s.cloud.clientId = e.target.value; })} /></label></div>
             <p className="helper">Registra un'app OAuth pubblica con redirect URI <code>{location.origin + location.pathname}</code>. Google richiede scope drive.appdata; Microsoft Files.ReadWrite.AppFolder. Il token rimane in sessionStorage, senza refresh token persistente. Il backup sovrascrive lo snapshot cloud precedente.</p>
             <p className="helper">Backup: settings non segreti (endpoint, ruoli, thinking e URL runner) trasferibili su altri dispositivi. Le API key restano nella sessione: per trasferirle servirà un vault cifrato come BookWriter. Il backup attuale è manuale, sovrascrive lo snapshot precedente e non risolve i conflitti multi-device.</p>
+
+            <div className="runner-vault-control">
+              <strong>Vault cifrato del connector runner (BookWriter-style)</strong>
+              <p className="helper">URL HTTPS + API key del runner vengono cifrati nel browser con PBKDF2/AES-GCM
+                e salvati in un file separato e privato della cartella app cloud. La passphrase non è salvata:
+                serve su ogni nuovo dispositivo. Il token Cloudflare resta sul server, mai nel vault.
+                Sincronizzazione manuale con conferma, ancora senza protezione CAS da modifiche contemporanee.</p>
+              <label>Passphrase vault (minimo 12 caratteri)
+                <input type="password" autoComplete="off" value={runnerVaultPassphrase}
+                  onChange={e => setRunnerVaultPassphrase(e.target.value)} placeholder="Solo in memoria durante l'operazione" />
+              </label>
+              <div className="button-group">
+                <button type="button" className="secondary" disabled={busy || runnerVaultPassphrase.length < 12 ||
+                  !readSecret("cloud." + settings.cloud.provider) || !settings.runnerEndpoint || !readSecret("runner.key")}
+                  onClick={() => void runRunnerVaultAction("save")}>Cifra e salva connector</button>
+                <button type="button" className="secondary" disabled={busy || runnerVaultPassphrase.length < 12 ||
+                  !readSecret("cloud." + settings.cloud.provider)}
+                  onClick={() => void runRunnerVaultAction("load")}>Apri vault su questo dispositivo</button>
+              </div>
+            </div>
             <div className="button-group"><button className="secondary" disabled={busy} onClick={() => void startCloudLogin(settings.cloud).catch(e => setError(e instanceof Error ? e.message : String(e)))}><Cloud size={16} /> {readSecret("cloud." + settings.cloud.provider) ? "Ricollega" : "Connetti"} {settings.cloud.provider === "google" ? "Drive" : "OneDrive"}</button>
               <button className="secondary" disabled={busy || !readSecret("cloud." + settings.cloud.provider)} onClick={() => void cloudAction("save")}><Download size={16} /> Backup</button>
               <button className="subtle" disabled={busy || !readSecret("cloud." + settings.cloud.provider)} onClick={() => void cloudAction("load")}><RefreshCw size={16} /> Ripristina</button></div>
