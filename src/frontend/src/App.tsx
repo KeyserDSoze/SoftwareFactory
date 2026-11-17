@@ -11,6 +11,7 @@ import AgentRoleRouter from "./components/AgentRoleRouter";
 import BackgroundTaskToast, { type RunnerTaskActivity } from "./components/BackgroundTaskToast";
 import { fetchRunnerJob } from "./infrastructure/runner";
 import RunnerTelemetry from "./components/RunnerTelemetry";
+import { t, normalizeLocale } from "./i18n";
 import "./components/code-agent.css";
 import { workspaceFiles } from "./domain/development";
 import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE_OPTIONS, STAGES, updateConfig } from "./domain/defaults";
@@ -314,7 +315,12 @@ export default function App() {
     <main className="main">
       <div className="topbar"><button className="mobile-menu subtle" onClick={() => setMobileNav(true)} aria-label="Apri navigazione"><Menu size={22} /></button>
         <div className="breadcrumb">Workspace <span>/</span> {NAV.find(n => n.id === tab)?.title}</div>
-        <div className="top-right"><span className="top-status"><span className={"status-dot " + (busy ? "pulse" : "")} /> {busy ? operation : "Sistema pronto"}</span><button className="icon-button" onClick={() => setTab("connections")} title="Impostazioni"><Settings2 size={18} /></button></div>
+        <div className="top-right"><label className="language-select" aria-label={t(normalizeLocale(settings.language), "language")}>
+          <select aria-label={t(normalizeLocale(settings.language), "language")}
+            value={normalizeLocale(settings.language)}
+            onChange={event => editSettings(s => { s.language = event.target.value === "en" ? "en" : "it"; })}>
+            <option value="it">Italiano</option><option value="en">English</option>
+          </select></label><span className="top-status"><span className={"status-dot " + (busy ? "pulse" : "")} /> {busy ? operation : "Sistema pronto"}</span><button className="icon-button" onClick={() => setTab("connections")} title="Impostazioni"><Settings2 size={18} /></button></div>
       </div>
       <div className="page">
         {error && <div className="alert error" role="alert"><ShieldAlert size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="Chiudi"><X size={17} /></button></div>}
@@ -452,7 +458,7 @@ export default function App() {
               <label>Runner API key (solo sessione)<SecretInput secretKey="runner.key" placeholder="API key per job build/test" onSecretChange={() => setRunnerSecretRevision(value => value + 1)}/></label>
               <label>Operatore repair (solo sessione)<SecretInput secretKey="runner.operator.key" placeholder="Chiave personale con ruoli repair"/></label></div>
             <p className="helper">I checkpoint richiedono una credenziale operatore separata dalla chiave dei job. Ruoli: propose per creare patch/re-test, review per dichiarare review, approve per registrare approvazione. Il client può richiedere di cambiare chiave prima della review o approvazione; non è una prova di identità umana o una firma. Se il runner non configura operatori, l'API repair resta disabilitata.</p>
-            <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} />
+            <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} locale={normalizeLocale(settings.language)} />
             <RunnerTelemetry endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} active={busy} />
             <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
           </section>
