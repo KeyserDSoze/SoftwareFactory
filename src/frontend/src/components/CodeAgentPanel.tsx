@@ -6,6 +6,8 @@ import { approvePending, developmentOf, dropConflictingChanges, rejectPending, r
 import { lineDiff } from "../application/code-diff";
 import { planRepairRetest } from "../application/repair-loop";
 import RunnerPanel from "./RunnerPanel";
+import GitHubActionsPanel from "./GitHubActionsPanel";
+import { t, normalizeLocale } from "../i18n";
 import type { RunnerTaskActivity } from "./BackgroundTaskToast";
 import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
@@ -29,6 +31,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
   const [activePath, setActivePath] = useState("");
   const [view, setView] = useState<"diff" | "old" | "new">("diff");
   const [phase, setPhase] = useState("");
+  const [testBackend, setTestBackend] = useState<"server" | "actions">("server");
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -282,8 +285,22 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         <button className="primary" disabled={busy || pending.review?.verdict !== "pass" || !!conflicts.length} onClick={approve}><CheckCircle2 size={16} /> Approva e applica</button>
       </div></div>
     </section>}
-<RunnerPanel project={project} settings={settings} busy={busy}
-      onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} onRunnerActivity={onRunnerActivity} />
+<section className="panel">
+      <div className="panel-title"><div><span className="eyebrow">TEST EXECUTION</span>
+        <h3>{t(normalizeLocale(settings.language), "backendChoice")}</h3></div></div>
+      <div className="button-group" role="group" aria-label={t(normalizeLocale(settings.language), "backendChoice")}>
+        <button type="button" className={testBackend === "server" ? "primary" : "secondary"}
+          aria-pressed={testBackend === "server"} onClick={() => setTestBackend("server")}>
+          {t(normalizeLocale(settings.language), "backendLocal")}</button>
+        <button type="button" className={testBackend === "actions" ? "primary" : "secondary"}
+          aria-pressed={testBackend === "actions"} onClick={() => setTestBackend("actions")}>
+          {t(normalizeLocale(settings.language), "backendActions")}</button>
+      </div>
+    </section>
+    {testBackend === "server" ? <RunnerPanel project={project} settings={settings} busy={busy}
+      onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} onRunnerActivity={onRunnerActivity} /> :
+      <GitHubActionsPanel project={project} settings={settings} busy={busy}
+        onProjectChange={onProjectChange} onNotice={onNotice} onError={onError} />}
     <section className="panel"><div className="panel-title"><div><div className="eyebrow">03 / DEVELOPMENT HISTORY</div><h3>Modifiche approvate</h3></div><GitCommit size={19} className="muted" /></div>
       {dev.history.length === 0 ? <p className="dimmed">Nessuna feature è stata applicata. Le patch approvate saranno tracciate qui.</p> :
         <div className="feature-history">{[...dev.history].reverse().map(entry => <div key={entry.id} className="history-row">
