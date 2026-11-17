@@ -23,7 +23,7 @@ import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
 import { discoverAiModels } from "./infrastructure/ai";
 import { resolveGithubToken, readGithubHeadSha } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
-import { publishGithubWorkspace, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
+import { publishGithubWorkspace, assertGithubImportHead, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
 import { inspectGithubRepository } from "./infrastructure/github-discovery";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
@@ -640,7 +640,7 @@ export default function App() {
     if (busy || localConflict || !writerLeaseReady) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
     try {
-      const git = settingsRef.current.git;
+      const git = { ...settingsRef.current.git };
       const token = await resolveGithubToken(git, readSecret("github.pat"));
       if (mode === "status") {
         const remote = await inspectGithubWorkspace(git, token);
@@ -675,8 +675,15 @@ export default function App() {
           "Procedendo verrà sostituito il progetto aperto senza merge automatico. " +
           "Un vecchio report di test o una vecchia review NON saranno considerati validi.")) return;
       }
-      if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
-        throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
+      if (initial !== projectRef.current ||
+          JSON.stringify(settingsRef.current.git) !== JSON.stringify(git))
+        throw Error("Progetto o destinazione GitHub cambiati durante la conferma: importazione annullata.");
+      // The browser confirmation may have been open while another device
+      // pushed. Never adopt the old SHA as if it were the current branch.
+      await assertGithubImportHead(git, token, imported.sha);
+      if (initial !== projectRef.current ||
+          JSON.stringify(settingsRef.current.git) !== JSON.stringify(git))
+        throw Error("Progetto o destinazione GitHub cambiati dopo la verifica: importazione annullata.");
       if (!await changeProjectWithLease({ ...imported.project, githubDestination: { ...git } }))
         throw Error("Importazione non applicata: copia locale modificata durante l'operazione.");
       editSettings(s => { s.githubAutoSync = false; });

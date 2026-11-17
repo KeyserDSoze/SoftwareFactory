@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { publishGithubWorkspace, importGithubWorkspace } from "./github-publication";
+import { publishGithubWorkspace, importGithubWorkspace, assertGithubImportHead } from "./github-publication";
 import { encodeGithubWorkspace, githubProjectDirty } from "./github-workspace";
 import { persistProject, persistProjectIfUnchanged, localProjectSnapshot, listLocalProjects, loadLocalProject, saveSecret } from "./store";
 import type { FactoryProject, GitConfig } from "../domain/types";
@@ -161,4 +161,39 @@ describe("GitHub commit and local multi-project sync safety", () => {
     expect(imported.project.id).toBe(other.id);
     expect(imported.project.githubSync?.lastCommit).toBe(SHA);
   });
+  it("rejects an import when GitHub HEAD advances during the pinned checkpoint read", async () => {
+    const current=makeProject(), remote=makeProject();
+    const calls=mockGitHub(current,{existing:remote});
+    const fetchMock=fetch as ReturnType<typeof vi.fn>;
+    const original=fetchMock.getMockImplementation()!;
+    let reads=0;
+    fetchMock.mockImplementation(async (url:string, init:RequestInit={}) => {
+      if (url.endsWith("/git/ref/heads/main") && (init.method??"GET")==="GET") {
+        reads++;
+        if (reads===2) return {ok:true,status:200,
+          text:async()=>JSON.stringify({object:{sha:"f".repeat(40)}})};
+      }
+      return original(url,init);
+    });
+    await expect(importGithubWorkspace(current,git,PAT)).rejects.toThrow(/HEAD avanzata/);
+    expect(reads).toBe(2);
+    expect(calls.every(call=>(call.init.method??"GET")==="GET")).toBe(true);
+  });
+  it("checks HEAD again after a delayed human confirmation and fails closed", async () => {
+    const current=makeProject(),remote=makeProject();
+    mockGitHub(current,{existing:remote});
+    const imported=await importGithubWorkspace(current,git,PAT);
+    expect(imported.sha).toBe(SHA);
+    await expect(assertGithubImportHead(git,PAT,imported.sha)).resolves.toBeUndefined();
+    const fetchMock=fetch as ReturnType<typeof vi.fn>;
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url:string,init:RequestInit={}) => {
+      if (url.endsWith("/git/ref/heads/main")) return {ok:true,status:200,
+        text:async()=>JSON.stringify({object:{sha:"f".repeat(40)}})};
+      return original(url,init);
+    });
+    await expect(assertGithubImportHead(git,PAT,imported.sha)).rejects.toThrow(/HEAD avanzata/);
+    await expect(assertGithubImportHead(git,PAT,"invalid")).rejects.toThrow(/SHA/);
+  });
+
 });

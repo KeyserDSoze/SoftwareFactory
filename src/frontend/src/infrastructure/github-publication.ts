@@ -4,7 +4,7 @@
  */
 import type { FactoryProject, GitConfig } from "../domain/types";
 import { workspaceFiles } from "../domain/development";
-import { ensureRepository, pushGeneratedFiles, verifyGithubCommitFiles } from "./github";
+import { ensureRepository, pushGeneratedFiles, readGithubHeadSha, verifyGithubCommitFiles } from "./github";
 import { inspectGithubRepository } from "./github-discovery";
 import { encodeGithubWorkspace, inspectGithubWorkspace,
   GITHUB_WORKSPACE_PATH, githubBindingMatches, portableGithubProject } from "./github-workspace";
@@ -43,11 +43,27 @@ export async function publishGithubWorkspace(
     url: pushed.url, sha: pushed.sha, branch: pushed.branch,
   };
 }
+/** Imported checkpoints are read-only snapshots. If a concurrent device moves
+ * the branch at any point during the read or a later human confirmation, reject
+ * the import rather than silently acknowledging an obsolete HEAD.
+ */
+export async function assertGithubImportHead(
+  git: GitConfig, token: string, expectedSha: string,
+): Promise<void> {
+  if (!/^[a-f0-9]{40}$/i.test(expectedSha))
+    throw Error("SHA del checkpoint GitHub non valido: importazione annullata.");
+  const actualSha = await readGithubHeadSha(git, token);
+  if (actualSha.toLowerCase() !== expectedSha.toLowerCase())
+    throw Error("Conflitto importazione GitHub: HEAD avanzata durante la conferma. Nessun checkpoint applicato.");
+}
 export async function importGithubWorkspace(
   current: FactoryProject, git: GitConfig, token: string,
 ): Promise<{ project: FactoryProject; sha: string }> {
   const remote = await inspectGithubWorkspace(git, token);
   if (!remote.project) throw Error("La repository non contiene ancora un checkpoint SoftwareFactory importabile.");
+  // The checkpoint is pinned to its SHA, but the branch can still advance
+  // while GitHub serves the JSON. This first guard precedes the UI preview.
+  await assertGithubImportHead(git, token, remote.headSha);
   const original = remote.project;
   // A remote checkpoint contains the project, NOT this browser's session
   // secrets, auth profiles or local autosync preferences.
