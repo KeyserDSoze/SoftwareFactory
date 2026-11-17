@@ -29,6 +29,10 @@ async function temperatureSensor(root = "/sys/class/thermal") {
     const entries = (await readdir(root)).filter(v => /^thermal_zone[0-9]{1,3}$/.test(v)).slice(0, 32);
     for (const entry of entries) {
       try {
+        // A thermal zone can also be a battery, motherboard or WLAN sensor.
+        // Only present a value as CPU temperature if the kernel labels it so.
+        const type = (await readFile(path.join(root, entry, "type"), "utf8")).trim();
+        if (!/cpu|x86_pkg_temp|coretemp|soc_thermal/i.test(type)) continue;
         const raw = (await readFile(path.join(root, entry, "temp"), "utf8")).trim();
         if (!/^-?[0-9]{1,7}$/.test(raw)) continue;
         const temp = Number(raw) / 1000;
