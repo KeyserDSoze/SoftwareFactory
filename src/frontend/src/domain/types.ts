@@ -70,6 +70,8 @@ export interface FactorySettings {
   searchEndpoint: string;
   runnerEndpoint?: string;
   git: GitConfig;
+  /** Opt-in, browser-open sync after a confirmed first push. */
+  githubAutoSync?: boolean;
   cloud: CloudConfig;
 }
 export interface FactoryProject {
@@ -79,6 +81,11 @@ export interface FactoryProject {
   createdAt: string;
   updatedAt: string;
   development?: DevelopmentWorkspace;
+  /** Last remotely confirmed Git commit; no secrets or PAT. */
+  githubSync?: {
+    owner: string; repo: string; branch: string; lastCommit: string;
+    syncedLocalUpdatedAt: string; syncedAt: string;
+  };
   /** Non-secret GitHub Actions dispatch binding; PAT stays in sessionStorage. */
   githubTestReceipt?: {
     requestId: string; repository: string; branch: string; commitSha: string;
