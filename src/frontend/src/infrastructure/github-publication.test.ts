@@ -99,6 +99,17 @@ describe("GitHub commit and local multi-project sync safety", () => {
     const published=await publishGithubWorkspace(p,git,PAT,true);
     expect(published.project.githubSync?.publicConsent).toBe(true);
   });
+  it("never carries public consent from a different destination, even with same PAT", async () => {
+    const p=makeProject();
+    p.githubSync={owner:"octocat",repo:"other-app",branch:"main",lastCommit:SHA,
+      syncedLocalUpdatedAt:p.updatedAt,syncedAt:new Date().toISOString(),publicConsent:true};
+    const calls=mockGitHub(p,{public:true});
+    await expect(publishGithubWorkspace(p,git,PAT)).rejects.toThrow(/PUBBLICA/);
+    expect(calls.some(x=>x.init.method==="POST"||x.init.method==="PATCH")).toBe(false);
+    await expect(publishGithubWorkspace(p,git,PAT,true)).resolves.toMatchObject({
+      project:{githubSync:{publicConsent:true,repo:"demo"}},
+    });
+  });
   it("fails closed if remote commit moved after last local acknowledgement", async () => {
     const p=makeProject();
     p.githubSync={owner:git.owner,repo:git.repo,branch:"main",lastCommit:SHA,
