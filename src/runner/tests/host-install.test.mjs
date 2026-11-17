@@ -211,6 +211,17 @@ test("apply hard-stops on missing consent, wrong UID, bad paths, bad digest and 
   }
 });
 
+test("private env cannot override Compose profile/project, Docker daemon or Node executable", async () => {
+  for (const key of ["COMPOSE_PROFILES", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME",
+    "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "NODE_OPTIONS", "NODE_PATH"]) {
+    const f=fixture();
+    f.environment[key]="untrusted-option";
+    await assert.rejects(runHostInstall(f.args), /Runner host install refused/);
+    assert.equal(f.up,0);
+    assert.ok(!f.calls.some(x=>x[0]==="canary"));
+  }
+});
+
 test("rejects wrong/replaced Git HEAD, branch and untracked working files before canary", async () => {
   for (const [name,value] of [["rev-parse","c".repeat(40)+"\n"],
     ["symbolic-ref","feature\n"],["status","?? docker/runner/unsafe.sh\n"]]) {

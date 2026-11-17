@@ -164,6 +164,12 @@ export async function runHostInstall({
   try {
     const initial = await readEnv(envFile);
     validateHostEnvironment(initial, { authMode, operatorRegistry });
+    // A private env must not override the reviewed Compose project/profile,
+    // Docker host/context or the Node executable. All these runtime controls
+    // are pinned by the installer, never delegated to an env-file.
+    if (Object.keys(initial).some(key =>
+      /^(?:COMPOSE_[A-Z0-9_]+|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|NODE_OPTIONS|NODE_PATH)$/.test(key)))
+      reject();
     await verifyGit();
     for (const kind of ["compose", "host"]) {
       const proof = await preflightCheck([kind, ...options]);

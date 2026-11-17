@@ -897,19 +897,19 @@ Il percorso iniziale del connector rimane **manuale e locale all'host**. La Fact
 ```bash
 # Sull'HOST Linux uid=1000, nella repository SoftwareFactory su main:
 git status --short
-git rev-parse HEAD   # copiare la SHA-40 APPROVATA dall'operatore
-# Ottenere un image digest node@sha256:... da registry e approvarlo
-# prima dell'installazione; non accettare "node:latest" come canary.
+APPROVED_SHA="$(git rev-parse HEAD)"  # confrontare con la SHA-40 approvata
+# Inserire un digest verificato realmente, non un tag "latest":
+APPROVED_CANARY_IMAGE='node@sha256:INSERIRE_IL_DIGEST_HEX_DA_64_CARATTERI'
 #
 # 1) Solo letture (git, private-env, Compose config e rootless host checks).
 node src/runner/scripts/host-install.mjs \
   --env-file=/srv/softwarefactory/private/runner.env \
-  --commit=<SHA40_APPROVATA> --image=node@sha256:<DIGEST64> --check
+  --commit="$APPROVED_SHA" --image="$APPROVED_CANARY_IMAGE" --check
 #
 # 2) Prima installazione esplicitamente confermata, SOLO sullo stesso host:
 node src/runner/scripts/host-install.mjs \
   --env-file=/srv/softwarefactory/private/runner.env \
-  --commit=<SHA40_APPROVATA> --image=node@sha256:<DIGEST64> \
+  --commit="$APPROVED_SHA" --image="$APPROVED_CANARY_IMAGE" \
   --apply --confirm-install
 ```
 
