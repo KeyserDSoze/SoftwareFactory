@@ -26,7 +26,7 @@ import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/github-publication";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
-import { loadProject, loadLocalProject, listLocalProjects, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
+import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
 const NAV: { id: Tab; title: string; detail: string; icon: typeof Layers3 }[] = [
@@ -77,20 +77,36 @@ export default function App() {
   const [runLog, setRunLog] = useState<string[]>([]);
   const [lastPush, setLastPush] = useState("");
   const [githubPreview, setGithubPreview] = useState<GithubWorkspaceComparison | null>(null);
+  const [localConflict, setLocalConflict] = useState("");
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
   const [runnerVaultPassphrase, setRunnerVaultPassphrase] = useState("");
   const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
+  const localBaselineRef = useRef<Map<string,string|null>>(
+    new Map([[project.id, localProjectSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
   const oauthChecked = useRef(false);
   const busyRef = useRef(busy);
   busyRef.current = busy;
   useEffect(() => {
-    projectRef.current = project;
-    persistProject(project);
-    setProjectIndexRevision(v => v + 1);
-  }, [project]);
+    // On reload, never rewrite the project library with an old active-tab
+    // snapshot. A different copy on disk requires explicit user resolution.
+    const persisted = localBaselineRef.current.get(project.id) ?? null;
+    try {
+      const raw = JSON.stringify(project);
+      if (persisted && persisted !== raw &&
+          JSON.stringify(loadLocalProject(project.id)) !== raw)
+        throw Error("Il progetto attivo differisce dalla copia della libreria: verifica il conflitto locale prima di salvare.");
+      if (persisted !== raw) {
+        const confirmed = persistProjectIfUnchanged(project, persisted);
+        localBaselineRef.current.set(project.id, confirmed);
+      }
+      setProjectIndexRevision(v => v + 1);
+    } catch (error) {
+      setLocalConflict(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
   useEffect(() => { settingsRef.current = settings; persistSettings(settings); }, [settings]);
   // GitHub auto-save runs only while this browser tab is open and ONLY after
   // an explicitly approved first push + an opt-in. A durable, non-secret outbox
@@ -101,7 +117,7 @@ export default function App() {
     const tick = async () => {
       const current = projectRef.current, config = settingsRef.current;
       const git = config.git;
-      if (disposed || inFlight || busyRef.current || !config.githubAutoSync ||
+      if (disposed || inFlight || busyRef.current || Boolean(localConflict) || !config.githubAutoSync ||
           document.visibilityState === "hidden" || !githubBindingMatches(current, git) ||
           !githubProjectDirty(current, git) || !readSecret("github.pat")) return;
       const key = "softwarefactory.github.outbox." + current.id;
@@ -165,7 +181,7 @@ export default function App() {
     };
     const timer = setInterval(() => { void tick(); }, 15000);
     return () => { disposed = true; clearInterval(timer); };
-  }, [settings.githubAutoSync]);
+  }, [settings.githubAutoSync, localConflict]);
   useEffect(() => {
     if (oauthChecked.current) return;
     oauthChecked.current = true;
@@ -211,9 +227,27 @@ export default function App() {
   }, [project]);
   const paths = Object.keys(files).sort();
   const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
-  function changeProject(nextProject: FactoryProject) {
-    projectRef.current = nextProject;
-    setProject(nextProject);
+  function changeProject(nextProject: FactoryProject): boolean {
+    if (localConflict) {
+      setError("Conflitto locale aperto: salva prima un backup e scegli la versione corretta.");
+      return false;
+    }
+    try {
+      const previous = localBaselineRef.current.has(nextProject.id) ?
+        localBaselineRef.current.get(nextProject.id)! : localProjectSnapshot(nextProject.id);
+      const stored = persistProjectIfUnchanged(nextProject, previous);
+      localBaselineRef.current.set(nextProject.id, stored);
+      projectRef.current = nextProject;
+      setProject(nextProject);
+      setProjectIndexRevision(v => v + 1);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalConflict(message);
+      setError("Scrittura locale sospesa: " + message);
+      setPublishConfirmed(false);
+      return false;
+    }
   }
   function editConfig(change: (config: ProjectConfig) => void) {
     if (busy) return;
@@ -298,21 +332,22 @@ export default function App() {
   }
   function pause() { abortRef.current?.abort(); }
   function newProject() {
-    if (busy || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
+    if (busy || localConflict || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
       "ma esporta un backup ZIP/cloud per proteggerlo da cancellazione browser.")) return;
-    persistProject(projectRef.current);
-    changeProject(createProject());
+    if (!changeProject(createProject())) return;
     editSettings(s => { s.git = { ...DEFAULT_SETTINGS.git }; s.githubAutoSync = false; });
     setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
   }
   function switchProject(id: string) {
-    if (busy || id === projectRef.current.id) return;
+    if (busy || localConflict || id === projectRef.current.id) return;
     try {
-      persistProject(projectRef.current);
       const selected = loadLocalProject(id);
       if (!confirm("Passare a «" + selected.config.name + "»? " +
         "Le modifiche attuali restano nella libreria locale. Nessun push automatico in questa operazione.")) return;
-      changeProject(selected);
+      // The baseline is captured at the point of explicit selection. If another
+      // tab changes it before our write, the guarded write refuses the switch.
+      localBaselineRef.current.set(id, localProjectSnapshot(id));
+      if (!changeProject(selected)) return;
       editSettings(s => {
         s.git = selected.githubDestination ? { ...selected.githubDestination } :
           selected.githubSync ? { ...s.git, owner: selected.githubSync.owner,
@@ -340,6 +375,7 @@ export default function App() {
   }
   async function publish() {
     clearMessages();
+    if (localConflict) { setError("Conflitto locale: risolvilo prima di pubblicare."); return; }
     if (!publishConfirmed) { setError("Conferma il contenuto da pubblicare sul repository."); return; }
     if (!paths.length) { setError("Inserisci nome e descrizione per generare lo scaffold."); return; }
     setBusy(true); setOperation("GitHub sync");
@@ -367,6 +403,27 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
   }
+  function recoverLocalConflict() {
+    if (!localConflict || busy) return;
+    try {
+      if (!window.confirm("Esportare il progetto di questa scheda come backup JSON prima di caricare " +
+          "lo stato scritto dall'altra scheda? Non verrà fatto alcun push GitHub.")) return;
+      downloadRecoveryProject(projectRef.current);
+      if (!window.confirm("Confermi di aver SALVATO il file di recupero? Il progetto della " +
+          "scheda corrente sarà sostituito con la versione più recente della libreria locale.")) return;
+      const id = projectRef.current.id;
+      const remote = localProjectSnapshot(id);
+      if (!remote) throw Error("Nessun progetto aggiornato trovato nella libreria locale.");
+      const fresh = loadLocalProject(id);
+      localBaselineRef.current.set(id, remote);
+      projectRef.current = fresh;
+      setProject(fresh);
+      setProjectIndexRevision(v => v + 1);
+      setLocalConflict("");
+      editSettings(s => { s.githubAutoSync = false; });
+      setNotice("Versione della libreria locale caricata. Autosync disabilitato per sicurezza.");
+    } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
+  }
   function downloadRecoveryProject(project: FactoryProject): void {
     // Explicit single-project recovery file; no PAT, AI API or cloud credentials
     // are included (they are stored in the browser's session/device vault).
@@ -384,7 +441,7 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
   async function importFromGithub(mode: "status" | "import") {
-    if (busy) return;
+    if (busy || localConflict) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
     try {
       const git = settingsRef.current.git;
@@ -541,6 +598,15 @@ export default function App() {
         {error && <div className="alert error" role="alert"><ShieldAlert size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {notice && <div className="alert success" role="status"><CheckCircle2 size={18} /><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {tab === "workspace" && <>
+          {localConflict && <section className="panel local-project-conflict" role="alert">
+            <h3>Conflitto locale tra schede</h3>
+            <p>{localConflict}</p>
+            <p>Questa scheda non sovrascriverà la versione salvata dall'altra.
+              Esporta prima il JSON di recupero e scegli esplicitamente se caricare la versione aggiornata.</p>
+            <button className="secondary" disabled={busy} onClick={recoverLocalConflict}>
+              <Download size={15}/> Salva backup e carica versione aggiornata
+            </button>
+          </section>}
           <section className="panel local-project-library">
             <div className="panel-title"><div><span className="eyebrow">LOCAL / PROJECTS</span>
               <h3>{t(normalizeLocale(settings.language), "githubProjectsTitle")}</h3></div>
@@ -742,7 +808,7 @@ export default function App() {
             <p className="helper">Push atomico con Git Data API e fast-forward, senza force push. Per GitHub App serve un broker sicuro: non mettere una chiave privata App nella SPA. Il merge dei branch resta una decisione esplicita su GitHub.</p>
             <label className="checkline"><input type="checkbox" checked={publishConfirmed} onChange={e => setPublishConfirmed(e.target.checked)} /> Ho verificato file e visibilità della repository; autorizzo creazione e commit.</label>
             <div className="button-group align-right"><button className="secondary" onClick={() => setTab("stack")}><FileText size={15} /> Anteprima file</button>
-              <button className="primary" disabled={busy || !publishConfirmed || !paths.length} onClick={() => void publish()}><GitCommit size={17} /> Pubblica su GitHub</button></div>
+              <button className="primary" disabled={busy || Boolean(localConflict) || !publishConfirmed || !paths.length} onClick={() => void publish()}><GitCommit size={17} /> Pubblica su GitHub</button></div>
             {lastPush && <a className="link-result" href={lastPush} target="_blank" rel="noopener noreferrer">Apri ultimo commit <ExternalLink size={14} /></a>}
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">BACKUP & RESTORE</span><h3>Google Drive / OneDrive</h3></div><Cloud size={20} /></div>
