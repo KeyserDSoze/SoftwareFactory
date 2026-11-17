@@ -81,6 +81,8 @@ export interface FactoryProject {
   createdAt: string;
   updatedAt: string;
   development?: DevelopmentWorkspace;
+  /** Per-project repository destination; PAT is shared in session/device vault. */
+  githubDestination?: GitConfig;
   /** Last remotely confirmed Git commit; no secrets or PAT. */
   githubSync?: {
     owner: string; repo: string; branch: string; lastCommit: string;
