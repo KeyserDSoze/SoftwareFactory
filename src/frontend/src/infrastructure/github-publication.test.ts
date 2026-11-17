@@ -15,7 +15,7 @@ const makeProject = () => {
 };
 function mockGitHub(p: FactoryProject, opts: {public?:boolean;existing?:FactoryProject;head?:string}={}) {
   const calls: Array<{url:string; init:RequestInit}> = [];
-  const head = opts.head ?? SHA;
+  let head = opts.head ?? SHA;
   vi.stubGlobal("fetch", vi.fn(async (url:string, init:RequestInit={}) => {
     calls.push({url,init});
     const method = init.method || "GET";
@@ -37,7 +37,7 @@ function mockGitHub(p: FactoryProject, opts: {public?:boolean;existing?:FactoryP
       output={tree:{sha:"b".repeat(40)}};
     else if (url.endsWith("/git/trees") && method==="POST") output={sha:"c".repeat(40)};
     else if (url.endsWith("/git/commits") && method==="POST") output={sha:NEXT};
-    else if (url.includes("/git/refs/heads/main") && method==="PATCH") output={object:{sha:NEXT}};
+    else if (url.includes("/git/refs/heads/main") && method==="PATCH") { head=NEXT; output={object:{sha:NEXT}}; }
     else throw Error("Unexpected GitHub API "+method+" "+url);
     return {ok:status<400,status,json:async()=>output,
       text:async()=>JSON.stringify(output)};
@@ -105,6 +105,25 @@ describe("GitHub commit and local multi-project sync safety", () => {
     const update=calls.find(x=>x.url.includes("/git/refs/heads/main") &&
       x.init.method==="PATCH")?.init;
     expect(JSON.parse(update?.body as string).force).toBe(false);
+  });
+  it("never acknowledges a push when the remote ref moves immediately after PATCH", async () => {
+    const p=makeProject();
+    const history=mockGitHub(p);
+    const githubFetch=fetch as ReturnType<typeof vi.fn>;
+    const original=githubFetch.getMockImplementation()!;
+    let verifiedReads=0;
+    githubFetch.mockImplementation(async (url:string,init:RequestInit={}) => {
+      if (url.includes("/git/ref/heads/main") && (init.method??"GET")==="GET") {
+        verifiedReads++;
+        if (verifiedReads >= 3)
+          return {ok:true,status:200,text:async()=>JSON.stringify({
+            object:{sha:"f".repeat(40)},
+          })};
+      }
+      return original(url,init);
+    });
+    await expect(publishGithubWorkspace(p,git,PAT)).rejects.toThrow(/HEAD diversa/);
+    expect(history.some(x=>x.init.method==="PATCH")).toBe(true);
   });
   it("refuses public repo without explicit consent even when configured private", async () => {
     const p=makeProject();
