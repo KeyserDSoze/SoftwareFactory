@@ -980,3 +980,34 @@ trasportano il token runner. Il vault cifrato BookWriter-style e pairing
 scoped/revocable non sono ancora implementati. Per un servizio continuo
 l'API/worker Compose sono indipendenti dal browser; la pipeline AI/PM
 resta invece browser-bound fino al futuro orchestratore server-side.
+
+## Wizard interattivo Docker rootless + Cloudflare e autoavvio (#89)
+
+**Solo server/VM Ubuntu/Debian dedicati**; prima prepara Node.js, Git e utente non-root **UID 1000**, con sudo e sessione TTY. Su macchina priva di altri workload Docker, dalla repository su `main`:
+
+```bash
+node src/runner/scripts/interactive-install.mjs
+```
+
+Il wizard non accetta token da parametri della shell né via GitHub Pages. Conferma scrivendo `INSTALLA`: installa Docker CE, Compose e pacchetti rootless dalla repository Docker ufficiale con chiave GPG a fingerprint verificata; genera configurazione host privata e chiede **token Cloudflare Tunnel** senza echo e **API key** (custom lunga almeno 32 caratteri oppure casuale, mostrata una sola volta su esplicita richiesta).
+
+**Riavvio automatico**: `loginctl enable-linger 1000` e `systemctl --user enable --now docker.service` fanno ripartire Docker rootless con l'utente dedicato. Nel Compose `runner-api`, `runner-worker` e `cloudflared` hanno `restart: unless-stopped`. Cloudflare qui è un **servizio containerizzato**, non un servizio systemd privilegiato. La CLI esegue preflight Docker rootless e di sicurezza prima dell'avvio; il programma non verifica tuttavia ancora che un riavvio fisico e il tunnel HTTPS abbiano avuto successo. Non avviare l'installer su host con Docker rootful attivo o altre applicazioni sensibili.
+
+**Configurazione Cloudflare** (passaggi dashboard aggiornati):
+1. Cloudflare dashboard → **Networking → Tunnels → Create Tunnel**; crea il tunnel e copia il relativo token. Serve un dominio gestito da Cloudflare.
+2. Avvia l'installer, incolla il token in terminale e indica il tuo URL pubblico `https://runner.example.com`.
+3. Nel tunnel apri **Routes → Add route → Published application**, inserisci l'hostname del runner e **Service Type HTTP**, **Service URL `http://runner-api:8787`**: Cloudflare gira nello stesso Docker Compose e risolve `runner-api`. **Non usare `http://localhost:8787` come Service URL dalla rete container**.
+4. Verifica che la route DNS esista e configura Access/identità per il browser, senza service token embedded nella SPA. Le preflight OPTIONS cross-origin devono passare anche attraverso Access; la API autorizza soltanto la origin GitHub Pages (ad es. `https://keyserdsoze.github.io`, senza `/SoftwareFactory/`).
+5. In SoftwareFactory Settings imposta `https://runner.example.com` e incolla **soltanto la runner API key**, poi Verifica connector; esegui un job controllato per prova. Ogni test futuro richiede credenziali e report verificabili.
+
+L'API esposta sul server usa l'interfaccia locale `127.0.0.1:8787`; `cloudflared` inoltra dalla rete Docker privata senza porte firewall esposte. Un indirizzo GitHub Pages non può scoprire automaticamente il tuo server dietro NAT. Consulta anche le [istruzioni Cloudflare](https://developers.cloudflare.com/tunnel/get-started/). 
+
+### Diagnostica risorse del server
+
+Il worker produce periodicamente un file di **metriche aggregate senza identificatori sensibili** (CPU percent via delta tempi, RAM, filesystem dell'area dati, uptime e temperatura CPU soltanto se riconosciuta). L'API `GET /v1/host-metrics` restituisce uno snapshot privato protetto da Bearer e allowlist CORS, TTL e schema stretto; una credenziale sbagliata non può leggerlo, in modalità multi-tenant global metrics non sono esposte. Non è una telemetria per job né stima di kWh; in VM/container il sensore termico può non essere leggibile. La UI mostra *non disponibile* invece di numeri inventati.
+
+### Credenziali runner cifrate su Drive/OneDrive
+
+Dopo OAuth Google Drive/OneDrive, in Settings scegli **Vault cifrato del connector runner**. Inserisci passphrase (minimo 12 caratteri) e seleziona *Cifra e salva connector*: la SPA cifra localmente runner URL e API key, poi scrive un file `softwarefactory-runner-vault.v1.json` separato dai backup JSON del progetto. Sul nuovo PC con lo stesso account accedi al provider, inserisci la passphrase e premi *Apri vault su questo dispositivo*: le credenziali vengono caricate nella sola sessione e l'URL applicato alle impostazioni. **Non perdere la passphrase**; non c'è un recupero centralizzato. Token Cloudflare non incluso nel vault, resta sulla VM. **Concorrenza e registry multi-connector non sono ancora supportati**: evita salvataggi da due dispositivi contemporaneamente. Conserva la copia locale come fonte di verità fino ai controlli CAS/ETag futuri.
+
+Le funzionalità qui descritte sono **implementazioni incrementali non validate ancora su una VM vera**. Per installazioni production e più tenant occorrono prove reali, threat model, hardening del token e procedure di aggiornamento/revoca. Vedi ADR 0046 e issue #87/#89.
