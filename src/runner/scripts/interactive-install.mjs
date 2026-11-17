@@ -128,18 +128,38 @@ function assertDedicated() {
     throw Error("Eseguire solo su Ubuntu/Debian come utente dedicato UID 1000 con terminale TTY.");
 }
 export async function hiddenPrompt(text) {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw Error("Serve un terminale locale interattivo.");
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stdin.setRawMode)
+    throw Error("Serve un terminale locale TTY per l'input segreto.");
   process.stdout.write(text);
-  const setup = spawnSync("stty", ["-echo"], { stdio: "inherit" });
-  if (setup.status !== 0) throw Error("Impossibile nascondere l'input del token.");
-  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
+  const original = Boolean(process.stdin.isRaw);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
   try {
     return await new Promise((resolve, reject) => {
-      rl.once("line", resolve); rl.once("close", () => reject(Error("Input interrotto.")));
+      let value = "";
+      const finish = (error) => {
+        process.stdin.removeListener("data", onData);
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const onData = (chunk) => {
+        const input = String(chunk);
+        for (const char of input) {
+          if (char === "\u0003") { finish(Error("Input annullato.")); return; } // Ctrl-C
+          if (char === "\r" || char === "\n") { finish(); return; }
+          if (char === "\u007f" || char === "\b") {
+            value = value.slice(0, -1); continue;
+          }
+          if (char.charCodeAt(0) < 32 || char.charCodeAt(0) > 126 || value.length >= 4096) {
+            finish(Error("Input segreto non valido.")); return;
+          }
+          value += char;
+        }
+      };
+      process.stdin.on("data", onData);
     });
   } finally {
-    rl.close();
-    spawnSync("stty", ["echo"], { stdio: "inherit" });
+    process.stdin.setRawMode(original);
     process.stdout.write("\n");
   }
 }
@@ -175,6 +195,12 @@ export async function main(argv = process.argv.slice(2), {
   if (argv.length !== 0) throw Error("Non passare API key, Cloudflare token o altri argomenti nella shell.");
   assertDedicated();
   if (existsSync(envFile)) throw Error("Runner già configurato: modifica o aggiorna in sicurezza, nessuna sovrascrittura.");
+  // Do not commandeer an existing rootful Docker service on a shared server.
+  const existing = spawnSync("systemctl", ["is-active", "--quiet", "docker.service"], {
+    stdio: "ignore", timeout: 3000,
+  });
+  if (existing.status === 0)
+    throw Error("Docker rootful già attivo: usare una VM/account dedicato, installer rifiutato.");
   const approved = (await ask("VM/PC dedicato e vuoto, pacchetti apt firmati e modifiche systemd? Digita INSTALLA per confermare: ")).trim();
   if (approved !== "INSTALLA") throw Error("Installazione annullata senza provisioning.");
   const origin = validateFactoryOrigin((await ask("Origin esatta GitHub Pages [https://keyserdsoze.github.io]: ")).trim() ||
