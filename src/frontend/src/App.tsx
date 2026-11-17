@@ -8,6 +8,8 @@ import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
+import BackgroundTaskToast, { type RunnerTaskActivity } from "./components/BackgroundTaskToast";
+import RunnerTelemetry from "./components/RunnerTelemetry";
 import "./components/code-agent.css";
 import { workspaceFiles } from "./domain/development";
 import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE_OPTIONS, STAGES, updateConfig } from "./domain/defaults";
@@ -67,6 +69,7 @@ export default function App() {
   const [runLog, setRunLog] = useState<string[]>([]);
   const [lastPush, setLastPush] = useState("");
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
+  const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
   const settingsRef = useRef(settings);
@@ -315,7 +318,7 @@ export default function App() {
         </>}
         {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy}
           onBusy={(active, label) => { setBusy(active); setOperation(active ? label || "Code Agent" : ""); }}
-          onProjectChange={changeProject} onNotice={setNotice} onError={setError} />}
+          onProjectChange={changeProject} onNotice={setNotice} onError={setError} onRunnerActivity={setRunnerTaskActivity} />}
         {tab === "stack" && <>
           <SectionHead eyebrow="FACTORY / BLUEPRINT" title="Architettura componibile" text="Puoi modificare frontend, hosting e servizi in qualsiasi momento. I piani AI dipendenti dalla configurazione vengono invalidati." />
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">TARGET APPLICATIONS</span><h3>Frontend multipli</h3></div><Code2 size={20} /></div>
@@ -389,6 +392,7 @@ export default function App() {
               <label>Operatore repair (solo sessione)<SecretInput secretKey="runner.operator.key" placeholder="Chiave personale con ruoli repair"/></label></div>
             <p className="helper">I checkpoint richiedono una credenziale operatore separata dalla chiave dei job. Ruoli: propose per creare patch/re-test, review per dichiarare review, approve per registrare approvazione. Il client può richiedere di cambiare chiave prima della review o approvazione; non è una prova di identità umana o una firma. Se il runner non configura operatori, l'API repair resta disabilitata.</p>
             <RunnerConnectorSetup endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} />
+            <RunnerTelemetry endpoint={settings.runnerEndpoint || ""} authRevision={runnerSecretRevision} active={busy} />
             <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
@@ -419,5 +423,9 @@ export default function App() {
         <footer className="footer"><span>© 2026 SoftwareFactory · Autonomous by design, reviewed by humans.</span><span>React + TypeScript <ChevronDown size={12} /> .NET 11 <ChevronDown size={12} /> Cloud agnostic</span></footer>
       </div>
     </main>
+    <BackgroundTaskToast busy={busy} operation={operation} selectedStage={selectedStage}
+      projectName={project.config.name} completed={completed} total={STAGES.length}
+      latestLog={runLog[0]} runner={runnerTaskActivity}
+      onOpen={section => setTab(section)} />
   </div>;
 }
