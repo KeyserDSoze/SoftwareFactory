@@ -1,4 +1,5 @@
 import type { DevelopmentWorkspace } from "./development";
+import type { AgentRoleRoutes, ThinkingChoice } from "./agent-roles";
 
 export type StageId = "features" | "competitors" | "technical" | "architecture" | "adversarial" | "implementation";
 export type StageStatus = "pending" | "running" | "complete" | "failed";
@@ -13,6 +14,8 @@ export interface AiProfile {
   baseUrl: string;
   model: string;
   enabled: boolean;
+  /** BookWriter-style endpoint fallback. Automatic omits reasoning_effort. */
+  reasoningEffort?: ThinkingChoice;
 }
 export interface Stage {
   id: StageId;
@@ -59,6 +62,8 @@ export interface CloudConfig {
 export interface FactorySettings {
   profiles: AiProfile[];
   assignments: Record<StageId, string>;
+  /** Per-role model/endpoint/effort override, saved in cloud configuration. */
+  agentRoutes?: AgentRoleRoutes;
   searchEndpoint: string;
   runnerEndpoint?: string;
   git: GitConfig;
