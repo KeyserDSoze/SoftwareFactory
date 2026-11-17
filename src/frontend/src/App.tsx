@@ -9,6 +9,7 @@ import CodeAgentPanel from "./components/CodeAgentPanel";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
 import BackgroundTaskToast, { type RunnerTaskActivity } from "./components/BackgroundTaskToast";
+import { fetchRunnerJob } from "./infrastructure/runner";
 import RunnerTelemetry from "./components/RunnerTelemetry";
 import "./components/code-agent.css";
 import { workspaceFiles } from "./domain/development";
@@ -85,6 +86,36 @@ export default function App() {
       if (ok) { setTab("connections"); setNotice("Account cloud collegato per la sessione corrente."); }
     }).catch(e => { setTab("connections"); setError(String(e instanceof Error ? e.message : e)); });
   }, []);
+  // Keep the BookWriter-style activity card accurate even when Code Agent
+  // is not the active tab. Reading job state never starts a job or executes code.
+  const watchedRunnerId = project.development?.lastRunnerEvidence?.id ||
+    project.development?.lastRunnerJobId || "";
+  useEffect(() => {
+    const url = settings.runnerEndpoint || "";
+    const key = readSecret("runner.key");
+    const evidenceEndpoint = projectRef.current.development?.lastRunnerEvidence?.endpoint;
+    if (!watchedRunnerId || !url || key.length < 32 ||
+        (evidenceEndpoint && evidenceEndpoint !== url)) {
+      setRunnerTaskActivity(null); return;
+    }
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const check = async () => {
+      try {
+        const report = await fetchRunnerJob(url, key, watchedRunnerId, controller.signal);
+        if (cancelled) return;
+        if (report.state === "running" || report.state === "queued") {
+          setRunnerTaskActivity({ id: report.id, state: report.state, label: report.label });
+          timeout = setTimeout(() => void check(), document.visibilityState === "hidden" ? 15000 : 5000);
+        } else setRunnerTaskActivity(null);
+      } catch {
+        if (!cancelled) setRunnerTaskActivity(null); // no invented running state
+      }
+    };
+    void check();
+    return () => { cancelled = true; controller.abort(); if (timeout) clearTimeout(timeout); };
+  }, [watchedRunnerId, settings.runnerEndpoint, runnerSecretRevision]);
   const completed = project.stages.filter(s => s.status === "complete").length;
   const current = project.stages.find(s => s.id === selectedStage)!;
   const next = project.stages.find(s => s.status !== "complete");
@@ -348,7 +379,7 @@ export default function App() {
         </>}
         {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy}
           onBusy={(active, label) => { setBusy(active); setOperation(active ? label || "Code Agent" : ""); }}
-          onProjectChange={changeProject} onNotice={setNotice} onError={setError} onRunnerActivity={setRunnerTaskActivity} />}
+          onProjectChange={changeProject} onNotice={setNotice} onError={setError} />}
         {tab === "stack" && <>
           <SectionHead eyebrow="FACTORY / BLUEPRINT" title="Architettura componibile" text="Puoi modificare frontend, hosting e servizi in qualsiasi momento. I piani AI dipendenti dalla configurazione vengono invalidati." />
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">TARGET APPLICATIONS</span><h3>Frontend multipli</h3></div><Code2 size={20} /></div>
