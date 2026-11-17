@@ -716,3 +716,12 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - `host-metrics.mjs` produce solo aggregati senza nomi processi o host paths; API protetta e negata ai tenant senza permesso operator, temperatura CPU solo con sensore identificato, misure assenti = null/offline. La telemetria non deve fermare la worker queue.
 - Il nuovo vault `runner-vault.ts` cifra URL e API key **prima** dell'upload Google/OneDrive; chiavi in chiaro, passphrase, token Cloudflare e credenziali in Git sono vietati. Vault singolo/manuale: mai dichiarare CAS, merge o sincronizzazione automatica senza test.
 - La scheda in basso a destra mostra soltanto task/stati reali osservati, non streaming inesistente o processi AI attivi a browser chiuso.
+
+## Release installer + GitHub Actions executor alternativo (#90, ADR 0047)
+
+- La Release installer `release-installer.yml` richiede dispatch amministrativo esplicito da `main` con versione SemVer. Non inventare URL di asset non pubblicati; la SPA deve disabilitare download se mancano Release o checksum.
+- L'installer è un archivio scaricabile e avviabile **manualmente** su VM dedicata, non uno script remoto eseguibile da GitHub Pages. Guide IT/EN e i18n hanno chiavi coese; restanti sezioni non ancora tradotte vanno segnalate come backlog.
+- Il backend Actions non testa i sorgenti in memoria: il workflow deve esistere sul default branch dell'app generata e testa SHA già pubblicato. Dispatch richiede consenso, PAT session-only con permesso Actions/Contents, e UUID univoco negli input/run-name. Mai attribuire il primo/ultimo run senza corrispondenza UUID, branch, SHA e attempt.
+- Lo schema artifact JSON `softwarefactory-test-report` v1 deve essere validato rigidamente e correlato alla HEAD salvata. Non confondere `incomplete` o mancanza dell'artifact con `passed`. Se redirect GitHub artifact fallisce CORS, offrire import locale dello ZIP con stessa validazione, senza sostenere che il file importato sia prova firmata.
+- Il workflow generato deve usare solo cinque test allowlisted, senza shell input arbitrari, `contents:read`, checkout senza credentials persistenti, timeout/log limitati e artifact pubblicato sempre. I test senza progetti/suite implementati restano `incomplete`.
+- Un report Actions può **preparare** una richiesta di fix con consenso; i log sono input non affidabile, non si possono trasformare in prove del journal runner o usare per auto-approvare patch, auto-push o auto-deploy. Seguire review indipendente, nuovi test e gate espliciti.
