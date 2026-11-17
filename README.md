@@ -543,3 +543,14 @@ I progetti **diversi** possono essere aperti contemporaneamente in schede divers
 Un Web Lock non è un CAS remoto GitHub, né protegge browser diversi, versioni legacy della SPA che non lo rispettano, dispositivi diversi o codice malevolo nella stessa origin. Resta necessario l'HEAD check GitHub + no force push e la libreria localStorage con baseline. Test unitari in `project-writer-lease.test.ts`; test vero Chromium multi-tab in Factory CI tramite `src/runner/scripts/factory-browser-lock-smoke.mjs` (container offline/read-only). [ADR 0049](adr/0049-local-project-exclusive-writer-web-locks.md).
 
 Il marker `.github/installer-release.version` per l'RC `v0.2.0-rc.1` è stato rimosso dopo la pubblicazione riuscita, per evitare trigger ripetuti: per pubblicare una **nuova** Release candidate, inserire **un nuovo** marker SemVer `-rc.N` in un commit su `main` e attendere CI verde; il workflow rifiuta sempre il riutilizzo di tag esistenti.
+
+
+## Ripristina una conferma GitHub persa senza un nuovo push (#91)
+
+Se la Factory ha inviato un commit ma la connessione è caduta, oppure la pagina si è chiusa prima di salvare lo SHA, la HEAD remota può risultare avanzata rispetto al checkpoint locale. **Non riprovare ripetutamente «Pubblica»**: il controllo fast-forward rifiuterà un branch che è già cambiato.
+
+Apri **Settings → GitHub → Recupera conferma commit**. Dopo il primo consenso, il browser esegue soltanto richieste GitHub REST **GET**: legge il checkpoint alla HEAD esatta, esige che l'intero stato portable coincida con quello del progetto aperto, verifica il commit (genitore esattamente uguale alla HEAD prima confermata, se presente) e tutti i Git blob SHA-1 calcolati localmente per sorgenti generati e checkpoint. Rilegge la HEAD al termine per evitare di riconoscere un ref nel frattempo cambiato. Mostra repo/branch/SHA/parent/file verificati, avvisa se la repository è realmente **pubblica**, poi richiede una seconda conferma.
+
+Se e solo se tutto corrisponde, aggiorna **soltanto** il binding locale `githubSync`, senza riscrivere o importare il brief, le fasi o le patch. Disattiva l'autosync, che andrà autorizzato nuovamente. Il consenso a futuri push su repo pubbliche **non viene creato** dal recupero. L'operazione non crea repo, non invia patch, non fa merge né force push e non prova l'autore del commit: certifica solo la corrispondenza dei file locali con la **HEAD attuale**. Un branch avanzato da un altro dispositivo con altri commit, un solo file differente o un checkpoint storico devono essere gestiti con **Verifica HEAD remota** e import manuale con backup, non con l'ack. Web Locks proteggono la scheda locale; non sono un lease remoto multi-device.
+
+[ADR 0051](adr/0051-github-lost-ack-tree-reconciliation.md) · [Issue #91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91).
