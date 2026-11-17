@@ -155,7 +155,7 @@ describe("GitHub BookWriter parity: PAT, cloud, discovery and checkpoints", () =
     expect(portable.development?.pending?.repairSession).toBeUndefined();
     const old = JSON.parse(encrypted);
     old.project.development.lastRunnerEvidence = p.development.lastRunnerEvidence;
-    old.project.development.pending.review = p.development.pending.review;
+    old.project.development.pending.review = p.development.pending!.review;
     expect(decodeGithubWorkspace(JSON.stringify(old)).development?.lastRunnerEvidence).toBeUndefined();
     expect(portableGithubProject(p).development?.pending?.review).toBeUndefined();
   });
