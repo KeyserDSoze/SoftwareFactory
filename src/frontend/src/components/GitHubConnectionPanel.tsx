@@ -8,7 +8,7 @@ import { assertGithubPat, deviceHasGithubPat, forgetGithubPatOnDevice,
 import { saveGithubPatToCloud, restoreGithubPatFromCloud } from "../infrastructure/github-pat-cloud";
 import { findGithubRepositories, inspectGithubRepository,
   type GithubRepositoryChoice } from "../infrastructure/github-discovery";
-import { normalizeLocale } from "../i18n";
+import { normalizeLocale, t } from "../i18n";
 
 type Props = { settings: FactorySettings; busy: boolean;
   onGitChange: (edit: (config: GitConfig) => void) => void;
@@ -20,7 +20,8 @@ export default function GitHubConnectionPanel({
   settings, busy, onGitChange, onAutoSyncChange,
   onNotice, onError, hasPublishedCheckpoint,
 }: Props) {
-  const en = normalizeLocale(settings.language) === "en";
+  const locale = normalizeLocale(settings.language);
+  const en = locale === "en";
   const [patDraft, setPatDraft] = useState("");
   const [hasStored, setHasStored] = useState(false);
   const [hasSession, setHasSession] = useState(() => Boolean(readSecret("github.pat")));
@@ -123,7 +124,7 @@ export default function GitHubConnectionPanel({
     setStatus(en ? "Repository selected, no push performed." : "Repository selezionata, nessun push eseguito.");
   }
   return <div className="github-guided">
-    <div className="panel-subtitle"><LockKeyhole size={16}/> {en ? "Fine-grained GitHub PAT" : "PAT GitHub fine-grained"}</div>
+    <div className="panel-subtitle"><LockKeyhole size={16}/> {t(locale, "githubPatTitle")}</div>
     {settings.git.authMode === "pat" ? <>
       <p className="helper">{en ? "Save locally with a non-extractable AES-256 key in IndexedDB, or use session-only mode. Never copied to the application or plain cloud backup." :
         "Salva cifrato con chiave AES-256 non estraibile in IndexedDB oppure usa solo la sessione. Mai nel codice generato né nel backup cloud in chiaro."}</p>
@@ -133,19 +134,19 @@ export default function GitHubConnectionPanel({
       </label></div>
       <div className="button-group">
         <button className="secondary" disabled={busy || working || patDraft.trim().length < 20} onClick={store}>
-          <LockKeyhole size={15}/>{en ? "Encrypt on device" : "Cifra sul dispositivo"}</button>
+          <LockKeyhole size={15}/>{t(locale, "githubPatSave")}</button>
         <button className="secondary" disabled={busy || working || patDraft.trim().length < 20} onClick={session}>
-          {en ? "Use only this session" : "Usa solo questa sessione"}</button>
+          {t(locale, "githubPatSession")}</button>
         <button className="secondary" disabled={busy || working || !hasStored} onClick={unlock}>
-          <RefreshCw size={15}/>{en ? "Unlock saved PAT" : "Sblocca PAT salvato"}</button>
+          <RefreshCw size={15}/>{t(locale, "githubPatUnlock")}</button>
         <button className="subtle" disabled={busy || working || !hasStored} onClick={forget}>
-          <Trash2 size={15}/>{en ? "Remove locally" : "Rimuovi dal dispositivo"}</button>
+          <Trash2 size={15}/>{t(locale, "githubPatRemove")}</button>
       </div>
       <p className="helper" role="status">{hasSession ?
-        (en ? "PAT available in this session" : "PAT disponibile in questa sessione") :
-        (en ? "No active PAT" : "Nessun PAT attivo")} · {hasStored ?
-          (en ? "Encrypted copy on this device" : "Copia cifrata sul dispositivo") :
-          (en ? "No saved device copy" : "Nessuna copia locale cifrata")}</p>
+        t(locale, "githubPatActive") :
+        t(locale, "githubPatInactive")} · {hasStored ?
+          t(locale, "githubPatRemembered") :
+          t(locale, "githubPatNotRemembered")}</p>
       {hasSession && <div className="button-group">
         <button className="subtle" onClick={() => setReveal(v => !v)} disabled={working}>
           {reveal ? <EyeOff size={14}/> : <Eye size={14}/>}
@@ -157,7 +158,7 @@ export default function GitHubConnectionPanel({
           value={readSecret("github.pat")}/>}
       </div>}
       <details className="github-cloud-vault">
-        <summary><Cloud size={15}/> {en ? "Sync encrypted PAT via Google / Microsoft" : "PAT cifrato nel cloud Google / Microsoft"}</summary>
+        <summary><Cloud size={15}/> {t(locale, "githubPatCloud")}</summary>
         <p className="helper">{en ? "End-to-end encrypted with a distinct passphrase (min 12 chars). OneDrive uses ETag conditional writes. Google Drive uses best-effort version checks: concurrent writes are not fully atomic." :
           "Cifratura end-to-end con passphrase distinta (minimo 12 caratteri). OneDrive usa ETag condizionali; Google Drive solo controlli versione best-effort, non CAS atomico garantito."}</p>
         <label>{en ? "Vault passphrase" : "Passphrase del vault"}
@@ -166,33 +167,33 @@ export default function GitHubConnectionPanel({
         <div className="button-group">
           <button type="button" className="secondary" disabled={busy || working || !hasSession || passphrase.length < 12 ||
             !readSecret("cloud." + settings.cloud.provider)}
-            onClick={() => cloud("save")}>{en ? "Encrypt to cloud" : "Cifra e salva nel cloud"}</button>
+            onClick={() => cloud("save")}>{t(locale, "githubPatCloudSave")}</button>
           <button type="button" className="secondary" disabled={busy || working || passphrase.length < 12 ||
             !readSecret("cloud." + settings.cloud.provider)}
-            onClick={() => cloud("load")}><DownloadCloud size={15}/>{en ? "Import on this device" : "Importa sul dispositivo"}</button>
+            onClick={() => cloud("load")}><DownloadCloud size={15}/>{t(locale, "githubPatCloudImport")}</button>
         </div>
       </details>
     </> : <p className="helper"><ShieldAlert size={15}/> {en ?
       "GitHub App mode requires an external trusted HTTPS token gateway; it is not available in a browser-only app without that server." :
       "La modalità GitHub App richiede un gateway HTTPS sicuro esterno: non funziona senza quel server nella sola SPA."}</p>}
-    <div className="panel-subtitle"><Github size={16}/> {en ? "GitHub repository" : "Repository GitHub"}</div>
+    <div className="panel-subtitle"><Github size={16}/> {t(locale, "githubRepoLabel")}</div>
     {settings.git.authMode === "pat" && <div className="button-group">
       <button className="secondary" disabled={busy || working || !hasSession} onClick={discover}>
-        <Search size={15}/>{en ? "Find repositories visible to this PAT" : "Trova repository del PAT"}</button>
+        <Search size={15}/>{t(locale, "githubRepoFind")}</button>
       <button className="secondary" disabled={busy || working || !hasSession || !settings.git.owner || !settings.git.repo} onClick={verify}>
-        <RefreshCw size={15}/>{en ? "Inspect selection" : "Verifica destinazione"}</button>
+        <RefreshCw size={15}/>{t(locale, "githubRepoInspect")}</button>
     </div>}
     {choices && <div className="github-repositories" aria-label={en ? "GitHub repositories" : "Repository GitHub"} role="list">
       {choices.slice(0,100).map(repo => <div className="github-repo-row" role="listitem" key={repo.fullName}>
         <div><strong>{repo.fullName}</strong><small>{repo.privateRepo ? (en ? "Private" : "Privata") :
           (en ? "PUBLIC" : "PUBBLICA")} · {repo.branch} · {repo.canPush ? "push" : "read-only"}</small></div>
         <button type="button" className="secondary" disabled={busy || working || repo.archived || repo.disabled}
-          onClick={() => choose(repo)}>{en ? "Select" : "Seleziona"}</button>
+          onClick={() => choose(repo)}>{t(locale, "githubRepoSelect")}</button>
       </div>)}
       {choices.length > 100 && <p className="helper">{choices.length - 100} altre repository: usa i campi avanzati manuali.</p>}
     </div>}
     <details className="github-advanced">
-      <summary>{en ? "Advanced: owner, repository and branch" : "Avanzato: owner, repository e branch"}</summary>
+      <summary>{t(locale, "githubRepoAdvanced")}</summary>
       <div className="form-grid">
         <label>Owner<input value={settings.git.owner} placeholder="Username o organizzazione"
           onChange={e => onGitChange(g => { g.owner = e.target.value; })} /></label>
@@ -219,8 +220,7 @@ export default function GitHubConnectionPanel({
       <input type="checkbox" checked={settings.githubAutoSync ?? false}
         disabled={busy || working || !hasPublishedCheckpoint}
         onChange={e => onAutoSyncChange(e.target.checked)}/>
-      {en ? "Save checkpoints automatically after tasks (browser must remain open)" :
-        "Sincronizza checkpoint automaticamente dopo i task (pagina aperta)"}
+      {t(locale, "githubRepoAuto")}
     </label>}
   </div>;
 }
