@@ -235,3 +235,46 @@ export async function probeRunnerConnector(baseUrl: string, key: string,
     return { state: "unsupported", detail: "Il runner non conferma il daemon Docker rootless.", steps };
   return { state: "ready", detail: "API autenticata, worker attivo e daemon rootless osservato recentemente. Nessuna build o esecuzione sandbox è stata verificata.", steps };
 }
+
+/** Aggregate machine telemetry published by the remote worker, not a power meter. */
+export type RunnerHostMetrics = {
+  version: 1;
+  measuredAt: string;
+  cpuPercent: number | null;
+  memoryUsedBytes: number;
+  memoryTotalBytes: number;
+  diskUsedBytes: number | null;
+  diskTotalBytes: number | null;
+  uptimeSeconds: number | null;
+  cpuTemperatureC: number | null;
+};
+export function validateRunnerHostMetrics(value: unknown): RunnerHostMetrics {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Metriche runner non valide.");
+  const d = value as Record<string, unknown>;
+  const number = (v: unknown, lo: number, hi: number) =>
+    typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  const optional = (v: unknown, lo: number, hi: number) => v === null || number(v, lo, hi);
+  if (Object.keys(d).sort().join(",") !== [
+    "version", "measuredAt", "cpuPercent", "memoryUsedBytes", "memoryTotalBytes",
+    "diskUsedBytes", "diskTotalBytes", "uptimeSeconds", "cpuTemperatureC",
+  ].sort().join(",") ||
+    d.version !== 1 || typeof d.measuredAt !== "string" ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(d.measuredAt) ||
+    !Number.isFinite(Date.parse(d.measuredAt)) ||
+    Date.now() - Date.parse(d.measuredAt) > 60_000 ||
+    Date.parse(d.measuredAt) > Date.now() + 1000 ||
+    !optional(d.cpuPercent, 0, 100) ||
+    !number(d.memoryTotalBytes, 1, Number.MAX_SAFE_INTEGER) ||
+    !number(d.memoryUsedBytes, 0, d.memoryTotalBytes as number) ||
+    !optional(d.diskTotalBytes, 0, Number.MAX_SAFE_INTEGER) ||
+    (d.diskTotalBytes === null ? d.diskUsedBytes !== null :
+      !number(d.diskUsedBytes, 0, d.diskTotalBytes as number)) ||
+    !optional(d.uptimeSeconds, 0, Number.MAX_SAFE_INTEGER) ||
+    !optional(d.cpuTemperatureC, 0, 125))
+    throw new Error("Metriche runner mancanti, vecchie o non plausibili.");
+  return value as RunnerHostMetrics;
+}
+export async function fetchRunnerHostMetrics(baseUrl: string, key: string, signal?: AbortSignal) {
+  const data = await runnerRequest<unknown>(baseUrl, key, "/v1/host-metrics", { method: "GET", signal });
+  return validateRunnerHostMetrics(data);
+}
