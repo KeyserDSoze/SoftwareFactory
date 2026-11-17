@@ -13,7 +13,7 @@ const files = { ...workspaceFiles(project),
   [GITHUB_WORKSPACE_PATH]: encodeGithubWorkspace(project) };
 const tree = Object.entries(files).map(([filePath,content]) => {
   const bytes=Buffer.from(content, "utf8");
-  const blobId=createHash("sha1").update("blob "+bytes.byteLength+"\\0").update(bytes).digest("hex");
+  const blobId=createHash("sha1").update("blob "+bytes.byteLength+"\0").update(bytes).digest("hex");
   return {path:filePath,sha:blobId,type:"blob",mode:"100644"};
 });
 process.stdout.write(JSON.stringify({checkpoint:files[GITHUB_WORKSPACE_PATH],tree}));
