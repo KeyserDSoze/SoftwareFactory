@@ -111,6 +111,11 @@ if (!inside) {
     await second.getByRole("button",{name:"Salva backup e carica versione aggiornata"}).click();
     const downloaded = await downloadPromise;
     assert.match(downloaded.suggestedFilename(),/^softwarefactory-recovery-[a-f0-9-]{36}\.json$/);
+    // Download starts BEFORE acquireProjectWriterLease completes. A rival tab
+    // may allow creating a DIFFERENT project during contention, so the New
+    // project button alone is not proof that takeover has finished.
+    await expect(second.getByText("Conflitto locale tra schede"))
+      .toBeHidden({timeout:15000});
     await expect(second.getByRole("button",{name:"Nuovo progetto"}))
       .toBeEnabled({timeout:15000});
     await expect(second.getByLabel("Nome progetto"))
