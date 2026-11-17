@@ -187,6 +187,15 @@ if (!inside) {
       let headReads=0,restCalls=0;
       await page.route("https://api.github.com/**",async route => {
         const request=route.request(),url=request.url();
+        // Authorization/X-GitHub-Api-Version can cause a browser CORS preflight.
+        // Respond to OPTIONS without treating it as a GitHub write.
+        if (request.method()==="OPTIONS") {
+          await route.fulfill({status:204,headers:{
+            "access-control-allow-origin":"*","access-control-allow-methods":"GET, OPTIONS",
+            "access-control-allow-headers":"authorization, x-github-api-version, accept, content-type",
+          }});
+          return;
+        }
         assert.equal(request.method(),"GET","Import may not write to GitHub");
         restCalls++;
         let body;
