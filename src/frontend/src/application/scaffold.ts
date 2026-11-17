@@ -235,7 +235,7 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "## Documentazione", "", "- `docs/features.md`: backlog e criteria", "- `docs/research.md`: fonti da verificare",
       "- `docs/architecture.md`: design e vincoli", "- `adr/`: scelte", "- `infra/`: Terraform/on-prem",
       "- `.softwarefactory/manifest.json`: configurazione esportabile senza credenziali", ""),
-    ".gitignore": lines("**/node_modules/", "**/bin/", "**/obj/", "**/dist/", "**/playwright-report/", "**/test-results/", ".env", "**/.env", "!**/.env.example", ".terraform/", "*.tfstate", "*.tfstate.*", "*.tfvars", ".DS_Store"),
+    ".gitignore": lines("**/node_modules/", "**/bin/", "**/obj/", "**/dist/", "**/playwright-report/", "**/test-results/", "softwarefactory-results/", ".env", "**/.env", "!**/.env.example", ".terraform/", "*.tfstate", "*.tfstate.*", "*.tfvars", ".DS_Store"),
     ".softwarefactory/manifest.json": JSON.stringify({ schemaVersion: 1, generator: "SoftwareFactory", createdAt: project.createdAt,
       config: c, stages: project.stages.map(s => ({ id: s.id, status: s.status })) }, null, 2) + "\n",
     "docs/features.md": lines("# Piano feature", "", done("features"), "", "## Piano implementativo", "", done("implementation")),
