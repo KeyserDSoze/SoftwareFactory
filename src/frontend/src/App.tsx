@@ -25,7 +25,7 @@ import { resolveGithubToken } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/github-publication";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
-import { loadProject, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
+import { loadProject, loadLocalProject, listLocalProjects, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
 const NAV: { id: Tab; title: string; detail: string; icon: typeof Layers3 }[] = [
@@ -60,6 +60,7 @@ function SectionHead({ eyebrow, title, text }: { eyebrow: string; title: string;
 }
 export default function App() {
   const [project, setProject] = useState<FactoryProject>(loadProject);
+  const [projectIndexRevision, setProjectIndexRevision] = useState(0);
   const [settings, setSettings] = useState<FactorySettings>(loadSettings);
   const [tab, setTab] = useState<Tab>("workspace");
   const [selectedStage, setSelectedStage] = useState<StageId>("features");
@@ -83,7 +84,11 @@ export default function App() {
   const oauthChecked = useRef(false);
   const busyRef = useRef(busy);
   busyRef.current = busy;
-  useEffect(() => { projectRef.current = project; persistProject(project); }, [project]);
+  useEffect(() => {
+    projectRef.current = project;
+    persistProject(project);
+    setProjectIndexRevision(v => v + 1);
+  }, [project]);
   useEffect(() => { settingsRef.current = settings; persistSettings(settings); }, [settings]);
   // GitHub auto-save runs only while this browser tab is open and ONLY after
   // an explicitly approved first push + an opt-in. A durable, non-secret outbox
@@ -203,6 +208,7 @@ export default function App() {
     try { return workspaceFiles(project); } catch { return {} as Record<string, string>; }
   }, [project]);
   const paths = Object.keys(files).sort();
+  const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
   function changeProject(nextProject: FactoryProject) {
     projectRef.current = nextProject;
     setProject(nextProject);
@@ -290,8 +296,31 @@ export default function App() {
   }
   function pause() { abortRef.current?.abort(); }
   function newProject() {
-    if (busy || !confirm("Creare un nuovo progetto? Esporta prima il progetto corrente se vuoi conservarlo.")) return;
-    changeProject(createProject()); setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
+    if (busy || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
+      "ma esporta un backup ZIP/cloud per proteggerlo da cancellazione browser.")) return;
+    persistProject(projectRef.current);
+    changeProject(createProject());
+    editSettings(s => { s.git = { ...DEFAULT_SETTINGS.git }; s.githubAutoSync = false; });
+    setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
+  }
+  function switchProject(id: string) {
+    if (busy || id === projectRef.current.id) return;
+    try {
+      persistProject(projectRef.current);
+      const selected = loadLocalProject(id);
+      if (!confirm("Passare a «" + selected.config.name + "»? " +
+        "Le modifiche attuali restano nella libreria locale. Nessun push automatico in questa operazione.")) return;
+      changeProject(selected);
+      editSettings(s => {
+        s.git = selected.githubDestination ? { ...selected.githubDestination } :
+          selected.githubSync ? { ...s.git, owner: selected.githubSync.owner,
+            repo: selected.githubSync.repo, branch: selected.githubSync.branch } :
+            { ...DEFAULT_SETTINGS.git };
+        s.githubAutoSync = false;
+      });
+      setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
+      setNotice("Progetto locale aperto. Verifica destinazione GitHub e sblocca il PAT prima di pubblicare.");
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
   }
   function downloadZip() {
     clearMessages();
@@ -320,7 +349,7 @@ export default function App() {
       setLastPush(result.url);
       localStorage.removeItem("softwarefactory.github.outbox." + start.id);
       if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
-        changeProject(result.project);
+        changeProject({ ...result.project, githubDestination: { ...git } });
         setNotice("Commit " + result.sha.slice(0,12) + " verificato sul branch " + result.branch +
           " con checkpoint ripristinabile. Nessun force push.");
       } else {
@@ -360,7 +389,7 @@ export default function App() {
                    "Salva uno ZIP di recupero prima. Continuare?")) return;
       if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
         throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
-      changeProject(imported.project);
+      changeProject({ ...imported.project, githubDestination: { ...git } });
       editSettings(s => { s.githubAutoSync = false; });
       setPublishConfirmed(false);
       setNotice("Checkpoint GitHub " + imported.sha.slice(0,12) +
@@ -471,6 +500,22 @@ export default function App() {
         {error && <div className="alert error" role="alert"><ShieldAlert size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {notice && <div className="alert success" role="status"><CheckCircle2 size={18} /><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {tab === "workspace" && <>
+          <section className="panel local-project-library">
+            <div className="panel-title"><div><span className="eyebrow">LOCAL / PROJECTS</span>
+              <h3>{normalizeLocale(settings.language) === "en" ? "Your local projects" : "I tuoi progetti locali"}</h3></div>
+              <Layers3 size={18}/></div>
+            <label>{normalizeLocale(settings.language) === "en" ? "Open project" : "Apri progetto"}
+              <select value={project.id} disabled={busy} onChange={e => switchProject(e.target.value)}>
+                {localProjects.some(x => x.id === project.id) ? null :
+                  <option value={project.id}>{project.config.name} · corrente</option>}
+                {localProjects.map(x => <option value={x.id} key={x.id}>
+                  {x.name} {x.repository ? "· " + x.repository : ""}
+                </option>)}
+              </select>
+            </label>
+            <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
+              ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
+          </section>
           <section className="hero"><div className="hero-copy"><div className="hero-pill"><Sparkles size={14} /> THE AUTONOMOUS SOFTWARE STUDIO</div>
             <h1>Da un'idea a un'<em>applicazione.</em></h1>
             <p>Descrivi il prodotto, scegli lo stack e lascia che gli agenti pianifichino feature, ricerca, architettura e adversarial review. Esamina ogni decisione, poi genera uno scaffold versionabile.</p>
@@ -609,7 +654,13 @@ export default function App() {
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
             <GitHubConnectionPanel settings={settings} busy={busy}
-              onGitChange={change => editSettings(s => { change(s.git); s.githubAutoSync = false; })}
+              onGitChange={change => {
+                editSettings(s => { change(s.git); s.githubAutoSync = false; });
+                const active = projectRef.current;
+                const newDest = { ...settingsRef.current.git };
+                changeProject({ ...active, githubDestination: newDest });
+                setPublishConfirmed(false);
+              }}
               onAutoSyncChange={toggleGithubAutoSync}
               hasPublishedCheckpoint={githubBindingMatches(project, settings.git)}
               onNotice={setNotice} onError={setError}/>
