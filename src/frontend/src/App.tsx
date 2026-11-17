@@ -345,7 +345,11 @@ export default function App() {
     try {
       const git = settingsRef.current.git;
       const token = await resolveGithubToken(git, readSecret("github.pat"));
-      const result = await publishGithubWorkspace(start, git, token);
+      const publicConsent = !git.privateRepo && window.confirm(
+        "La destinazione GitHub è impostata come PUBBLICA: codice, brief, checkpoint AI " +
+        "e proposte in corso possono essere visibili a chiunque. Autorizzi espressamente il push?");
+      if (!git.privateRepo && !publicConsent) return;
+      const result = await publishGithubWorkspace(start, git, token, publicConsent);
       setLastPush(result.url);
       localStorage.removeItem("softwarefactory.github.outbox." + start.id);
       if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
@@ -412,8 +416,13 @@ export default function App() {
       "(inclusi output AI, bozze e proposte non approvate) quando la pagina rimane aperta? " +
       "La repository deve essere privata o esplicitamente autorizzata alla pubblicazione."))
       return;
-    if (enabled && !settingsRef.current.git.privateRepo &&
-        !window.confirm("Repository impostata come PUBBLICA: autorizzi anche l'autosync su GitHub?")) return;
+    if (enabled && !settingsRef.current.git.privateRepo) {
+      if (!window.confirm("Repository impostata come PUBBLICA: autorizzi anche ogni successivo autosync " +
+        "del checkpoint AI, inclusi task in bozza?")) return;
+      const active = projectRef.current;
+      if (active.githubSync)
+        changeProject({ ...active, githubSync: { ...active.githubSync, publicConsent: true } });
+    }
     editSettings(s => { s.githubAutoSync = enabled; });
     setNotice(enabled ? "Autosync GitHub attivato (solo pagina aperta, massimo ogni 2 minuti)." :
       "Autosync GitHub disattivato. Le modifiche locali restano disponibili.");
