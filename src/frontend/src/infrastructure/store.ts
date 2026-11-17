@@ -25,7 +25,7 @@ function index(): LocalProjectChoice[] {
     const list: unknown = JSON.parse(localStorage.getItem(PROJECT_INDEX) || "[]");
     if (!Array.isArray(list)) return [];
     return list.filter((x: unknown): x is LocalProjectChoice =>
-      x && typeof x === "object" && typeof (x as LocalProjectChoice).id === "string" &&
+      Boolean(x) && typeof x === "object" && typeof (x as LocalProjectChoice).id === "string" &&
       /^[0-9a-f-]{36}$/i.test((x as LocalProjectChoice).id) &&
       typeof (x as LocalProjectChoice).name === "string" &&
       typeof (x as LocalProjectChoice).updatedAt === "string" &&
