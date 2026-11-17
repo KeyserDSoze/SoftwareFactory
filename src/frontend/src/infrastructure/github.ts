@@ -126,14 +126,14 @@ export async function pushGeneratedFiles(git: GitConfig, token: string, files: R
  * This does not prove the author of a commit or the absence of other files.
  */
 export async function gitBlobObjectSha(content: string): Promise<string> {
-  if (typeof content !== "string" || typeof crypto?.subtle?.digest !== "function")
+  if (typeof content !== "string" || typeof globalThis.crypto?.subtle?.digest !== "function")
     throw new GitHubError("Hash Git non disponibile nel browser: nessun riconoscimento automatico.");
   const bytes = new TextEncoder().encode(content);
   const prefix = new TextEncoder().encode("blob " + bytes.byteLength + "\0");
   const full = new Uint8Array(prefix.length + bytes.length);
   full.set(prefix);
   full.set(bytes, prefix.length);
-  const digest = await crypto.subtle.digest("SHA-1", full);
+  const digest = await globalThis.crypto.subtle.digest("SHA-1", full);
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 export async function verifyGithubCommitFiles(
