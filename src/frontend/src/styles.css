@@ -128,3 +128,18 @@ button.primary,button.secondary,button.outline,button.subtle,button.danger-butto
   .github-repo-row button { width: 100%; }
   .github-guided details { padding: 9px; }
 }
+
+
+/* GitHub read-only recovery preview + cross-tab local conflict gate (#91 #92). */
+.github-diff-preview { min-width: 0; border: 1px solid #94a3b8;
+  border-radius: 10px; padding: 14px; display: grid; gap: 8px;
+  background: color-mix(in srgb, var(--panel, #ffffff) 93%, #94a3b8); }
+.github-diff-preview > strong { font-size: 13px; overflow-wrap: anywhere; }
+.github-diff-preview details { border: 1px solid #cbd5e1; border-radius: 8px;
+  padding: 7px; font-size: 12px; }
+.github-diff-preview summary { cursor: pointer; padding: 4px; min-height: 30px; }
+.github-diff-preview ul { margin: 7px 0; padding-left: 21px; max-height: 220px; overflow-y: auto; }
+.github-diff-preview code { overflow-wrap: anywhere; white-space: normal; }
+.local-project-conflict { border: 2px solid #b45309; display: grid; gap: 9px; }
+.local-project-conflict h3 { font-size: 15px; }
+.local-project-conflict p { font-size: 12px; overflow-wrap: anywhere; }
