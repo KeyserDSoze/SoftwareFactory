@@ -4,6 +4,7 @@ import type { FactoryProject, FactorySettings } from "../domain/types";
 import { t, normalizeLocale } from "../i18n";
 import { resolveGithubToken } from "../infrastructure/github";
 import { readSecret } from "../infrastructure/store";
+import { githubBindingMatches, githubProjectDirty } from "../infrastructure/github-workspace";
 import { ACTION_STEPS, checkActionReceipt, findGithubActionRun, githubActionRunUrl,
   launchGithubTests, loadGithubActionReport, parseGithubActionReportZip,
   type ActionTestStep, type GitHubWorkflowRun, type GithubActionReport } from "../infrastructure/github-actions";
@@ -107,7 +108,12 @@ export default function GitHubActionsPanel({
   };
   const prepareFixRequest = () => {
     if (!report || report.state !== "failed" || !onPrepareFix ||
-        project.development?.pending) return;
+        project.development?.pending || !githubBindingMatches(project, settings.git) ||
+        githubProjectDirty(project, settings.git) ||
+        project.githubSync?.lastCommit !== report.commitSha) {
+      onError("Per preparare una correzione dai log GitHub serve lo stesso commit dello snapshot locale, senza modifiche non pubblicate. Sincronizza o importa prima di procedere.");
+      return;
+    }
     const failures = report.steps.filter(s => s.status === "failed");
     if (!failures.length) return;
     if (!window.confirm("Preparare una richiesta di correzione a partire dal report GitHub? " +
@@ -154,6 +160,11 @@ export default function GitHubActionsPanel({
       <h3>{t(language, "githubTestsTitle")}</h3></div><Activity size={20}/></div>
     <p className="helper">{t(language, "githubTestsExplain")}</p>
     <p className="helper">{t(language, "githubTestsPermission")}</p>
+    {githubProjectDirty(project, settings.git) && <p className="code-agent-warning">
+      Il progetto locale non corrisponde a un checkpoint GitHub confermato: la Action testerà SOLO
+      il codice già presente sul branch remoto, non la patch locale. Per correzioni basate su queste prove
+      pubblica o importa prima il checkpoint corretto.
+    </p>}
     <div className="runner-checks" role="group" aria-label={t(language, "githubTestsSelect")}>
       {ACTION_STEPS.map(step => <label className="checkline" key={step}>
         <input type="checkbox" checked={selected.includes(step)} disabled={busy || submitting}
@@ -210,7 +221,9 @@ export default function GitHubActionsPanel({
         </details>)}
       </div>}
       {report?.state === "failed" && onPrepareFix && <div className="button-group">
-        <button type="button" className="secondary" disabled={busy || Boolean(project.development?.pending)}
+        <button type="button" className="secondary" disabled={busy || Boolean(project.development?.pending) ||
+          !githubBindingMatches(project, settings.git) || githubProjectDirty(project, settings.git) ||
+          project.githubSync?.lastCommit !== report.commitSha}
           onClick={prepareFixRequest}>
           Prepara richiesta di fix dagli errori verificati
         </button>
