@@ -52,7 +52,7 @@ export async function ensureRepository(git: GitConfig, token: string): Promise<v
     });
   }
 }
-export async function pushGeneratedFiles(git: GitConfig, token: string, files: Record<string, string>): Promise<PushResult> {
+export async function pushGeneratedFiles(git: GitConfig, token: string, files: Record<string, string>, expectedHead?: string): Promise<PushResult> {
   validateGitConfig(git);
   if (!Object.keys(files).length) throw new GitHubError("Nessun file da pubblicare.");
   const root = "/repos/" + git.owner + "/" + git.repo;
@@ -66,6 +66,8 @@ export async function pushGeneratedFiles(git: GitConfig, token: string, files: R
     ref = await request(refPath, token);
   }
   const parentSha = ref.object.sha;
+  if (expectedHead !== undefined && (!/^[a-f0-9]{40}$/i.test(expectedHead) || parentSha !== expectedHead))
+    throw new GitHubError("Il branch remoto è cambiato dopo la verifica: aggiorna o importa prima di pubblicare. Nessun commit inviato.");
   const parent = await request<{ tree: { sha: string } }>(root + "/git/commits/" + parentSha, token);
   const tree = await request<{ sha: string }>(root + "/git/trees", token, {
     method: "POST", body: JSON.stringify({ base_tree: parent.tree.sha, tree: Object.entries(files).map(([path, content]) => ({
