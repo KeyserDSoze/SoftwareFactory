@@ -918,3 +918,65 @@ Per credenziali da file aggiungere `--runner-key-file`, per tenant `--tenants` (
 **Gates applicativi di `--apply`:** origine Git `main` senza file modificati/untracked e SHA-40 fissata; env privata verificata tramite lettura single-FD; `preflight compose` e `preflight host`; VM acceptance con canary digest-pinned che richiede daemon rootless, rete `none`, fs read-only, cleanup verificato. La CLI crea una claim atomica nel data dir certificato e **rifiuta di toccare stack già presenti** (`com.docker.compose.project=sf-runner`). Reinterroga il daemon rootless prima di ogni Docker e avvia solo `runner-api` e `runner-worker` con project `sf-runner` e DOCKER_HOST fissato a `unix:///run/user/1000/docker.sock`. Cloudflare Tunnel e servizi aggiuntivi non vengono abilitati. Verifica due container running e label Compose corrette, socket in worker e **non** API, poi le risposte **GET** `/v1/capabilities`, `/v1/readiness`, `/v1/execution-readiness` con bearer privato via `http://127.0.0.1:8787`. CORS e autenticazione non vanno dedotti dalla sola `/healthz`. Nessun job, POST o build di app utente viene lanciato durante il check (il canary è una container-isolation check esplicita nell'apply).
 
 **Failure e limiti:** se Compose `up` fallisce a metà, la CLI **non** esegue automaticamente `down`, `prune`, `rm`, revoca token o modifica env: occorre fermare le attività concorrenti e ispezionare manualmente host/container/evidenze prima del recupero. La receipt locale non è firmata off-host e non costituisce certificazione di VM reale; la CI esegue test unitari con probe Docker simulato e i normali smoke Docker **rootful** GitHub. Un test su PC Linux/VM rootless dedicato è ancora obbligatorio per chiudere M2 di #87. Installazione da browser, systemd user lifecycle, update/uninstall/revoke e pairing one-time appartengono ai milestone successivi.
+
+
+## Bootstrap reale dell'host Linux (issue #87 / #89, 17 novembre 2026)
+
+Per rendere **attivi** runner-api e runner-worker su una VM/PC Linux,
+l'operatore deve prima installare **Docker Engine rootless**, Docker Compose
+e Node.js su un **utente dedicato uid 1000**, proprietario del socket rootless
+`/run/user/1000/docker.sock`. Usare VM isolata, non un PC/server con segreti
+o altri servizi sensibili. Il bootstrap non installa Docker da Internet,
+non esegue SSH dal sito e non modifica ambienti privilegiati.
+
+Da **quell'utente non root**, nella repository clonata:
+```bash
+node src/runner/scripts/host-setup.mjs setup --origin=https://keyserdsoze.github.io
+node src/runner/scripts/host-setup.mjs start
+```
+
+Sostituisci l'origin con **l'origin reale del sito** (protocollo+host+porta),
+**senza** il path GitHub Pages `/SoftwareFactory/`. Se usi il dev server
+locale puoi usare `--origin=http://localhost:5173`. Il primo comando crea
+`docker/runner/.env` (mode 0600) con chiave random generata via crypto e
+rootless socket fisso, e directory 0700 sotto `~/.local/share/softwarefactory-runner`.
+Non stampa il token, **non sovrascrive .env** e non esegue container. Controlla
+privatamente la key dal file .env e inseriscila in
+**Settings → Runner API key** della SPA (solo sessione). Non copiare il token
+nei terminal log, browser URL, GitHub issues, chat, script o repository.
+
+Il comando `start` esegue **preflight host e Compose** e solo in caso di
+successo lancia `docker compose up -d --build` con config esistente.
+Successivamente controlla l'API loopback `http://127.0.0.1:8787/healthz`
+e in Settings usa **Verifica connector**, che consulta capabilities,
+heartbeat e rootless daemon. Non sostituisce un build/test reale del codice
+né il collaudo rootless su VM reale (ancora da registrare).
+
+### Come raggiungere il runner da GitHub Pages
+
+- **PC stesso:** `http://localhost:8787` è raggiungibile solo quando il browser
+  esegue *sulla medesima macchina* e la configurazione CORS include l'origin SPA.
+- **Da qualsiasi PC:** pubblica il runner tramite HTTPS su un hostname stabile,
+  ad es. `https://runner.example.org`. Puoi predisporre un reverse proxy TLS
+  autenticato oppure un Cloudflare Tunnel (cloudflared mantiene una connessione
+  **outbound** dal server verso Cloudflare; il browser chiama direttamente il
+  dominio HTTPS). Il Compose opzionale fornisce il servizio `cloudflared`, ma
+  il token e il routing della zona sono configurati **fuori** dalla SPA.
+  Per abilitare il profilo `tunnel`, sostituisci il placeholder
+  `CLOUDFLARE_TUNNEL_TOKEN` nel file .env privato e avvia esplicitamente
+  `docker compose --env-file docker/runner/.env -f docker/runner/compose.yml
+  --profile tunnel up -d` dalla VM.
+- **Sicurezza:** Browser -> HTTPS -> Tunnel/Access -> runner-api Bearer ->
+  worker Docker rootless. API e Browser non montano socket Docker; nei job
+  resta rete none. CORS deve autorizzare l'origin esatto di Pages, inclusa
+  richiesta OPTIONS; Cloudflare Access con login browser deve permettere
+  i preflight cross-origin o si usa reverse proxy **stesso origin**.
+  Non usare service token Access nel JavaScript, né disattivare auth perché
+  il tunnel sembra privato. Testa il flusso vero da una seconda macchina.
+
+Google/OneDrive conservano **URL** e router non segreti tramite backup
+Settings e ripristino manuale, non aprono reti private o tunnel e non
+trasportano il token runner. Il vault cifrato BookWriter-style e pairing
+scoped/revocable non sono ancora implementati. Per un servizio continuo
+l'API/worker Compose sono indipendenti dal browser; la pipeline AI/PM
+resta invece browser-bound fino al futuro orchestratore server-side.
