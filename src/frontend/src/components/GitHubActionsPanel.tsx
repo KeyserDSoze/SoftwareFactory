@@ -5,7 +5,7 @@ import { t, normalizeLocale } from "../i18n";
 import { resolveGithubToken } from "../infrastructure/github";
 import { readSecret } from "../infrastructure/store";
 import { ACTION_STEPS, checkActionReceipt, findGithubActionRun, githubActionRunUrl,
-  launchGithubTests, loadGithubActionReport,
+  launchGithubTests, loadGithubActionReport, parseGithubActionReportZip,
   type ActionTestStep, type GitHubWorkflowRun, type GithubActionReport } from "../infrastructure/github-actions";
 
 const labels: Record<ActionTestStep, string> = {
@@ -88,6 +88,22 @@ export default function GitHubActionsPanel({
     return () => { disposed = true; controller.abort(); clearInterval(timer); };
   }, [receipt?.requestId, match, checking, submitting, report, run?.status,
     settings.git.owner, settings.git.repo, settings.git.branch, settings.git.authMode, language]);
+  const importArtifact = async (file: File | undefined) => {
+    if (!file || !receipt || !run || run.status !== "completed") return;
+    if (file.size < 1 || file.size > 1_000_000) {
+      setDetail("ZIP artifact deve essere inferiore a 1 MB."); return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const verified = parseGithubActionReportZip(bytes, checkActionReceipt(receipt), run);
+      setReport(verified);
+      setDetail(t(language, "githubTestsVerified") +
+        " · JSON importato manualmente: provenance del file non attestata dal browser.");
+    } catch (error) {
+      setReport(null);
+      setDetail(error instanceof Error ? error.message : String(error));
+    }
+  };
   const launch = async () => {
     if (submitting || busy || !consent || !selected.length) return;
     if (current.current.development?.pending &&
@@ -146,10 +162,16 @@ export default function GitHubActionsPanel({
       {run && <p className="helper">GitHub run #{run.id} · {run.status} · {run.conclusion ?? "—"}</p>}
       <a href={githubActionRunUrl(receipt, run)} target="_blank" rel="noopener noreferrer">
         <ExternalLink size={15}/> {t(language, "githubTestsOpen")}</a>
-      {run?.status === "completed" && !report && <p className="code-agent-warning">
+      {run?.status === "completed" && !report && <div className="code-agent-warning">
         <ShieldAlert size={15}/> {t(language, "githubTestsNotVerified")}
-        {" "}Scarica <code>softwarefactory-test-report</code> dalla pagina GitHub se il browser non riesce a leggere lo ZIP per CORS.
-      </p>}
+        <p>Se il browser blocca il download per CORS, scarica l'artifact <code>softwarefactory-test-report</code>
+          dalla pagina GitHub e apri il suo ZIP qui sotto. Il contenuto viene verificato localmente
+          per SHA, request UUID, run e step; il file importato non è una prova crittografica indipendente.</p>
+        <label>Importa ZIP del report
+          <input type="file" accept=".zip,application/zip"
+            onChange={event => { void importArtifact(event.target.files?.[0]); event.target.value = ""; }} />
+        </label>
+      </div>}
       {report && <div>
         <p className="runner-verification">
           {report.state === "passed" ? <CheckCircle2 className="ok" size={18}/> : <ShieldAlert size={18}/>}
