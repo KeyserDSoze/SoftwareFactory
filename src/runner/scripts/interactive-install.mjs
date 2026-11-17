@@ -167,8 +167,9 @@ export function cloudflareInstructions({ runnerUrl, origin }) {
   validatePublicRunnerUrl(runnerUrl); validateFactoryOrigin(origin);
   return [
     "INSTALLAZIONE AVVIATA (non equivale a prova reboot o connessione pubblica).",
-    "Cloudflare Zero Trust: Networks → Tunnels → il tunnel creato per il token inserito.",
-    "Aggiungi Public Hostname " + new URL(runnerUrl).hostname + ".",
+    "Cloudflare Dashboard → Networking → Tunnels → seleziona il tunnel.",
+    "Seleziona Routes → Add route → Published application.",
+    "Hostname pubblico: " + new URL(runnerUrl).hostname + ".",
     "Service type: HTTP. Service URL: http://runner-api:8787 (nome container interno, porta 8787).",
     "NON usare localhost:8787 dentro cloudflared: localhost punta al container cloudflared stesso.",
     "Associa il DNS tunnel al tuo dominio nel pannello Cloudflare e configura Access/identity.",
