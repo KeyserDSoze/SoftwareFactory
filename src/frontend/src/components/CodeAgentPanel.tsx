@@ -300,7 +300,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     {testBackend === "server" ? <RunnerPanel project={project} settings={settings} busy={busy}
       onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} onRunnerActivity={onRunnerActivity} /> :
       <GitHubActionsPanel project={project} settings={settings} busy={busy}
-        onProjectChange={onProjectChange} onNotice={onNotice} onError={onError} />}
+        onProjectChange={onProjectChange} onNotice={onNotice} onError={onError}
+        onPrepareFix={text => { setRequest(text); setPhase("Richiesta fix da test GitHub: verifica i log prima di inviarla all\u0027AI"); }} />}
     <section className="panel"><div className="panel-title"><div><div className="eyebrow">03 / DEVELOPMENT HISTORY</div><h3>Modifiche approvate</h3></div><GitCommit size={19} className="muted" /></div>
       {dev.history.length === 0 ? <p className="dimmed">Nessuna feature è stata applicata. Le patch approvate saranno tracciate qui.</p> :
         <div className="feature-history">{[...dev.history].reverse().map(entry => <div key={entry.id} className="history-row">
