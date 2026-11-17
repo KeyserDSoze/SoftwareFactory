@@ -6,6 +6,7 @@ import { approvePending, developmentOf, dropConflictingChanges, rejectPending, r
 import { lineDiff } from "../application/code-diff";
 import { planRepairRetest } from "../application/repair-loop";
 import RunnerPanel from "./RunnerPanel";
+import type { RunnerTaskActivity } from "./BackgroundTaskToast";
 import "./runner.css";
 import { proposeCode, proposeCodeRepair, reviewCode } from "../application/code-agent";
 import type { RunnerReport } from "../infrastructure/runner";
@@ -21,8 +22,9 @@ type Props = {
   onProjectChange: (project: FactoryProject) => void;
   onNotice: (message: string) => void;
   onError: (message: string) => void;
+  onRunnerActivity?: (activity: RunnerTaskActivity | null) => void;
 };
-export default function CodeAgentPanel({ project, settings, busy, onBusy, onProjectChange, onNotice, onError }: Props) {
+export default function CodeAgentPanel({ project, settings, busy, onBusy, onProjectChange, onNotice, onError, onRunnerActivity }: Props) {
   const [request, setRequest] = useState("");
   const [activePath, setActivePath] = useState("");
   const [view, setView] = useState<"diff" | "old" | "new">("diff");
@@ -281,7 +283,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
       </div></div>
     </section>}
 <RunnerPanel project={project} settings={settings} busy={busy}
-      onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} />
+      onRunnerBound={bindRunnerJob} onRepair={repair} onNotice={onNotice} onError={onError} onRunnerActivity={onRunnerActivity} />
     <section className="panel"><div className="panel-title"><div><div className="eyebrow">03 / DEVELOPMENT HISTORY</div><h3>Modifiche approvate</h3></div><GitCommit size={19} className="muted" /></div>
       {dev.history.length === 0 ? <p className="dimmed">Nessuna feature è stata applicata. Le patch approvate saranno tracciate qui.</p> :
         <div className="feature-history">{[...dev.history].reverse().map(entry => <div key={entry.id} className="history-row">
