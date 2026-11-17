@@ -41,7 +41,7 @@ describe("GitHub BookWriter parity: PAT, cloud, discovery and checkpoints", () =
     expect(JSON.stringify(first)).not.toContain(PAT);
     expect(first.ciphertext).not.toBe(second.ciphertext);
     expect(await unsealGithubPat(first,key)).toBe(PAT);
-    await expect(unsealGithubPat({...first,ciphertext:"A"+first.ciphertext.slice(1)},key)).rejects.toThrow();
+    await expect(unsealGithubPat({...first,iv:(first.iv[0] === "A" ? "B" : "A") + first.iv.slice(1)},key)).rejects.toThrow();
     await expect(unsealGithubPat({...first,token:PAT},key)).rejects.toThrow();
   });
   it("cloud E2EE PAT uses fresh salt/IV, strict field schema and rejects wrong password", async () => {
