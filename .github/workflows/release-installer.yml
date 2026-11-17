@@ -1,0 +1,71 @@
+name: Publish Linux runner installer
+run-name: "Installer release ${{ inputs.version }}"
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer tag, e.g. v0.2.0"
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: softwarefactory-installer-release
+  cancel-in-progress: false
+jobs:
+  package-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout reviewed main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate tag, branch and release state
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Release only from main"; exit 1; }
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Stable SemVer only"; exit 1; }
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite"
+            exit 1
+          fi
+          if git rev-parse --verify -q "refs/tags/$VERSION" >/dev/null; then
+            echo "Tag already exists; refusing to repoint"
+            exit 1
+          fi
+      - name: Package reviewed source and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # Includes runner code, Dockerfiles, compose, bilingual docs and
+          # interactive setup; excludes gitignored private .env and node_modules.
+          git archive --format=tar --prefix=softwarefactory-runner-installer/ HEAD \
+            | gzip -n -9 > release/softwarefactory-runner-installer.tar.gz
+          cd release
+          sha256sum softwarefactory-runner-installer.tar.gz > softwarefactory-runner-installer.tar.gz.sha256
+          test -s softwarefactory-runner-installer.tar.gz
+          tar -tzf softwarefactory-runner-installer.tar.gz \
+            | grep -Fx softwarefactory-runner-installer/src/runner/scripts/interactive-install.mjs
+          tar -tzf softwarefactory-runner-installer.tar.gz \
+            | grep -Fx softwarefactory-runner-installer/INSTALLER.en.md
+          tar -tzf softwarefactory-runner-installer.tar.gz \
+            | grep -Fx softwarefactory-runner-installer/INSTALLER.it.md
+      - name: Publish immutable release with downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            release/softwarefactory-runner-installer.tar.gz \
+            release/softwarefactory-runner-installer.tar.gz.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "SoftwareFactory Runner Installer $VERSION" \
+            --notes-file RELEASE-INSTALLER.md
