@@ -35,3 +35,44 @@ button.primary,button.secondary,button.outline,button.subtle,button.danger-butto
 .agent-role-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .agent-role-fields label{min-width:0}
 @media(max-width:780px){.agent-role-fields{grid-template-columns:1fr}}
+
+/* Authenticated, aggregate host telemetry (#89). */
+.runner-resource-panel { border:1px solid #cbd5e1; border-radius:12px; padding:13px; margin:14px 0; background:#f8fafc; }
+.runner-resource-heading { display:flex; align-items:center; gap:12px; justify-content:space-between; flex-wrap:wrap; }
+.runner-resource-heading strong, .runner-resource-grid strong { display:inline-flex; align-items:center; gap:7px; }
+.runner-resource-heading strong { font-size:13px; }
+.runner-resource-heading span { font-size:11px; }
+.resource-status-online { color:#166534; }
+.resource-status-offline { color:#9a3412; }
+.runner-resource-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; margin:13px 0; }
+.runner-resource-grid>div { display:flex; flex-direction:column; gap:7px; min-width:0; font-size:12px; }
+.runner-resource-grid strong { font-size:11px; }
+.runner-resource-grid span {overflow-wrap:anywhere}
+.runner-resource-bar { height:7px; border-radius:8px; background:#dbe4ed; overflow:hidden; }
+.runner-resource-bar>span { display:block; height:100%; min-width:0; background:#0f766e; transition:width .25s ease; }
+.resource-note { font-size:10px; color:#64748b; }
+.runner-resource-panel .helper { display:flex; align-items:center; gap:6px; margin:12px 0 0; }
+/* BookWriter-inspired status toast: does not claim unimplemented streaming. */
+.background-task-toast { position:fixed; right:12px; bottom:12px; width:min(355px,calc(100vw - 24px));
+ z-index:120; max-height:calc(100dvh - 72px); overflow-y:auto; border:1px solid #0f766e; border-radius:14px;
+ background:white; box-shadow:0 14px 38px rgba(15,23,42,.24); color:#172a3e; }
+.background-task-top { display:flex; align-items:stretch; }
+.background-task-top>button:first-child { display:flex; align-items:center; min-width:0; flex:1; gap:10px;
+ padding:12px; text-align:left; border:0; background:transparent; cursor:pointer; }
+.background-task-top>button:first-child>span { display:flex; flex-direction:column; flex:1; min-width:0; }
+.background-task-top strong { font-size:12px; }
+.background-task-top small { white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-size:11px; color:#64748b; }
+.background-task-small { width:44px; border:0; background:transparent; cursor:pointer; }
+.background-task-body { border-top:1px solid #e2e8f0; padding:12px; display:flex; flex-direction:column; gap:7px; font-size:12px; }
+.background-task-body>strong { display:flex; gap:7px; align-items:center; }
+.background-task-body>small { color:#64748b; }
+.background-task-body .subtle { align-self:flex-start; }
+.background-task-log { max-height:4em; overflow:hidden; color:#64748b; margin:0; overflow-wrap:anywhere; }
+.background-task-details { border-top:1px solid #e2e8f0; padding:12px; font-size:12px; }
+.background-task-details p { margin:0 0 8px; }
+.shell { padding-bottom: 20px; }
+@media(max-width:680px) {
+ .runner-resource-grid{grid-template-columns:1fr}
+ .background-task-toast{bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+ .shell:has(.background-task-toast) .page {padding-bottom:250px}
+}
