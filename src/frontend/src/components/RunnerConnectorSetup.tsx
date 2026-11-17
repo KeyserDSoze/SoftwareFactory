@@ -94,9 +94,9 @@ node src/runner/scripts/host-setup.mjs start
       <pre className="runner-setup-code">{manualCommands}</pre>
     </details>
     <p className="helper"><strong>Cloudflare:</strong> crea prima un tunnel nel pannello
-      Zero Trust e copia il token del connettore. Nell'installer inserisci l'URL HTTPS
+      Cloudflare Dashboard → Networking → Tunnels → Create Tunnel, poi copia il token del connettore. Nell'installer inserisci l'URL HTTPS
       pubblico che userai (es. https://runner.example.com); al termine configura
-      il Public Hostname del tunnel con service <code>http://runner-api:8787</code>
+      la route <strong>Routes → Add route → Published application</strong> del tunnel, indicando come Service URL <code>http://runner-api:8787</code>
       (porta interna 8787, non localhost del container). Il DNS e Access si
       configurano sul tuo account Cloudflare. Abilita i preflight CORS/OPTIONS.
       Il token rimane sull'host; la API key si usa in questa app.</p>
