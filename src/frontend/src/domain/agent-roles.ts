@@ -41,6 +41,19 @@ const STAGE_ROLE: Record<StageId, AgentRoleId> = {
   adversarial: "security_engineer", implementation: "project_manager",
 };
 export const stageAgentRole = (stage: StageId) => STAGE_ROLE[stage];
+const SPECIALIST_FALLBACK: Partial<Record<AgentRoleId, StageId>> = {
+  code_reviewer: "adversarial", security_engineer: "adversarial",
+  business_developer: "competitors", research_analyst: "technical",
+  software_architect: "architecture", cloud_architect: "architecture",
+  onprem_architect: "architecture", business_analyst: "features",
+  product_owner: "features",
+};
+export const roleFallbackStage = (role: AgentRoleId): StageId =>
+  SPECIALIST_FALLBACK[role] ?? "implementation";
+export const EXECUTED_ROLES: readonly AgentRoleId[] = [
+  ...Object.values(STAGE_ROLE), "fullstack_developer", "code_reviewer", "fix_developer",
+];
+
 
 export function validateAgentRoutes(value: unknown): asserts value is AgentRoleRoutes {
   if (value === undefined) return;
