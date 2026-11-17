@@ -21,7 +21,7 @@ import { generateFiles } from "./application/scaffold";
 import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
   saveEncryptedRunnerVault, restoreEncryptedRunnerVault } from "./infrastructure/cloud";
 import { discoverAiModels } from "./infrastructure/ai";
-import { resolveGithubToken } from "./infrastructure/github";
+import { resolveGithubToken, readGithubHeadSha } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
 import { inspectGithubRepository } from "./infrastructure/github-discovery";
@@ -614,6 +614,11 @@ export default function App() {
         "\n" + recovered.verifiedFiles + " file verificati.\n\n" +
         t(normalizeLocale(settingsRef.current.language), "githubAckConfirmFinal"));
       if (!confirmed) return;
+      // A confirmation dialog can remain open while another device commits.
+      // Require a fresh HEAD readback as close as possible to the local ack.
+      const headNow = await readGithubHeadSha(git, token);
+      if (headNow !== recovered.sha)
+        throw Error("HEAD GitHub avanzata durante la conferma: ack annullato, verifica/importa.");
       if (projectRef.current !== active ||
           JSON.stringify(settingsRef.current.git) !== JSON.stringify(git))
         throw Error("Workspace o destinazione modificati dopo la conferma: nessun ack.");
