@@ -708,3 +708,11 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Il browser GitHub Pages parla con API HTTPS attraverso dominio stabile,
   reverse proxy/Tunnel opzionale e CORS allowlist esplicita. Il backup cloud
   non è un relay. Vedi ADR 0045 e issue #89/#87.
+
+## Wizard Ubuntu/Debian + risorse + vault (#89, ADR 0046)
+
+- Il provisioning host resta **solo operatore sul server dedicato**, mai SSH/script remoto invocato dal frontend Pages. Non bypassare `host-install.mjs`, rootless preflight, canary e vincoli dei job quando evolve l'installer.
+- Token Cloudflare solo sul server; gli installatori non devono accettare credenziali nei parametri CLI, né stamparle senza consenso. `cloudflared` gira nel Compose con restart, servizio interno `http://runner-api:8787`, non `localhost` dentro il container. Verificare dopo reboot su VM reale prima di dichiarare production-ready.
+- `host-metrics.mjs` produce solo aggregati senza nomi processi o host paths; API protetta e negata ai tenant senza permesso operator, temperatura CPU solo con sensore identificato, misure assenti = null/offline. La telemetria non deve fermare la worker queue.
+- Il nuovo vault `runner-vault.ts` cifra URL e API key **prima** dell'upload Google/OneDrive; chiavi in chiaro, passphrase, token Cloudflare e credenziali in Git sono vietati. Vault singolo/manuale: mai dichiarare CAS, merge o sincronizzazione automatica senza test.
+- La scheda in basso a destra mostra soltanto task/stati reali osservati, non streaming inesistente o processi AI attivi a browser chiuso.
