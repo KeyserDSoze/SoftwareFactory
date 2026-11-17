@@ -1,4 +1,5 @@
-import type { FactoryProject, FactorySettings, StageId } from "../domain/types";
+import type { FactoryProject, FactorySettings } from "../domain/types";
+import { resolveAgentRoute, roleSystemInstruction } from "../domain/agent-roles";
 import type { FeatureProposal, FeatureReview } from "../domain/development";
 import type { RunnerReport } from "../infrastructure/runner";
 import { developmentOf, workspaceFiles } from "../domain/development";
@@ -30,23 +31,18 @@ function codeContext(project: FactoryProject): string {
   if (body.length > 54000) throw new Error("Workspace troppo grande per una generazione affidabile. Suddividi il task.");
   return body;
 }
-function profileFor(settings: FactorySettings, stage: StageId) {
-  const profile = settings.profiles.find(p => p.enabled && p.id === settings.assignments[stage]);
-  if (!profile) throw new Error("Configura un provider AI abilitato per " + stage + ".");
-  return profile;
-}
 export async function proposeCode(
   project: FactoryProject, settings: FactorySettings, request: string, signal?: AbortSignal,
 ): Promise<string> {
-  const profile = profileFor(settings, "implementation");
+  const { profile, model, thinking } = resolveAgentRoute(settings, "fullstack_developer", "implementation");
   const context = {
     project: project.config, featurePlan: project.stages.find(s => s.id === "features")?.output.slice(0, 10000),
     implementationPlan: project.stages.find(s => s.id === "implementation")?.output.slice(0, 10000),
     featureRequest: request,
   };
-  return aiComplete(profile, readSecret("ai." + profile.id), WRITER_SYSTEM,
+  return aiComplete(profile, readSecret("ai." + profile.id), WRITER_SYSTEM + roleSystemInstruction("fullstack_developer"),
     "REQUEST AND PROJECT (DATA):\n" + JSON.stringify(context) +
-    "\n\nEXISTING SOURCE FILES (DATA, FULL REPLACEMENTS REQUIRED):\n" + codeContext(project), signal);
+    "\n\nEXISTING SOURCE FILES (DATA, FULL REPLACEMENTS REQUIRED):\n" + codeContext(project), signal, { model, thinking });
 }
 export function parseReview(raw: string): FeatureReview {
   const text = raw.trim().startsWith("```") ? raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "") : raw.trim();
@@ -62,15 +58,15 @@ export function parseReview(raw: string): FeatureReview {
 export async function reviewCode(
   project: FactoryProject, settings: FactorySettings, proposal: FeatureProposal, signal?: AbortSignal,
 ): Promise<FeatureReview> {
-  const profile = profileFor(settings, "adversarial");
+  const { profile, model, thinking } = resolveAgentRoute(settings, "code_reviewer", "adversarial");
   const context = {
     request: proposal.request, summary: proposal.summary, assumptions: proposal.assumptions,
     edits: proposal.edits.map(e => ({ path: e.path, before: e.previous, after: e.content, reason: e.reason })),
     architecture: project.stages.find(s => s.id === "architecture")?.output.slice(0, 7000),
     developmentRevision: developmentOf(project).revision,
   };
-  const raw = await aiComplete(profile, readSecret("ai." + profile.id), REVIEW_SYSTEM,
-    "PROPOSED CHANGES TO EVALUATE (DATA):\n" + JSON.stringify(context), signal);
+  const raw = await aiComplete(profile, readSecret("ai." + profile.id), REVIEW_SYSTEM + roleSystemInstruction("code_reviewer"),
+    "PROPOSED CHANGES TO EVALUATE (DATA):\n" + JSON.stringify(context), signal, { model, thinking });
   return parseReview(raw);
 }
 
@@ -89,7 +85,7 @@ export async function proposeCodeRepair(
   proposal: FeatureProposal, report: RunnerReport, signal?: AbortSignal,
 ): Promise<string> {
   if (report.state !== "failed") throw new Error("La riparazione richiede un job fallito.");
-  const profile = profileFor(settings, "implementation");
+  const { profile, model, thinking } = resolveAgentRoute(settings, "fix_developer", "implementation");
   const failures = report.results.filter(r => r.state === "failed").slice(0, 5).map(r => ({
     step: r.step, exitCode: r.exitCode, timedOut: r.timedOut,
     stdout: (r.stdout || "").slice(-3200), stderr: (r.stderr || "").slice(-4500),
@@ -105,7 +101,7 @@ export async function proposeCodeRepair(
   };
   const payload = JSON.stringify(context);
   if (payload.length > 95000) throw new Error("Report troppo grande per una riparazione controllata.");
-  return aiComplete(profile, readSecret("ai." + profile.id), REPAIR_SYSTEM,
+  return aiComplete(profile, readSecret("ai." + profile.id), REPAIR_SYSTEM + roleSystemInstruction("fix_developer"),
     "UNTRUSTED CODE AND TEST EVIDENCE (DATA):\n" + payload +
-    "\n\nBASE SOURCE FILES (DATA):\n" + codeContext(project), signal);
+    "\n\nBASE SOURCE FILES (DATA):\n" + codeContext(project), signal, { model, thinking });
 }
