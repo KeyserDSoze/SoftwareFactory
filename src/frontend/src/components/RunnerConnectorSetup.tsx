@@ -51,15 +51,16 @@ export default function RunnerConnectorSetup({ endpoint, authRevision }: { endpo
     }
   };
 
-  const commands = `git clone https://github.com/KeyserDSoze/SoftwareFactory.git
+  const commands = `# Prima: installa Docker Engine ROOTLESS, Docker Compose e Node.js
+# Accedi come utente dedicato Linux UID 1000 (non root).
+git clone https://github.com/KeyserDSoze/SoftwareFactory.git
 cd SoftwareFactory
-cp docker/runner/.env.example docker/runner/.env
-chmod 600 docker/runner/.env
-# Compila .env SOLO sull'host: API key random, origin SPA, path privati, socket rootless.
-# Predisponi le directory private possedute dall'utente uid 1000.
-node src/runner/preflight.mjs host --env-file=docker/runner/.env
-node src/runner/preflight.mjs compose --env-file=docker/runner/.env
-docker compose --env-file docker/runner/.env -f docker/runner/compose.yml up -d --build`;
+node src/runner/scripts/host-setup.mjs setup --origin=${location.origin}
+# Crea .env privato (0600), key random e directory private (0700).
+# La chiave si legge soltanto sul server e si inserisce in Settings → Runner API key.
+node src/runner/scripts/host-setup.mjs start
+# Esegue preflight host+Compose; se OK avvia API + worker.
+# Per connessioni remote, configura separatamente Tunnel/HTTPS.`;
 
   return <div className="runner-connector-setup">
     <div className="panel-subtitle"><Server size={15} /> Installa o collega il tuo connector Linux</div>
@@ -78,16 +79,20 @@ docker compose --env-file docker/runner/.env -f docker/runner/compose.yml up -d 
       ? "Sul PC Linux con Docker rootless e Node.js, usa http://localhost:8787 soltanto quando il browser gira sullo stesso PC. In caso contrario configura un accesso HTTPS."
       : "Sulla VM dedicata usa Docker rootless, directory private e firewall. L'API Compose ascolta solo su 127.0.0.1; per raggiungerla da remoto configura separatamente HTTPS/Tunnel e Access."}</p>
     <p className="helper">
-      Dopo avere installato Docker Engine rootless e Docker Compose, esegui i seguenti comandi
-      <strong> sul PC/server scelto</strong>, da utente non privilegiato. Modifica manualmente
-      il file .env privato prima dei preflight; non incollare chiavi nella SPA o nei comandi.
+      Dopo aver installato Docker rootless, Docker Compose e Node.js, esegui questi comandi
+      <strong> sul PC/server scelto</strong> con un utente dedicato Linux UID 1000.
+      Lo script crea chiave e file .env 0600 senza stamparli o inviarli al browser.
+      Controlla manualmente la configurazione prima di avviare servizi non fidati.
     </p>
     <pre className="runner-setup-code">{commands}</pre>
     <p className="helper">Il preflight deve essere superato prima dell'avvio.
       Per prerequisiti, permessi, creazione directory e configurazione del tunnel consulta{" "}
       <a href="https://github.com/KeyserDSoze/SoftwareFactory/blob/main/docs/runner.md"
         target="_blank" rel="noopener noreferrer">la guida runner</a>.
-      Non installare su host con workload o segreti sensibili.</p>
+      Non installare su host con workload o segreti sensibili. Per usarlo da qualsiasi dispositivo,
+      pubblica l'API tramite HTTPS (reverse proxy o Cloudflare Tunnel con Access),
+      configura CORS sull'origin della SPA e inserisci il dominio pubblico in Runner API URL.
+      Il servizio non è scoperto automaticamente da GitHub Pages.</p>
     <div className="panel-footer">
       <span>Diagnostica in sola lettura: nessun codice inviato, nessun container avviato.</span>
       <button className="secondary" type="button" disabled={checking || !endpoint.trim()}
