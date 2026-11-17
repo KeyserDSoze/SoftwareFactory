@@ -39,6 +39,14 @@ export const messages = {
     githubRepoAuto: "Sincronizza checkpoint automaticamente dopo i task (pagina aperta)",
     githubProjectsTitle: "I tuoi progetti locali", githubProjectsOpen: "Apri progetto",
     githubRemoteHead: "Verifica HEAD remota", githubRemoteImport: "Importa checkpoint GitHub",
+    githubAckRecover: "Recupera conferma commit",
+    githubAckExplain: "Se un push potrebbe essere riuscito senza conferma, confronta solo in lettura il checkpoint, i file sorgente, il commit padre e la HEAD. Non esegue push, merge o importazioni; occorre una conferma per riconoscere il commit.",
+    githubAckConfirmStart: "Controllare se GitHub contiene già esattamente questo workspace? Operazione SOLO IN LETTURA, nessun nuovo commit o merge. Proseguire?",
+    githubAckConfirmEvidence: "Verifica completata in sola lettura. I contenuti sono identici al workspace locale:",
+    githubAckConfirmFinal: "Riconoscere questa HEAD come checkpoint locale confermato? L'autosync verrà disattivato e non sarà eseguito alcun push. Il confronto non prova l'autore del commit.",
+    githubAckFirstBinding: "Primo collegamento: genitore del commit non precedentemente attestato.",
+    githubAckPublicWarning: "ATTENZIONE: la repository GitHub risulta PUBBLICA. Questo riconoscimento non autorizza futuri push pubblici.",
+    githubAckSuccess: "Conferma locale recuperata per il commit"
     notImplemented: "Non implementato su questo progetto", offline: "Non disponibile", busy: "Invio...",
   },
   en: {
@@ -77,6 +85,14 @@ export const messages = {
     githubRepoAuto: "Save checkpoints automatically after tasks (browser must remain open)",
     githubProjectsTitle: "Your local projects", githubProjectsOpen: "Open project",
     githubRemoteHead: "Inspect remote HEAD", githubRemoteImport: "Import GitHub checkpoint",
+    githubAckRecover: "Recover commit acknowledgement",
+    githubAckExplain: "If a push may have succeeded without an acknowledgement, compare the exact checkpoint, generated source blobs, commit parent and remote HEAD in read-only mode. No push, merge or import occurs; you must confirm before acknowledging.",
+    githubAckConfirmStart: "Check if GitHub already contains this exact workspace? READ-ONLY operation; no new commit or merge. Continue?",
+    githubAckConfirmEvidence: "Read-only verification complete. Remote content matches the local workspace:",
+    githubAckConfirmFinal: "Acknowledge this remote HEAD as the local checkpoint? Autosync will be disabled and no push is performed. This comparison does not establish who authored the commit.",
+    githubAckFirstBinding: "Initial binding: commit parent was not previously acknowledged.",
+    githubAckPublicWarning: "WARNING: the GitHub repository is PUBLIC. This acknowledgement does not grant consent for future public pushes.",
+    githubAckSuccess: "Local acknowledgement recovered for commit"
     notImplemented: "Not implemented in this project", offline: "Unavailable", busy: "Submitting...",
   },
 } as const;
