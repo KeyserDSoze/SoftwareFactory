@@ -215,7 +215,12 @@ if (!inside) {
       await expect(importButton).toBeEnabled({timeout:15000});
       let confirmCount=0;
       page.on("dialog",dialog => {confirmCount++;void dialog.accept();});
-      const backupPromise=page.waitForEvent("download",{timeout:20000});
+      const backupPromise=page.waitForEvent("download",{timeout:10000}).catch(async () => {
+        const alerts=await page.getByRole("alert").allTextContents();
+        throw Error("No import backup; HEAD GETs="+headReads+
+          " GitHub GETs="+restCalls+" confirmations="+confirmCount+
+          " alerts="+JSON.stringify(alerts.map(x=>x.slice(0,200))));
+      });
       await importButton.click();
       const backup=await backupPromise;
       assert.match(backup.suggestedFilename(),/^softwarefactory-recovery-[a-f0-9-]{36}\.json$/);
