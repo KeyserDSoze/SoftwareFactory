@@ -25,6 +25,45 @@ describe("application scaffold", () => {
     expect(files["adr/0001-modular-ddd.md"]).toContain("DDD");
     expect(files["infra/main.tf"]).toContain("terraform");
   });
+  it("ships an opt-in GitHub Actions test workflow and a fail-closed JSON reporter", () => {
+    const files = generateFiles(example());
+    const workflow = files[".github/workflows/softwarefactory-tests.yml"];
+    const script = files["scripts/softwarefactory-tests.mjs"];
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain("run-name: 'SoftwareFactory tests ${{ inputs.request_id }}'");
+    expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).toContain("permissions:\\n  contents: read");
+    for (const input of ["dotnet_build", "dotnet_test", "web_build", "web_test", "playwright"])
+      expect(workflow).toContain("      " + input + ":");
+    expect(workflow).toContain("Upload JSON report even if tests fail");
+    expect(workflow).toContain("if: always()");
+    expect(workflow).toContain("retention-days: 14");
+    expect(workflow).not.toContain("contents: write");
+    expect(script).not.toContain("shell: true");
+    expect(script).toContain('state: "incomplete"');
+    expect(script).toContain("softwarefactory-results");
+    expect(script).toContain("checkout_sha_mismatch");
+    const dir = mkdtempSync(path.join(tmpdir(), "sf-actions-"));
+    try {
+      const target = path.join(dir, "scripts", "softwarefactory-tests.mjs");
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, script);
+      const processResult = spawnSync(process.execPath, [target], { cwd: dir,
+        encoding: "utf8", timeout: 5000,
+        env: { ...process.env, SF_REQUEST_ID: "123e4567-e89b-42d3-a456-426614174000",
+          GITHUB_SHA: "a".repeat(40), GITHUB_REF_NAME: "main",
+          GITHUB_REPOSITORY: "octocat/app", GITHUB_RUN_ID: "1", GITHUB_RUN_ATTEMPT: "1",
+          SF_DOTNET_BUILD: "false", SF_DOTNET_TEST: "false", SF_WEB_BUILD: "false",
+          SF_WEB_TEST: "false", SF_PLAYWRIGHT: "false" } });
+      expect(processResult.status).toBe(1);
+      const generated = JSON.parse(readFileSync(path.join(dir, "softwarefactory-results", "report.json"), "utf8"));
+      expect(generated.schemaVersion).toBe(1);
+      expect(generated.state).toBe("incomplete");
+      expect(generated.summary.passed).toBe(0);
+      expect(generated.commitSha).toBe("a".repeat(40));
+      expect(JSON.stringify(generated)).not.toContain("github_pat_");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("supports branch-independent multiple frontend target placeholders", () => {
     const p = example();
     p.config.frontends = ["react", "react-native", "ios", "unity"];
