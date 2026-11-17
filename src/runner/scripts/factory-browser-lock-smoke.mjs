@@ -81,7 +81,7 @@ if (!inside) {
     await second.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
     await expect(second.getByText("Conflitto locale tra schede"))
       .toBeVisible({timeout:15000});
-    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeDisabled();
+    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
     // A stale tab cannot persist a draft even if its text field is editable.
     await second.getByLabel("Nome progetto").fill("Stale tab must not write");
     const guardedName = await second.evaluate(() =>
@@ -99,7 +99,7 @@ if (!inside) {
     second.once("dialog",dialog => void dialog.dismiss());
     await recovery.click();
     await expect(second.getByText("Conflitto locale tra schede")).toBeVisible();
-    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeDisabled();
+    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
     let approvals=0;
     second.on("dialog",async dialog => {approvals++;await dialog.accept();});
     const downloadPromise=second.waitForEvent("download",{timeout:20000});
