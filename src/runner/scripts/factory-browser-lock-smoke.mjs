@@ -134,8 +134,14 @@ if (!inside) {
     await expect(third.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
     third.on("dialog",dialog => void dialog.accept());
     await third.getByRole("button",{name:"Nuovo progetto"}).click();
-    await expect(third.getByRole("button",{name:"Nuovo progetto"}))
-      .toBeEnabled({timeout:15000});
+    // The button is already enabled while A is contended; it is not an ACK
+    // for the asynchronous lock acquisition and guarded creation of project B.
+    await third.waitForFunction(expectedId => {
+      const current=JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").id;
+      return typeof current === "string" && current !== expectedId;
+    }, firstId, {timeout:15000});
+    await expect(third.getByText("Conflitto locale tra schede"))
+      .toBeHidden({timeout:15000});
     const newId = await third.evaluate(() =>
       JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").id);
     assert.notEqual(newId,firstId,"Creating another project must use a separate lease");
