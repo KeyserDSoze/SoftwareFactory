@@ -209,6 +209,7 @@ if (!inside) {
           "content-type":"application/json"},body:JSON.stringify(body)});
       });
       await page.reload({waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled({timeout:15000});
       await page.getByTitle("Impostazioni").click();
       const importButton=page.getByRole("button",{name:"Importa checkpoint GitHub"});
       await expect(importButton).toBeEnabled({timeout:15000});
