@@ -7,6 +7,7 @@ import {
 import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
+import AgentRoleRouter from "./components/AgentRoleRouter";
 import "./components/code-agent.css";
 import { workspaceFiles } from "./domain/development";
 import { createProject, DEFAULT_SETTINGS, SERVICE_KINDS, SERVICE_LABELS, SERVICE_OPTIONS, STAGES, updateConfig } from "./domain/defaults";
@@ -198,6 +199,8 @@ export default function App() {
         if (recovered.settings) editSettings(s => {
           s.profiles = recovered.settings!.profiles;
           s.assignments = recovered.settings!.assignments;
+          s.agentRoutes = recovered.settings!.agentRoutes;
+          s.runnerEndpoint = recovered.settings!.runnerEndpoint || "";
           s.searchEndpoint = recovered.settings!.searchEndpoint;
           s.git = recovered.settings!.git;
           s.cloud = recovered.settings!.cloud;
@@ -334,11 +337,21 @@ export default function App() {
               <div className="form-grid"><label>Etichetta<input value={profile.label} onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.label = e.target.value; })} /></label>
                 <label>Modello<input value={profile.model} placeholder="es. gpt-4.1 / modello locale" onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.model = e.target.value; })} /></label>
                 <label>Base URL OpenAI-compatible<input value={profile.baseUrl} placeholder="https://api.../v1" onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.baseUrl = e.target.value; })} /></label>
-                <label>API key (temporanea)<SecretInput secretKey={"ai." + profile.id} placeholder="API key · mai esportata" /></label></div>
+                <label>API key (temporanea)<SecretInput secretKey={"ai." + profile.id} placeholder="API key · mai esportata" /></label>
+                <label>Thinking predefinito endpoint<select value={profile.reasoningEffort ?? ""} onChange={e => editSettings(s => {
+                  const p = s.profiles.find(p => p.id === profile.id)!;
+                  if (e.target.value) p.reasoningEffort = e.target.value as "automatic" | "low" | "medium" | "high" | "xhigh";
+                  else delete p.reasoningEffort;
+                })}>
+                  <option value="">Non specificato</option><option value="automatic">Automatico — ometti parametro</option>
+                  <option value="low">Low</option><option value="medium">Medium</option>
+                  <option value="high">High</option><option value="xhigh">Extra high</option>
+                </select></label></div>
               <label className="checkline"><input type="checkbox" checked={profile.enabled} onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.enabled = e.target.checked; })} /> Endpoint abilitato</label>
             </div>)}
             <div className="panel-subtitle">Modello per task</div><div className="routing-grid">{STAGES.map(stage => <label key={stage.id}>{stage.label}<select value={settings.assignments[stage.id]} onChange={e => editSettings(s => { s.assignments[stage.id] = e.target.value; })}>
               {settings.profiles.map(p => <option key={p.id} value={p.id}>{p.label} — {p.model || "modello da configurare"}</option>)}</select></label>)}</div>
+            <AgentRoleRouter settings={settings} onChange={set => editSettings(s => { s.agentRoutes = set.agentRoutes; })} />
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">RESEARCH ENGINE</span><h3>Ricerca online</h3></div><Search size={20} /></div>
             <p className="helper">Per competitor e documentazione usa un gateway di ricerca web compatibile CORS che risponde a <code>GET ?q=...</code> con <code>{"{results:[{title,url,snippet}]}"}</code>. Senza gateway usa il fallback Wikipedia, che non è sufficiente per verifiche normative o competitive.</p>
@@ -371,6 +384,7 @@ export default function App() {
             <div className="form-grid"><label>Provider<select value={settings.cloud.provider} onChange={e => editSettings(s => { s.cloud.provider = e.target.value as "google" | "microsoft"; })}><option value="google">Google Drive · appDataFolder</option><option value="microsoft">Microsoft OneDrive · app folder</option></select></label>
               <label>OAuth SPA client ID<input value={settings.cloud.clientId} placeholder="Client ID registrato sul provider" onChange={e => editSettings(s => { s.cloud.clientId = e.target.value; })} /></label></div>
             <p className="helper">Registra un'app OAuth pubblica con redirect URI <code>{location.origin + location.pathname}</code>. Google richiede scope drive.appdata; Microsoft Files.ReadWrite.AppFolder. Il token rimane in sessionStorage, senza refresh token persistente. Il backup sovrascrive lo snapshot cloud precedente.</p>
+            <p className="helper">Backup: settings non segreti (endpoint, ruoli, thinking e URL runner) trasferibili su altri dispositivi. Le API key restano nella sessione: per trasferirle servirà un vault cifrato come BookWriter. Il backup attuale è manuale, sovrascrive lo snapshot precedente e non risolve i conflitti multi-device.</p>
             <div className="button-group"><button className="secondary" disabled={busy} onClick={() => void startCloudLogin(settings.cloud).catch(e => setError(e instanceof Error ? e.message : String(e)))}><Cloud size={16} /> {readSecret("cloud." + settings.cloud.provider) ? "Ricollega" : "Connetti"} {settings.cloud.provider === "google" ? "Drive" : "OneDrive"}</button>
               <button className="secondary" disabled={busy || !readSecret("cloud." + settings.cloud.provider)} onClick={() => void cloudAction("save")}><Download size={16} /> Backup</button>
               <button className="subtle" disabled={busy || !readSecret("cloud." + settings.cloud.provider)} onClick={() => void cloudAction("load")}><RefreshCw size={16} /> Ripristina</button></div>
