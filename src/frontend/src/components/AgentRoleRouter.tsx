@@ -1,6 +1,6 @@
 import type { FactorySettings } from "../domain/types";
 import { AGENT_ROLES, EXECUTED_ROLES, roleFallbackStage,
-  type AgentRoleId, type ThinkingChoice } from "../domain/agent-roles";
+  type AgentRoleId, type AgentRoleRoute, type ThinkingChoice } from "../domain/agent-roles";
 
 type Props = { settings: FactorySettings; onChange: (next: FactorySettings) => void };
 const choices: ThinkingChoice[] = ["automatic", "low", "medium", "high", "xhigh"];
@@ -11,9 +11,17 @@ export default function AgentRoleRouter({ settings, onChange }: Props) {
   function change(role: AgentRoleId, key: "profileId" | "modelId" | "thinking", value: string) {
     const next = structuredClone(settings);
     const routes = { ...(next.agentRoutes ?? {}) };
-    const edited = { ...(routes[role] ?? {}) };
-    if (value) edited[key] = value;
-    else delete edited[key];
+    const edited: AgentRoleRoute = { ...(routes[role] ?? {}) };
+    if (key === "thinking") {
+      if (value) edited.thinking = value as ThinkingChoice;
+      else delete edited.thinking;
+    } else if (key === "modelId") {
+      if (value) edited.modelId = value;
+      else delete edited.modelId;
+    } else {
+      if (value) edited.profileId = value;
+      else delete edited.profileId;
+    }
     if (Object.keys(edited).length) routes[role] = edited;
     else delete routes[role];
     next.agentRoutes = routes;
