@@ -16,11 +16,15 @@ export async function publishGithubWorkspace(
 ): Promise<PublishedGithubWorkspace> {
   const prepared = { ...workspaceFiles(project),
     [GITHUB_WORKSPACE_PATH]: encodeGithubWorkspace(project) };
-  if (!git.privateRepo && !explicitPublicConsent && !project.githubSync?.publicConsent)
+  // Consent is bound to the exact owner/repo/branch previously acknowledged.
+  // Never inherit public consent when switching destination with the same PAT.
+  const priorConsent = githubBindingMatches(project, git) &&
+    project.githubSync?.publicConsent === true;
+  if (!git.privateRepo && !explicitPublicConsent && !priorConsent)
     throw Error("Repository impostata come PUBBLICA: serve consenso esplicito prima della creazione o della pubblicazione.");
   await ensureRepository(git, token);
   const target = await inspectGithubRepository(git, token);
-  if (!target.privateRepo && !explicitPublicConsent && !project.githubSync?.publicConsent)
+  if (!target.privateRepo && !explicitPublicConsent && !priorConsent)
     throw Error("GitHub conferma che la repository è PUBBLICA: autorizza esplicitamente il contenuto prima di pubblicare.");
   const remote = await inspectGithubWorkspace(git, token);
   if (githubBindingMatches(project, git)) {
@@ -35,7 +39,7 @@ export async function publishGithubWorkspace(
       githubSync: { owner: git.owner, repo: git.repo, branch: git.branch,
         lastCommit: pushed.sha, syncedLocalUpdatedAt: project.updatedAt,
         syncedAt: new Date().toISOString(), publicConsent: !target.privateRepo &&
-          (explicitPublicConsent || project.githubSync?.publicConsent === true) } },
+          (explicitPublicConsent || priorConsent) } },
     url: pushed.url, sha: pushed.sha, branch: pushed.branch,
   };
 }
