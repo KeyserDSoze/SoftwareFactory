@@ -729,3 +729,11 @@ Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
 - [ ] Eliminare ogni gara residua nel read-check-write locale: transazione IndexedDB vera o Web Locks che coprano TUTTI i commit locali; non chiamare il guard sincrono CAS atomico.
 - [ ] Browser E2E con due schede e interleaving reali, prova di recupero e import (incl. backup bloccato dal browser).
 - [ ] End-to-end con PAT/provider e security acceptance prima di chiudere #91/#92; verificare stato degli ultimi workflow su main.
+
+## Release Linux runner — candidato CI-gated (#90)
+
+- [x] Workflow manuale Release stabile, tag SemVer e asset archivio/checksum.
+- [x] Trigger candidato sperimentale solo da `workflow_run` **Factory CI verde** su `main` originata dallo stesso repository, checkout esattamente `head_sha`, marker SemVer `.github/installer-release.version`, no overwrite tag/release.
+- [x] Pages cerca release pubbliche, preferisce stable, usa prerelease `-rc.N` solo se non c'è stable con i due asset verificati; avviso IT/EN.
+- [ ] Prima pubblicazione effettiva e controlli asset/checksum pubblici, prova archive on-host.
+- [ ] Rootless Docker reboot/systemd/cloudflared VM dedicata, Access+CORS da Pages e supply-chain hardening.
