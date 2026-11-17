@@ -759,3 +759,14 @@ Decisione: [ADR 0049](../adr/0049-local-project-exclusive-writer-web-locks.md), 
 - [x] Test di generazione e ADR [0050](../adr/0050-oidc-session-idempotence-and-postgres-e2e.md).
 - [ ] Confermare full-stack 18/18 + Factory CI e Pages verdi sull'ultima SHA, poi stress regressione con login OIDC / refresh duplicati per evitare bug persistenti.
 - [ ] OIDC IdP reale esterno, token revocation production e ambiente VM rimangono nell'epica #9.
+
+
+## Recovery del commit GitHub con risposta persa (#91, 17 novembre 2026)
+
+- [x] Implementata funzione **manuale** `recoverGithubAcknowledgement`: non fa un nuovo push; richiede stesso progetto, config/stage/patch portable identici, git HEAD corrente.
+- [x] Verifica ancestry commit: quando esiste un binding conosciuto, il parent remoto deve essere proprio l'ultima SHA confermata. Per primo push il parent è sconosciuto: si controllano i contenuti senza pretendere prova d'autore.
+- [x] Lettura Git trees ricorsiva con rifiuto di truncation/size/path/type/mode anomali; compare gli object ID Git blob SHA-1 calcolati sul contenuto UTF-8 di **ogni** file generato e del checkpoint, verifica nuovamente la HEAD.
+- [x] UI IT/EN: azione distinta da Publish/Import, doppia conferma, avviso repository realmente pubblica, binding locale aggiornato solo a verifica completa, autosync disabilitato, nessuna modifica dei file di progetto.
+- [x] Unit test recovery: successo con binding, primo push, prove negative parent/file/checkpoint/HEAD, consenso public scope, solo GET. [ADR 0051](../adr/0051-github-lost-ack-tree-reconciliation.md).
+- [ ] Verifica finale Factory CI + Pages dell'ultimo SHA, browser E2E mockato del flusso UI e PAT live reale in almeno due browser/dispositivi; callback persa e riavvio prima del salvataggio ack.
+- [ ] Multi-commit remote divergence, merge controllato e CAS multi-device rimangono manuali/bloccanti: NON estendere questo recupero a un writer automatico.
