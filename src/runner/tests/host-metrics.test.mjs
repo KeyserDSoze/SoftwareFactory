@@ -36,7 +36,8 @@ test("sampler uses bounded aggregate host-visible values; missing sensors are nu
   assert.deepEqual(Object.keys(first.snapshot).sort(), Object.keys(snapshot()).sort());
 });
 test("schema validation rejects unknown fields, stale/future timestamps, garbage and impossible values", () => {
-  assert.deepEqual(validateWorkerMetrics(snapshot()), snapshot());
+  const valid = snapshot();
+  assert.deepEqual(validateWorkerMetrics(valid), valid);
   for (const value of [
     { ...snapshot(), authToken: "secret" },
     { ...snapshot(), cpuPercent: 180 },
