@@ -9,16 +9,39 @@ export function validateGitConfig(config: GitConfig): void {
     throw new GitHubError("Nome branch non valido.");
 }
 async function request<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-  const r = await fetch("https://api.github.com" + path, {
-    ...init, redirect: "error",
-    headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", Authorization: "Bearer " + token, ...(init.body ? { "Content-Type": "application/json" } : {}), ...init.headers },
-  });
-  if (!r.ok) {
-    if (r.status === 404) throw new GitHubError("GitHub: risorsa inesistente o token senza permessi (404).");
-    if (r.status === 409 || r.status === 422) throw new GitHubError("GitHub: conflitto / branch cambiato (HTTP " + r.status + "). Nessun force push.");
-    throw new GitHubError("GitHub: HTTP " + r.status + ". Controlla permessi e repository.");
-  }
-  return r.status === 204 ? ({} as T) : r.json() as Promise<T>;
+  if (!(path.startsWith("/repos/") || path === "/user" || path === "/user/repos"))
+    throw new GitHubError("Destinazione GitHub API non permessa.");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const r = await fetch("https://api.github.com" + path, {
+      ...init, method: init.method || "GET", mode: "cors", cache: "no-store",
+      credentials: "omit", referrerPolicy: "no-referrer", redirect: "error",
+      signal: controller.signal,
+      headers: { Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28", Authorization: "Bearer " + token,
+        ...(init.body ? { "Content-Type": "application/json" } : {}), ...init.headers },
+    });
+    if (!r.ok) {
+      if (r.status === 404) throw new GitHubError("GitHub: risorsa inesistente o token senza permessi (404).");
+      if (r.status === 409 || r.status === 422) throw new GitHubError(
+        "GitHub: conflitto / branch cambiato (HTTP " + r.status + "). Nessun force push.");
+      throw new GitHubError("GitHub: HTTP " + r.status + ". Controlla permessi e repository.");
+    }
+    if (r.status === 204) return {} as T;
+    // Prevent unbounded JSON responses (and accidental logging of GitHub's raw
+    // response). Git Data writes only need tiny acknowledgement structures.
+    const size = Number(r.headers?.get("content-length") || "0");
+    if (!Number.isFinite(size) || size > 2_000_000)
+      throw new GitHubError("Risposta GitHub troppo grande.");
+    const payload = await r.text();
+    if (payload.length > 2_000_000) throw new GitHubError("Risposta GitHub troppo grande.");
+    try { return JSON.parse(payload) as T; }
+    catch { throw new GitHubError("Risposta JSON GitHub non valida."); }
+  } catch (error) {
+    if (error instanceof GitHubError) throw error;
+    throw new GitHubError("GitHub non raggiungibile, timeout o CORS. Nessun retry automatico del commit: verifica la HEAD prima.");
+  } finally { clearTimeout(timeout); }
 }
 export async function resolveGithubToken(git: GitConfig, pat: string): Promise<string> {
   if (git.authMode === "pat") {
