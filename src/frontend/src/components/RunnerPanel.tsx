@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, CheckCircle2, Clock, Cloud, Play, RefreshCw, ShieldAlert, Wrench } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
+import type { RunnerTaskActivity } from "./BackgroundTaskToast";
+import RunnerTelemetry from "./RunnerTelemetry";
 import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
 import { getRepairCheckpoint, prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
@@ -18,6 +20,7 @@ type Props = {
   onRepair: (report: RunnerReport, evidence: RunnerJobEvidence) => Promise<void>;
   onNotice: (text: string) => void;
   onError: (text: string) => void;
+  onRunnerActivity?: (activity: RunnerTaskActivity | null) => void;
 };
 const AVAILABLE: { step: RunnerStep; label: string }[] = [
   { step: "dotnet-build", label: ".NET build" },
@@ -27,7 +30,7 @@ const AVAILABLE: { step: RunnerStep; label: string }[] = [
   { step: "playwright", label: "Playwright E2E" },
 ];
 const terminal = (state: string) => ["passed", "failed", "incomplete"].includes(state);
-export default function RunnerPanel({ project, settings, busy, onRunnerBound, onRepair, onNotice, onError }: Props) {
+export default function RunnerPanel({ project, settings, busy, onRunnerBound, onRepair, onNotice, onError, onRunnerActivity }: Props) {
   const [steps, setSteps] = useState<RunnerStep[]>(["dotnet-build", "web-build"]);
   const [report, setReport] = useState<RunnerReport | null>(null);
   const [verification, setVerification] = useState<RunnerVerification | null>(null);
@@ -219,6 +222,14 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     setRepairing(true);
     try { await onRepair(report, evidence); } finally { setRepairing(false); }
   };
+  useEffect(() => {
+    if (!onRunnerActivity) return;
+    if (!jobId) { onRunnerActivity(null); return; }
+    // Do not report an invented running task: no verified receipt/report means unknown.
+    if (report?.id !== jobId) return;
+    onRunnerActivity({ id: jobId, label: report.label, state: report.state });
+    return () => { onRunnerActivity(null); };
+  }, [jobId, report?.id, report?.state, report?.label, onRunnerActivity]);
   const displayedReport = report?.id === jobId ? report : null;
   const kind = verification?.kind || "awaiting";
   const canRepair = displayedReport?.state === "failed" && kind === "failed" &&
@@ -226,6 +237,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
     (project.development.pending.repairCount ?? 0) < 2;
   return <section className="panel">
     <div className="panel-title"><div><div className="eyebrow">REMOTE EXECUTION / TEST RUNNER</div><h3>Test e compilazione reali</h3></div><Cloud size={20} className="muted" /></div>
+    <RunnerTelemetry endpoint={endpoint} active={requesting || Boolean(report?.state === "running" || report?.state === "queued")} />
     <p className="helper">L'esito è associato all'impronta SHA-256 del codice inviato. Se la patch o il progetto cambiano, il risultato diventa automaticamente <strong>obsoleto</strong>.</p>
     {!endpoint && <div className="code-agent-warning"><ShieldAlert size={17}/> Configura URL e API key in Settings → Remote runner.</div>}
     {isRepair && !readSecret("runner.operator.key") &&
