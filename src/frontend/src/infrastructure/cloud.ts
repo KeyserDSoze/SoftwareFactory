@@ -1,5 +1,6 @@
 import type { CloudConfig, FactoryProject, FactorySettings } from "../domain/types";
 import { persistSettings, readSecret, saveSecret } from "./store";
+import { encryptRunnerCredential, decryptRunnerCredential, validateRunnerVault } from "./runner-vault";
 
 const OAUTH_STATE = "softwarefactory.oauth.state";
 const OAUTH_VERIFIER = "softwarefactory.oauth.verifier";
@@ -118,3 +119,83 @@ export async function restoreCloud(settings: FactorySettings): Promise<{ project
   return { project, settings: cloudSettings };
 }
 export function saveCloudConfig(settings: FactorySettings): void { persistSettings(settings); }
+
+const RUNNER_VAULT_NAME = "softwarefactory-runner-vault.v1.json";
+/**
+ * Separate app-folder object: a normal project/settings backup cannot erase the
+ * encrypted runner API key. The cloud service receives ciphertext only.
+ * Initial manual UX; compare-and-swap/concurrent-device merge is NOT implemented.
+ */
+async function runnerVaultCloudRequest(url: string, token: string, init: RequestInit = {}): Promise<Response> {
+  const response = await fetch(url, {
+    ...init, mode: "cors", redirect: "error", cache: "no-store",
+    headers: { Authorization: "Bearer " + token, ...init.headers },
+  });
+  if (!response.ok) throw Error("Cloud runner vault HTTP " + response.status + ".");
+  return response;
+}
+async function runnerVaultCloudLocation(provider: "google" | "microsoft", token: string): Promise<string | null> {
+  if (provider === "microsoft")
+    return "https://graph.microsoft.com/v1.0/me/drive/special/approot:/" + RUNNER_VAULT_NAME + ":/content";
+  const params = new URLSearchParams({
+    spaces: "appDataFolder", q: "name = '" + RUNNER_VAULT_NAME + "' and trashed = false",
+    fields: "files(id,name)", pageSize: "10",
+  });
+  const response = await runnerVaultCloudRequest("https://www.googleapis.com/drive/v3/files?" + params, token);
+  const list: unknown = await response.json();
+  if (!list || typeof list !== "object" || !("files" in list) ||
+      !Array.isArray(list.files) || list.files.length > 10)
+    throw Error("Risposta elenco vault cloud non valida.");
+  const ids = list.files as Array<{ id?: unknown }>;
+  if (ids.length > 1) throw Error("Sono presenti più vault con lo stesso nome: risolvere manualmente.");
+  if (!ids.length) return null;
+  if (typeof ids[0].id !== "string" || !/^[A-Za-z0-9_-]{8,200}$/.test(ids[0].id))
+    throw Error("Riferimento vault cloud non valido.");
+  return "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(ids[0].id);
+}
+export async function saveEncryptedRunnerVault(settings: FactorySettings, passphrase: string): Promise<void> {
+  const token = readSecret("cloud." + settings.cloud.provider);
+  const apiKey = readSecret("runner.key");
+  if (!token) throw Error("Connetti prima il cloud selezionato.");
+  if (!settings.runnerEndpoint || !apiKey) throw Error("Configura prima URL e API key del runner.");
+  // All secrets encrypted in-browser BEFORE any cloud request using only WebCrypto.
+  const encrypted = await encryptRunnerCredential(settings.runnerEndpoint, apiKey, passphrase);
+  const body = JSON.stringify(encrypted);
+  const provider = settings.cloud.provider;
+  const target = await runnerVaultCloudLocation(provider, token);
+  if (provider === "microsoft") {
+    await runnerVaultCloudRequest(target!, token, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body,
+    });
+  } else if (target) {
+    await runnerVaultCloudRequest("https://www.googleapis.com/upload/drive/v3/files/" +
+      target.split("/").at(-1) + "?uploadType=media", token, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body,
+    });
+  } else {
+    const boundary = "sfvault_" + crypto.randomUUID().replace(/-/g, "");
+    const payload = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" +
+      JSON.stringify({ name: RUNNER_VAULT_NAME, parents: ["appDataFolder"], mimeType: "application/json" }) +
+      "\r\n--" + boundary + "\r\nContent-Type: application/json\r\n\r\n" + body +
+      "\r\n--" + boundary + "--";
+    await runnerVaultCloudRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", token, {
+      method: "POST", headers: { "Content-Type": "multipart/related; boundary=" + boundary }, body: payload,
+    });
+  }
+}
+export async function restoreEncryptedRunnerVault(settings: FactorySettings, passphrase: string):
+  Promise<{ endpoint: string; apiKey: string }> {
+  const token = readSecret("cloud." + settings.cloud.provider);
+  if (!token) throw Error("Connetti prima il cloud selezionato.");
+  const provider = settings.cloud.provider;
+  const location = await runnerVaultCloudLocation(provider, token);
+  if (!location) throw Error("Nessun vault runner salvato nell'app folder.");
+  const url = provider === "microsoft" ? location : location + "?alt=media";
+  const response = await runnerVaultCloudRequest(url, token);
+  const bytes = await response.text();
+  if (bytes.length > 8192) throw Error("Vault runner cloud troppo grande.");
+  let encrypted: unknown;
+  try { encrypted = JSON.parse(bytes); } catch { throw Error("Vault runner non valido."); }
+  validateRunnerVault(encrypted);
+  return decryptRunnerCredential(encrypted, passphrase);
+}
