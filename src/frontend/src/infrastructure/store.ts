@@ -48,6 +48,25 @@ export function loadLocalProject(id: string): FactoryProject {
   return { ...project, stages: project.stages.map(s => s.status === "running" ?
     { ...s, status: "pending" as const } : s) };
 }
+/** A cross-tab lost-update guard for localStorage checkpoints. Not a global
+ * multi-device transaction; callers must fail closed and offer a user-controlled
+ * recovery path if another tab replaced the per-project snapshot.
+ */
+export function localProjectSnapshot(id: string): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) throw Error("ID progetto locale non valido.");
+  return localStorage.getItem(PROJECT_LIBRARY_PREFIX + id);
+}
+export function persistProjectIfUnchanged(project: FactoryProject, expected: string | null): string {
+  const current = localProjectSnapshot(project.id);
+  if (current !== expected)
+    throw Error("Conflitto locale: un'altra scheda ha modificato questo progetto. " +
+      "Salva un backup di recupero e ricarica la versione aggiornata, senza sovrascrivere.");
+  persistProject(project);
+  const confirmed = localProjectSnapshot(project.id);
+  if (!confirmed || confirmed !== JSON.stringify(project))
+    throw Error("Scrittura progetto locale non confermata.");
+  return confirmed;
+}
 export function persistProject(project: FactoryProject): void {
   const raw = JSON.stringify(project);
   localStorage.setItem(PROJECT_KEY, raw);
