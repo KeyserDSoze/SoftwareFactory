@@ -28,14 +28,15 @@ export default function RunnerTelemetry({ endpoint, authRevision = 0, active = f
         setState("offline"); setSample(null); return;
       }
       current?.abort();
-      current = new AbortController();
+      const controller = new AbortController();
+      current = controller;
       try {
-        const data = await fetchRunnerHostMetrics(endpoint, key, current.signal);
-        if (!stopped && !current.signal.aborted) {
+        const data = await fetchRunnerHostMetrics(endpoint, key, controller.signal);
+        if (!stopped && !controller.signal.aborted) {
           setSample(data); setState("online");
         }
       } catch {
-        if (!stopped && !current.signal.aborted) {
+        if (!stopped && !controller.signal.aborted) {
           setState("offline"); setSample(null);
         }
       }
