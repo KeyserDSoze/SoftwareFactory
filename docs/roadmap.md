@@ -750,3 +750,12 @@ Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
 - [ ] CAS IndexedDB per compatibilità cross-tab con vecchie versioni senza Web Locks; la libreria localStorage da sola resta best-effort.
 
 Decisione: [ADR 0049](../adr/0049-local-project-exclusive-writer-web-locks.md), [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92).
+
+## OIDC/PG generated E2E intermittent post ack — #93 (17 novembre 2026)
+
+- [x] Diagnosi: prima esecuzione [Factory CI 44147512726](https://github.com/KeyserDSoze/SoftwareFactory/actions/runs/44147512726) 17/18 full-stack, insert item non visibile dopo click; **rerun sul medesimo SHA passato** → intermittenza confermata, non automaticamente attribuibile al DB.
+- [x] OIDC generato: doppia notifica `userLoaded` / callback dello **stesso token** non deve incrementare `sessionEpoch` né cancellare lo stato di una POST in volo, mantenendo fences per token realmente diverso e logout terminale.
+- [x] E2E Chromium/Postgres: verificare POST /api/items `response.ok()` e status HTTP prima di attendere la riga; nessun retry occulto, timeout globale aumentato, test skip o token nei log.
+- [x] Test di generazione e ADR [0050](../adr/0050-oidc-session-idempotence-and-postgres-e2e.md).
+- [ ] Confermare full-stack 18/18 + Factory CI e Pages verdi sull'ultima SHA, poi stress regressione con login OIDC / refresh duplicati per evitare bug persistenti.
+- [ ] OIDC IdP reale esterno, token revocation production e ambiente VM rimangono nell'epica #9.
