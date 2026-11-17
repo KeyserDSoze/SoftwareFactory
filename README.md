@@ -454,3 +454,36 @@ vedi [guida runner](docs/runner.md) e [ADR 0044](adr/0044-runner-connector-onboa
 ## Installazione locale del connector su Linux — #88 (M2 di #87)
 
 La prima CLI **operator-only** `src/runner/scripts/host-install.mjs` consente di verificare senza modifiche un server Linux con Docker rootless e di avviare, **solo dopo doppio consenso**, i due servizi esistenti runner-api e runner-worker. Richiede UID 1000, checkout Git `main` **pulito** fissato con SHA-40, file `.env` privato e digest immutabile `node@sha256:...` per il canary. `--check` esegue solo preflight read-only Git/Compose/host e restituisce `ready_to_install`, non una prova di esecuzione. `--apply --confirm-install` richiede canary rootless con cleanup verificato e nessun Compose preesistente, avvia solo i due servizi su Docker rootless, poi controlla i container e le tre API di readiness **autenticate via loopback**. Segreti non devono essere scritti in CLI/URL/repo e non vengono mostrati nei risultati; il tunnel non è avviato. Errori e stack parziali richiedono ispezione manuale, senza cancellazioni automatiche. Seguire [la guida operatore](docs/runner.md). La CI usa mock del daemon per questi flussi, **non certifica** installazione su PC o VM rootless reale; M2-M5 di #87 restano aperte per collaudo host, update/uninstall/revoke, pairing e fullstack multiservizio. ADR 0044.
+
+
+## Software house multi-ruolo e profilo cloud (#89, prima iterazione)
+
+**Settings → Modelli e ruoli:** oltre alle sei fasi AI è disponibile un catalogo di
+23 ruoli (business analyst/developer, software/cloud/on-prem architect,
+PM, developer, tester, QA, fixer, reviewer, DevOps, release, writer ecc.).
+Puoi impostare per ciascun ruolo endpoint, modello e thinking (automatic,
+low, medium, high, xhigh), con ereditarietà dalla fase e dall'endpoint
+come in BookWriter. Le sei fasi e le operazioni Code Agent di sviluppo,
+review e fix **usano già il routing selezionato**. Gli altri ruoli sono
+*soltanto configurabili*: non esiste ancora un PM/scheduler persistente
+né un tester autonomo che chiuda il ciclo senza browser. Thinking esplicito
+invia `reasoning_effort`, automatico non lo invia; discovery /models e
+capability-specific routing restano previsti per la #89.
+
+Il backup manuale Google Drive appDataFolder / OneDrive app folder conserva
+settings (incluso URL runner, router dei ruoli e thinking) e progetto;
+il ripristino li applica anche su altro dispositivo. **Non conserva
+credenziali runner/AI/GitHub**: oggi restano in sessionStorage; vault E2EE
+con passphrase, revision/CAS e sync fra dispositivi come BookWriter
+sono da sviluppare. Non inserire chiavi di produzione nella SPA.
+
+**Setup host su PC/server Linux:** dopo avere installato Docker Engine rootless,
+Compose e Node.js sull'account dedicato uid 1000, si possono eseguire
+`node src/runner/scripts/host-setup.mjs setup --origin=https://<origin-della-spa>`
+e quindi `node src/runner/scripts/host-setup.mjs start`.
+Il primo genera localmente credenziali e file privati, il secondo verifica
+host/Compose e avvia API+worker. La configurazione del tunnel HTTPS/
+Cloudflare Access resta un'attività dell'operatore; GitHub Pages non trova
+automaticamente server privati. Vedi [guida runner](docs/runner.md),
+[ADR 0045](adr/0045-bookwriter-style-role-router-and-host-bootstrap.md)
+e [issue #89](https://github.com/KeyserDSoze/SoftwareFactory/issues/89).
