@@ -511,9 +511,9 @@ export default function App() {
         {tab === "workspace" && <>
           <section className="panel local-project-library">
             <div className="panel-title"><div><span className="eyebrow">LOCAL / PROJECTS</span>
-              <h3>{normalizeLocale(settings.language) === "en" ? "Your local projects" : "I tuoi progetti locali"}</h3></div>
+              <h3>{t(normalizeLocale(settings.language), "githubProjectsTitle")}</h3></div>
               <Layers3 size={18}/></div>
-            <label>{normalizeLocale(settings.language) === "en" ? "Open project" : "Apri progetto"}
+            <label>{t(normalizeLocale(settings.language), "githubProjectsOpen")}
               <select value={project.id} disabled={busy} onChange={e => switchProject(e.target.value)}>
                 {localProjects.some(x => x.id === project.id) ? null :
                   <option value={project.id}>{project.config.name} · corrente</option>}
@@ -679,9 +679,9 @@ export default function App() {
               "nessun primo commit confermato per questa destinazione"}.</p>
             <div className="button-group">
               <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
-                onClick={() => void importFromGithub("status")}><RefreshCw size={15}/> Verifica HEAD remota</button>
+                onClick={() => void importFromGithub("status")}><RefreshCw size={15}/> {t(normalizeLocale(settings.language), "githubRemoteHead")}</button>
               <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
-                onClick={() => void importFromGithub("import")}><Download size={15}/> Importa checkpoint GitHub</button>
+                onClick={() => void importFromGithub("import")}><Download size={15}/> {t(normalizeLocale(settings.language), "githubRemoteImport")}</button>
             </div>
             <p className="helper">Push atomico con Git Data API e fast-forward, senza force push. Per GitHub App serve un broker sicuro: non mettere una chiave privata App nella SPA. Il merge dei branch resta una decisione esplicita su GitHub.</p>
             <label className="checkline"><input type="checkbox" checked={publishConfirmed} onChange={e => setPublishConfirmed(e.target.checked)} /> Ho verificato file e visibilità della repository; autorizzo creazione e commit.</label>
