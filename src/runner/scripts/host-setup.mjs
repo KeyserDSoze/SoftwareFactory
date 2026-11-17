@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, openSync, writeSync, closeSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, openSync, writeSync, closeSync, unlinkSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,10 +34,21 @@ export function validateRunnerRoot(input, home = homedir()) {
     throw new Error("Usare una sottodirectory privata della HOME dell'utente dedicato.");
   return root;
 }
-export function renderRunnerEnv({ origin, root, apiKey }) {
+export function validateOperatorApiKey(apiKey) {
+  if (typeof apiKey !== "string" || !/^[A-Za-z0-9_+=.\-]{32,128}$/.test(apiKey) || apiKey.startsWith("REPLACE_"))
+    throw new Error("API key runner: almeno 32 caratteri sicuri, senza spazi o shell.");
+  return apiKey;
+}
+export function validateCloudflareToken(token) {
+  if (typeof token !== "string" || token.length < 64 || token.length > 4096 ||
+      !/^[A-Za-z0-9_.=+\/-]+$/.test(token) || token.startsWith("REPLACE_"))
+    throw new Error("Token Cloudflare Tunnel non valido o assente.");
+  return token;
+}
+export function renderRunnerEnv({ origin, root, apiKey, cloudflareToken = null }) {
   validateFactoryOrigin(origin);
-  if (!/^([a-f0-9]{64})$/.test(apiKey))
-    throw new Error("API key non valida: richiede 32 byte casuali.");
+  validateOperatorApiKey(apiKey);
+  if (cloudflareToken !== null) validateCloudflareToken(cloudflareToken);
   if (!isAbsolute(root) || /[\r\n=]/.test(root))
     throw new Error("Directory host non valida.");
   return [
@@ -49,7 +60,7 @@ export function renderRunnerEnv({ origin, root, apiKey }) {
     "RUNNER_DOCKER_SOCKET=/run/user/1000/docker.sock",
     "RUNNER_ALLOW_NET_DEPS=false",
     "RUNNER_MAX_ACCEPTED_PER_MINUTE=5",
-    "CLOUDFLARE_TUNNEL_TOKEN=REPLACE_ONLY_WHEN_USING_CLOUDFLARE",
+    "CLOUDFLARE_TUNNEL_TOKEN=" + (cloudflareToken ?? "REPLACE_ONLY_WHEN_USING_CLOUDFLARE"),
     "",
   ].join("\n");
 }
@@ -59,7 +70,7 @@ function assertPrivateDir(directory, uid) {
     throw new Error("Directory host non privata (owner/permessi/link): " + directory);
 }
 export function writePrivateHostConfig({ origin, root, destination = envFile, uid = process.getuid?.(),
-  secret = randomBytes(32).toString("hex") }) {
+  secret = randomBytes(32).toString("hex"), cloudflareToken = null }) {
   if (!Number.isInteger(uid) || uid < 1) throw new Error("Utente host non valido.");
   const home = homedir();
   const base = validateRunnerRoot(root, home);
@@ -73,7 +84,7 @@ export function writePrivateHostConfig({ origin, root, destination = envFile, ui
     mkdirSync(directory, { mode: 0o700 });
     assertPrivateDir(directory, uid);
   }
-  const text = renderRunnerEnv({ origin, root: base, apiKey: secret });
+  const text = renderRunnerEnv({ origin, root: base, apiKey: secret, cloudflareToken });
   let fd;
   try {
     fd = openSync(destination, "wx", 0o600);
@@ -90,7 +101,8 @@ function assertDedicatedHost() {
     throw new Error("Il bootstrap richiede Linux e un account dedicato uid 1000, non root.");
 }
 function runChecked(program, args) {
-  const r = spawnSync(program, args, { cwd: repoRoot, stdio: "inherit", timeout: 180000 });
+  const r = spawnSync(program, args, { cwd: repoRoot, stdio: "inherit", timeout: 180000,
+    env: { ...process.env, DOCKER_HOST: "unix:///run/user/1000/docker.sock" } });
   if (r.error || r.status !== 0) throw new Error("Preflight/installazione fallita: " + program + " (codice " + (r.status ?? "n/d") + ").");
 }
 export function main(argv = process.argv.slice(2)) {
@@ -108,12 +120,23 @@ export function main(argv = process.argv.slice(2)) {
       ". Credenziale NON mostrata. Eseguire node src/runner/scripts/host-setup.mjs start dopo i prerequisiti Docker rootless.\n");
     return;
   }
-  if (mode === "start" && flags.length === 0) {
+  if (mode === "start" && (flags.length === 0 || (flags.length === 1 && flags[0] === "--tunnel"))) {
     // Preflight requires a private .env (mode 0600) and real rootless Docker.
     runChecked(process.execPath, ["src/runner/preflight.mjs", "host", "--env-file=docker/runner/.env"]);
     runChecked(process.execPath, ["src/runner/preflight.mjs", "compose", "--env-file=docker/runner/.env"]);
+    if (flags.includes("--tunnel")) {
+      // Reject placeholder/invalid tokens before starting a flapping container.
+      const stat = lstatSync(envFile);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() ||
+          stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600)
+        throw new Error("File .env non privato.");
+      const token = readFileSync(envFile, "utf8").split("\\n").find(line => line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="))?.slice(24);
+      validateCloudflareToken(token);
+    }
     runChecked("docker", ["compose", "--env-file", "docker/runner/.env",
-      "-f", "docker/runner/compose.yml", "up", "-d", "--build"]);
+      "-f", "docker/runner/compose.yml",
+      ...(flags.includes("--tunnel") ? ["--profile", "tunnel"] : []),
+      "up", "-d", "--build"]);
     process.stdout.write("Servizi avviati; controllare /healthz e le readiness autenticate. Il tunnel pubblico richiede una configurazione separata.\n");
     return;
   }
