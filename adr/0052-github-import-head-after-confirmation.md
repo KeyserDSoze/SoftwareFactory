@@ -13,6 +13,7 @@ Un import manuale legge da GitHub un checkpoint riferito alla HEAD corrente. Il 
 - Prima e dopo l'ultima GET si controllano **l'identità dell'oggetto progetto corrente** e l'intera destinazione owner/repo/branch/config. Se qualcuno modifica il progetto o la destinazione durante una richiesta, l'import si annulla senza scrivere.
 - Il recupero resta manuale, read-only su GitHub, senza merge/force push o nuovo consenso pubblico. Un errore blocca il nuovo checkpoint e permette all'utente di ripetere la lettura.
 - I test Vitest simulano branch avanzato durante il fetch del checkpoint e durante il dialogo umano. Richiedono rifiuto fail-closed, nessuna operazione write in import, e validazione dello SHA.
+- La Factory CI ora esercita anche Chromium reale, tramite `factory-browser-lock-smoke.mjs`: un mock REST GitHub **solo GET** serve il checkpoint valido a SHA fissata, ma sposta la HEAD alla terza lettura dopo il consenso/backup browser. Il test verifica avviso di conflitto, HEAD letta tre volte, nessun POST/PATCH, backup effettivamente richiesto e progetto locale non sovrascritto. Non sono credenziali PAT né GitHub reali.
 
 ## Limiti
 

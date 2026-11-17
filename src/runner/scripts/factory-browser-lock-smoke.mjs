@@ -1,5 +1,5 @@
 /**
- * Real Chromium concurrency smoke for the Factory SPA (#92).
+ * Real Chromium concurrency and GitHub import race smoke for the Factory SPA (#91/#92).
  * Only trusted GitHub-hosted CI runs the outer Docker invocation. The browser
  * container is networkless, read-only, capability-dropped, with no Docker socket.
  * It serves the pre-built Factory SPA over container-local loopback.
@@ -148,6 +148,80 @@ if (!inside) {
     await expect(second.getByLabel("Nome progetto")).toHaveValue("Tab B recovered project safely");
     await context.close();
     console.log("FACTORY_BROWSER_LOCK_E2E_PASS: owner → blocked rival → explicit backup → takeover → concurrent distinct-project editor");
+
+    // Browser-level GitHub import race (#91/#92). No network is enabled:
+    // Playwright fulfils each GitHub REST GET with a synthetic checkpoint
+    // while the remote HEAD advances during the SECOND human confirmation.
+    const importContext = await browser.newContext({acceptDownloads:true});
+    try {
+      const page = await importContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      const before = await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1") || "{}"));
+      assert.match(before.id,/^[0-9a-f-]{36}$/i);
+      const remoteProject = {
+        id:before.id, createdAt:before.createdAt, updatedAt:before.updatedAt,
+        config:{...before.config,name:"Remote checkpoint that must NOT be imported"},
+        stages:before.stages,
+        ...(before.development ? {development: {
+          revision:before.development.revision,
+          overrides:before.development.overrides,
+          originals:before.development.originals,
+          history:before.development.history,
+        }} : {}),
+      };
+      const checkpoint=JSON.stringify({
+        schemaVersion:1,kind:"softwarefactory-workspace",project:remoteProject,
+      })+"\n";
+      const encoded=Buffer.from(checkpoint,"utf8").toString("base64");
+      const initialSha="a".repeat(40),advancedSha="f".repeat(40);
+      const pat="github_pat_"+"x".repeat(50);
+      await page.evaluate(token => {
+        const settings=JSON.parse(localStorage.getItem("softwarefactory.settings.v1") || "{}");
+        settings.git={owner:"octocat",repo:"demo",branch:"main",
+          privateRepo:true,authMode:"pat",appGateway:""};
+        settings.githubAutoSync=false;
+        localStorage.setItem("softwarefactory.settings.v1",JSON.stringify(settings));
+        sessionStorage.setItem("softwarefactory.secret.github.pat",token);
+      },pat);
+      let headReads=0,restCalls=0;
+      await page.route("https://api.github.com/**",async route => {
+        const request=route.request(),url=request.url();
+        assert.equal(request.method(),"GET","Import may not write to GitHub");
+        restCalls++;
+        let body;
+        if (url.endsWith("/repos/octocat/demo/git/ref/heads/main")) {
+          headReads++;
+          body={object:{sha:headReads>=3 ? advancedSha : initialSha}};
+        } else if (url.includes("/repos/octocat/demo/contents/.softwarefactory/workspace-state.v1.json?ref="+initialSha)) {
+          body={type:"file",encoding:"base64",size:Buffer.byteLength(checkpoint,"utf8"),content:encoded};
+        } else throw Error("Unexpected GitHub import route: "+url);
+        await route.fulfill({status:200,headers:{"access-control-allow-origin":"*",
+          "content-type":"application/json"},body:JSON.stringify(body)});
+      });
+      await page.reload({waitUntil:"networkidle"});
+      await page.getByTitle("Impostazioni").click();
+      const importButton=page.getByRole("button",{name:"Importa checkpoint GitHub"});
+      await expect(importButton).toBeEnabled({timeout:15000});
+      let confirmCount=0;
+      page.on("dialog",dialog => {confirmCount++;void dialog.accept();});
+      const backupPromise=page.waitForEvent("download",{timeout:20000});
+      await importButton.click();
+      const backup=await backupPromise;
+      assert.match(backup.suggestedFilename(),/^softwarefactory-recovery-[a-f0-9-]{36}\.json$/);
+      await expect(page.getByRole("alert")).toContainText("HEAD avanzata",{timeout:15000});
+      const after=await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}"));
+      assert.equal(after.config.name,before.config.name,"A stale import must not overwrite local work");
+      assert.equal(after.updatedAt,before.updatedAt);
+      assert.equal(after.githubSync?.lastCommit,before.githubSync?.lastCommit);
+      assert.equal(headReads,3,"HEAD should be checked on read, after fetch, and after human approval");
+      assert.equal(restCalls,4,"Only three HEAD GETs and one checkpoint GET should occur");
+      assert.equal(confirmCount,2,"Both destructive import confirmations must be accepted before the race guard");
+      console.log("FACTORY_GITHUB_IMPORT_RACE_E2E_PASS: synthetic GitHub GETs → approved backup → remote HEAD advance → local snapshot unchanged");
+    } finally {
+      await importContext.close();
+    }
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
