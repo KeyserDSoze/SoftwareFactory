@@ -107,6 +107,20 @@ export default function App() {
       setLocalConflict(error instanceof Error ? error.message : String(error));
     }
   }, []);
+  useEffect(() => {
+    const storageChanged = (event: StorageEvent) => {
+      const id = projectRef.current.id;
+      if (event.storageArea === localStorage &&
+          event.key === "softwarefactory.project.library.v1." + id &&
+          event.newValue !== localBaselineRef.current.get(id)) {
+        setLocalConflict("Un'altra scheda ha modificato il progetto aperto. " +
+          "Questa scheda non deve sovrascrivere la versione aggiornata.");
+        setPublishConfirmed(false);
+      }
+    };
+    window.addEventListener("storage", storageChanged);
+    return () => window.removeEventListener("storage", storageChanged);
+  }, []);
   useEffect(() => { settingsRef.current = settings; persistSettings(settings); }, [settings]);
   // GitHub auto-save runs only while this browser tab is open and ONLY after
   // an explicitly approved first push + an opt-in. A durable, non-secret outbox
@@ -251,10 +265,10 @@ export default function App() {
     }
   }
   function editConfig(change: (config: ProjectConfig) => void) {
-    if (busy) return;
+    if (busy || localConflict) return;
     const config = structuredClone(projectRef.current.config);
     change(config);
-    changeProject(invalidateStages(updateConfig(projectRef.current, config)));
+    if (!changeProject(invalidateStages(updateConfig(projectRef.current, config)))) return;
     setNotice("Configurazione aggiornata. Le analisi precedenti sono state invalidate per coerenza.");
     setPublishConfirmed(false);
   }
@@ -282,7 +296,7 @@ export default function App() {
   }
   function clearMessages() { setError(""); setNotice(""); }
   async function execute(from: StageId, runAll: boolean) {
-    if (busy) return;
+    if (busy || localConflict) return;
     clearMessages();
     if (!projectRef.current.config.name.trim() || !projectRef.current.config.description.trim()) {
       setError("Inserisci nome e descrizione prima di avviare il workflow."); setTab("workspace"); return;
@@ -300,7 +314,7 @@ export default function App() {
         activeStage = id; setSelectedStage(id);
         let working = { ...projectRef.current, stages: projectRef.current.stages.map(s =>
           s.id === id ? { ...s, status: "running" as const, error: undefined } : s) };
-        changeProject(working);
+        if (!changeProject(working)) throw Error("Workspace locale in conflitto: stage AI non avviato.");
         setOperation(STAGES[i].label);
         setRunLog(log => [formatDate(new Date().toISOString()) + " · Avvio: " + STAGES[i].label, ...log].slice(0, 30));
         const result = await runStage(working, settingsRef.current, id, controller.signal, sources => {
@@ -309,7 +323,7 @@ export default function App() {
         });
         if (controller.signal.aborted) break;
         working = commitStage(working, id, result.output, result.sources);
-        changeProject(working);
+        if (!changeProject(working)) throw Error("Il checkpoint AI non è stato salvato: progetto modificato da un\u0027altra scheda.");
         setRunLog(log => [formatDate(new Date().toISOString()) + " · Completato: " + STAGES[i].label, ...log].slice(0, 30));
       }
       if (controller.signal.aborted) setNotice("Pipeline in pausa. Nessuna risposta interrotta è stata salvata.");
@@ -320,12 +334,12 @@ export default function App() {
         const message = e instanceof Error ? e.message : String(e);
         const failed = { ...projectRef.current, stages: projectRef.current.stages.map(s =>
           s.id === activeStage ? { ...s, status: "failed" as const, error: message } : s) };
-        changeProject(failed); setError(message);
+        if (!localConflict) changeProject(failed); setError(message);
         setRunLog(log => [formatDate(new Date().toISOString()) + " · Errore: " + activeStage + " — " + message, ...log].slice(0, 30));
       }
     } finally {
       if (controller.signal.aborted) {
-        changeProject({ ...projectRef.current, stages: projectRef.current.stages.map(s =>
+        if (!localConflict) changeProject({ ...projectRef.current, stages: projectRef.current.stages.map(s =>
           s.status === "running" ? { ...s, status: "pending" as const } : s) });
       }
       setBusy(false); setOperation(""); abortRef.current = null;
@@ -539,7 +553,8 @@ export default function App() {
       else {
         if (!confirm("Ripristinare il progetto dal cloud e sostituire quello locale corrente?")) return;
         const recovered = await restoreCloud(settingsRef.current);
-        changeProject({ ...recovered.project, stages: recovered.project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) });
+        if (!changeProject({ ...recovered.project, stages: recovered.project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) }))
+          throw Error("Ripristino cloud non applicato: conflitto locale.");
         if (recovered.settings) editSettings(s => {
           s.profiles = recovered.settings!.profiles;
           s.assignments = recovered.settings!.assignments;
