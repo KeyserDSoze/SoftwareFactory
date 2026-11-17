@@ -10,14 +10,31 @@ const SHA = /^[a-f0-9]{40}$/i;
 const SECRET = /github_pat_[A-Za-z0-9_]{15,}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-proj-|sk-[A-Za-z0-9]{24,})/;
 const keys = (v: object) => Object.keys(v).sort().join("|");
 const STAGES = ["features","competitors","technical","architecture","adversarial","implementation"];
+/** Never transfer device-bound runner attestations or a previously accepted
+ * adversarial verdict. The new device must re-review pending patches and run
+ * its own tests; pending repairs cannot inherit old operator session grants.
+ */
+export function portableGithubProject(project: FactoryProject): FactoryProject {
+  const dev = project.development;
+  return {
+    id: project.id, config: project.config, stages: project.stages,
+    createdAt: project.createdAt, updatedAt: project.updatedAt,
+    ...(dev ? { development: {
+      revision: dev.revision, overrides: dev.overrides, originals: dev.originals,
+      history: dev.history,
+      ...(dev.pending ? { pending: {
+        ...dev.pending,
+        review: undefined, repairSession: undefined, repairTrail: undefined,
+      } } : {}),
+      // NOT lastRunnerJobId / lastRunnerEvidence: those are local attestation
+      // bindings, NOT portable proofs for a different device.
+    } } : {}),
+  };
+}
 export function encodeGithubWorkspace(project: FactoryProject): string {
   // Validate exact allowed editable code paths before sending the checkpoint.
   workspaceFiles(project);
-  const safe = {
-    id: project.id, config: project.config, stages: project.stages,
-    createdAt: project.createdAt, updatedAt: project.updatedAt,
-    ...(project.development ? { development: project.development } : {}),
-  };
+  const safe = portableGithubProject(project);
   const content = JSON.stringify({ schemaVersion: 1, kind: "softwarefactory-workspace",
     project: safe }) + "\n";
   if (content.length > 440000) throw Error("Checkpoint troppo grande per la sincronizzazione GitHub.");
@@ -70,7 +87,7 @@ export function decodeGithubWorkspace(text: string): FactoryProject {
     { ...s, status: "pending" as const } : s);
   // Will reject incompatible baseline and modified file conflicts, without executing code.
   try { workspaceFiles(project); } catch { throw Error("Checkpoint GitHub non compatibile con il generatore corrente."); }
-  return project;
+  return portableGithubProject(project);
 }
 export const GITHUB_WORKSPACE_PATH = PATH;
 export type RemoteGithubWorkspace = { headSha: string; project: FactoryProject | null };
