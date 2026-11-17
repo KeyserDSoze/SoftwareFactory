@@ -62,6 +62,7 @@ export interface CloudConfig {
   clientId: string;
 }
 export interface FactorySettings {
+  language?: "it" | "en";
   profiles: AiProfile[];
   assignments: Record<StageId, string>;
   /** Per-role model/endpoint/effort override, saved in cloud configuration. */
@@ -78,6 +79,12 @@ export interface FactoryProject {
   createdAt: string;
   updatedAt: string;
   development?: DevelopmentWorkspace;
+  /** Non-secret GitHub Actions dispatch binding; PAT stays in sessionStorage. */
+  githubTestReceipt?: {
+    requestId: string; repository: string; branch: string; commitSha: string;
+    createdAt: string; selected: ("dotnet-build"|"dotnet-test"|"web-build"|"web-test"|"playwright")[];
+    runId?: number;
+  };
 }
 export interface Activity {
   id: string;
