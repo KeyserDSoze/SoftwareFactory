@@ -740,3 +740,9 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 ## Release candidate sperimentale del runner (#90)
 
 Il workflow `.github/workflows/release-installer.yml` accetta dispatch manuale per tag stabili o prerelease, ma può anche pubblicare un `vX.Y.Z-rc.N` automaticamente dopo `Factory CI` conclusa **success** sullo stesso SHA `main` e nello stesso repository, **solo quando il commit contiene** `.github/installer-release.version`. Il checkout è pinned al SHA CI, mai a branch arbitrario. Non pubblicare release candidate da PR o fork. Il job è idempotente se la Release esiste e non modifica tag. Asset checksum e guide IT/EN indispensabili. La SPA mostra avviso su prerelease e non esegue installazione. Prerelease != VM test o production readiness: mantenere issue #87/#90 aperte fino a test on-host.
+
+## Lock esclusivo per progetto locale (#92, ADR 0049)
+
+`project-writer-lease.ts` protegge i salvataggi nel browser via Web Locks **per tutta la permanenza nell'editor**, non con un lock momentaneo sul singolo `localStorage.setItem`. Ogni write attraverso `changeProject` deve essere rifiutata se `writerLeaseRef` non è attivo per l'ID attuale. Per cambi ID, import GitHub e cloud restore **prima acquisire il nuovo lease**, persistere con baseline `persistProjectIfUnchanged`, **poi rilasciare il precedente**. Chiudendo la scheda il browser rilascia il lease; non sostituire con TTL non atomico in localStorage. Se Web Locks mancano, l'app è read-only; mai fallback a write concorrenti. La UI consente recovery soltanto dopo export JSON e conferma.
+
+Verifica `project-writer-lease.test.ts` e `src/runner/scripts/factory-browser-lock-smoke.mjs` (Chromium networkless Docker) in Factory CI. Non promettere CAS transazionale tra **browser diversi/profili/dispositivi**; GitHub ha guard HEAD e force:false separati. Prima di dichiarare CI verde attendere workflow dell'ultimo commit e controllare esplicitamente lo step Browser E2E.
