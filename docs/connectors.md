@@ -61,3 +61,11 @@ Questa opzione non sostituisce le verifiche Docker rootless, la firma dei rappor
 - **Limiti**: OAuth Google/Microsoft session-only, test veri di provider PAT/CORS e macchine non ancora certificati. OneDrive CAS non sostituisce lease cross-device; Google version-check non è transazionale. Il vault cifrato limita l'esposizione at-rest, **non** XSS dopo unlock. Per la revoca usare i controlli GitHub reali, non una cancellazione locale.
 
 Per architettura e rischi vedi [ADR 0048](../adr/0048-github-pat-project-sync-bookwriter-parity.md) e [issue #91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91).
+
+### Aggiornamento sicurezza e recupero (#92)
+
+Le autorizzazioni di pubblicazione in repository **pubbliche** sono ora legate alla identità completa owner/repo/branch: non possono essere trasferite a un'altra repo cambiando i campi. Il client verifica la visibilità reale GitHub prima di inviare contenuti. La PATCH `force:false` è seguita da readback HEAD dello SHA atteso; una risposta persa o un branch avanzato non viene considerato sincronizzato.
+
+`Settings → GitHub → Verifica HEAD remota` apre un confronto limitato dei path dei file generati, ID progetto, branch e commit; è una *anteprima*, non un merge. `Importa checkpoint GitHub` in caso di divergenze scarica un JSON di recupero del progetto locale e richiede una seconda conferma: il browser può impedire il download, quindi l'utente deve verificare effettivamente di averlo salvato. Il checkpoint importato non eredita test runner, review pending o sessioni di repair precedenti.
+
+Con due schede che modificano lo stesso progetto, la copia locale per-project viene confrontata con la baseline salvata; quando è diversa, le scritture dalla scheda obsoleta si fermano e compare «Conflitto locale tra schede». Il pulsante di recupero fa salvare un backup JSON prima di caricare la copia aggiornata. Questo è un controllo anti-overwrite **best-effort**, non un CAS atomico cross-tab e non sostituisce un lock GitHub multi-dispositivo. È richiesto test reale concorrente prima di certificare la parità BookWriter.
