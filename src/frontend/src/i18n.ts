@@ -1,0 +1,63 @@
+/** Incremental UI i18n (issue #90). Italian/English for installer and Actions;
+ * legacy Studio sections remain Italian until migrated to these keys.
+ */
+export type FactoryLocale = "it" | "en";
+export const messages = {
+  it: {
+    language: "Lingua", installerTitle: "Installa runner Linux", releaseLookup: "Ricerca ultima Release...",
+    releaseAvailable: "Installer disponibile", releaseMissing: "Nessuna release pubblicata o GitHub non raggiungibile.",
+    releaseDownload: "Scarica installer (.tar.gz)", releaseChecksum: "Scarica SHA-256",
+    releaseNotes: "Apri la pagina GitHub Releases", installGuide: "Guida passo-passo",
+    installGuideLink: "Guida completa in italiano", guideOne: "Scarica installer e SHA-256; verifica sha256sum -c prima di estrarre.",
+    guideTwo: "Su Ubuntu/Debian dedicato prepara Node.js 22, Git, sudo e account non-root UID 1000.",
+    guideThree: "Crea un Cloudflare Tunnel nel tuo account e copia il connector token.",
+    guideFour: "Estrai l'archivio ed esegui node src/runner/scripts/interactive-install.mjs in terminale.",
+    guideFive: "Conferma INSTALLA, inserisci URL HTTPS e token nascosto; genera o digita una API key sicura.",
+    guideSix: "In Cloudflare aggiungi Published application con Service HTTP http://runner-api:8787; configura Access e preflight OPTIONS.",
+    guideSeven: "Inserisci URL HTTPS + API key in Settings, verifica il connector e prova reboot e un test reale.",
+    guideWarning: "Il download non installa nulla dal browser. Installer sperimentale: prova su VM dedicata; non usare server condivisi.",
+    githubTestsTitle: "Test GitHub Actions", githubTestsExplain: "Alternativa al runner Docker: avvia test sulla repository generata mediante PAT e recupera l'artifact JSON.",
+    githubTestsPermission: "Il PAT richiede Contents:read e Actions:read/write sulla repository. Il workflow deve essere presente sul branch predefinito. Nessun PAT viene passato ai test.",
+    githubTestsStart: "Avvia test su GitHub Actions", githubTestsCheck: "Controlla avanzamento", githubTestsRead: "Leggi artifact JSON",
+    githubTestsSelect: "Seleziona i test", githubTestsConfirmed: "Autorizzo ad avviare il workflow sui sorgenti già pubblicati su GitHub.",
+    githubTestsPending: "In attesa del workflow GitHub", githubTestsRunning: "Workflow in esecuzione", githubTestsDone: "Workflow terminato",
+    githubTestsVerified: "Report JSON verificato", githubTestsNotVerified: "Report non ancora verificato o impossibile da leggere nel browser.",
+    githubTestsOpen: "Apri workflow su GitHub", githubTestsReportCounts: "Step eseguiti",
+    githubTestsStale: "Il report GitHub è valido solo per il commit SHA registrato, non prova che l'attuale progetto locale sia identico.",
+    githubTestsNoRepair: "I log sono dati non fidati; non autorizzano da soli fix automatici o approvazioni delle patch.",
+    backendChoice: "Dove eseguire i test", backendLocal: "Server Docker", backendActions: "GitHub Actions",
+    notImplemented: "Non implementato su questo progetto", offline: "Non disponibile", busy: "Invio...",
+  },
+  en: {
+    language: "Language", installerTitle: "Install Linux runner", releaseLookup: "Checking latest Release...",
+    releaseAvailable: "Installer available", releaseMissing: "No published release found or GitHub unavailable.",
+    releaseDownload: "Download installer (.tar.gz)", releaseChecksum: "Download SHA-256",
+    releaseNotes: "Open GitHub Releases", installGuide: "Step-by-step guide",
+    installGuideLink: "Full guide in English", guideOne: "Download the installer and SHA-256 file; run sha256sum -c before extracting.",
+    guideTwo: "Prepare a dedicated Ubuntu/Debian machine with Node.js 22, Git, sudo and non-root UID 1000.",
+    guideThree: "Create a Cloudflare Tunnel in your account and copy its connector token.",
+    guideFour: "Extract the archive and run node src/runner/scripts/interactive-install.mjs in a terminal.",
+    guideFive: "Confirm INSTALLA, enter the HTTPS URL and hidden token; generate or enter a strong API key.",
+    guideSix: "In Cloudflare add a Published application with HTTP service http://runner-api:8787; configure Access and OPTIONS preflight.",
+    guideSeven: "Enter HTTPS URL + API key in Settings, verify the connector, test reboot and execute a real test.",
+    guideWarning: "The browser downloads but does not install software. Experimental installer: use a dedicated VM, not a shared server.",
+    githubTestsTitle: "GitHub Actions tests", githubTestsExplain: "Alternative to your Docker runner: dispatch tests on the generated repository using a PAT and retrieve the JSON artifact.",
+    githubTestsPermission: "The PAT needs Contents:read and Actions:read/write for the repository. The workflow must exist on the default branch. No PAT is passed to tests.",
+    githubTestsStart: "Start GitHub Actions tests", githubTestsCheck: "Check workflow", githubTestsRead: "Read JSON artifact",
+    githubTestsSelect: "Select tests", githubTestsConfirmed: "I approve dispatching the workflow against the sources already published on GitHub.",
+    githubTestsPending: "Waiting for GitHub workflow", githubTestsRunning: "Workflow running", githubTestsDone: "Workflow completed",
+    githubTestsVerified: "JSON report verified", githubTestsNotVerified: "Report not yet verified or cannot be read by this browser.",
+    githubTestsOpen: "Open workflow on GitHub", githubTestsReportCounts: "Executed steps",
+    githubTestsStale: "The GitHub report is bound to the recorded commit SHA, not proof that your current local project is identical.",
+    githubTestsNoRepair: "Logs are untrusted inputs and do not authorize automatic fixes or patch approvals on their own.",
+    backendChoice: "Test execution backend", backendLocal: "Docker server", backendActions: "GitHub Actions",
+    notImplemented: "Not implemented in this project", offline: "Unavailable", busy: "Submitting...",
+  },
+} as const;
+export type MessageKey = keyof typeof messages.it;
+export function t(language: FactoryLocale, key: MessageKey): string {
+  return messages[language]?.[key] ?? messages.it[key];
+}
+export function normalizeLocale(value: unknown): FactoryLocale {
+  return value === "en" ? "en" : "it";
+}
