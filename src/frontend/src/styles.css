@@ -22,3 +22,16 @@ button.primary,button.secondary,button.outline,button.subtle,button.danger-butto
 .runner-connector-setup .runner-setup-code{max-width:100%;overflow-x:auto;white-space:pre;line-height:1.65;padding:14px;border-radius:9px;background:#19283d;color:#e7f4fa;font-size:11px}
 .runner-connector-setup [role="status"]{margin-top:12px;display:flex;align-items:flex-start;gap:9px}
 .runner-connector-setup [role="status"] small{display:block;line-height:1.55;margin-top:5px}
+
+/* BookWriter-inspired software house role router (#89). */
+.agent-roles-panel{margin-top:20px;padding-top:17px;border-top:1px solid #e9edf4}
+.agent-roles-group{border:1px solid #e4eaf2;border-radius:10px;margin:10px 0;background:#fbfcff}
+.agent-roles-group>summary{cursor:pointer;padding:13px 15px;font-size:12px;font-weight:800;color:#354762}
+.agent-role-row{padding:14px 15px;border-top:1px solid #e7ebf2}
+.agent-role-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.agent-role-heading strong{font-size:12px}
+.agent-role-heading span{font-size:10px;color:#718197}
+.agent-role-row>.helper{margin:6px 0 11px}
+.agent-role-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.agent-role-fields label{min-width:0}
+@media(max-width:780px){.agent-role-fields{grid-template-columns:1fr}}
