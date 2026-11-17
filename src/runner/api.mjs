@@ -128,6 +128,8 @@ export function createRunnerServer({
       send(401, { error: "unauthorized" }); return;
     }
     if (req.method === "GET" && req.url === "/v1/host-metrics") {
+      // No per-tenant authorization model for global host usage: deny tenant mode.
+      if (tenantMode) { send(404, { error: "not_found" }); return; }
       // The API reads only bounded aggregate snapshots from its shared data mount.
       // The worker has Docker access; this process does not. Never read /proc on API.
       try {
