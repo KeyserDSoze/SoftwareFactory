@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Server, ShieldAlert, Terminal } from "lucide-react";
 import { probeRunnerConnector, runnerEndpoint, type RunnerConnectorProbe } from "../infrastructure/runner";
 import { readSecret } from "../infrastructure/store";
+import InstallerReleasePanel from "./InstallerReleasePanel";
+import type { FactoryLocale } from "../i18n";
 
 type Host = "local" | "server";
 
@@ -9,7 +11,7 @@ type Host = "local" | "server";
  * Guided, non-destructive install/link flow. The browser never runs shell,
  * uses SSH or downloads the runner host's secrets.
  */
-export default function RunnerConnectorSetup({ endpoint, authRevision }: { endpoint: string; authRevision: number }) {
+export default function RunnerConnectorSetup({ endpoint, authRevision, locale }: { endpoint: string; authRevision: number; locale: FactoryLocale }) {
   const [host, setHost] = useState<Host>("local");
   const [status, setStatus] = useState<RunnerConnectorProbe | null>(null);
   const [checking, setChecking] = useState(false);
@@ -67,6 +69,7 @@ node src/runner/scripts/host-setup.mjs start
 
   return <div className="runner-connector-setup">
     <div className="panel-subtitle"><Server size={15} /> Installa o collega il tuo connector Linux</div>
+    <InstallerReleasePanel locale={locale} />
     <p className="helper">
       Il servizio API e il worker sono già disponibili nel repository. Il browser può mostrare
       i passaggi di installazione e verificarne l'accessibilità, ma non installa software via SSH
@@ -82,7 +85,7 @@ node src/runner/scripts/host-setup.mjs start
       ? "Sul PC Linux con Docker rootless e Node.js, usa http://localhost:8787 soltanto quando il browser gira sullo stesso PC. In caso contrario configura un accesso HTTPS."
       : "Sulla VM dedicata usa Docker rootless, directory private e firewall. L'API Compose ascolta solo su 127.0.0.1; per raggiungerla da remoto configura separatamente HTTPS/Tunnel e Access."}</p>
     <p className="helper">
-      Dopo avere installato Node.js su Ubuntu/Debian e predisposto un account Linux
+      Preferisci scaricare il pacchetto nella sezione Release qui sopra: la versione rilasciata è archiviata e verificabile. Alternativamente, per sviluppo su main,\n      Dopo avere installato Node.js su Ubuntu/Debian e predisposto un account Linux
       dedicato UID 1000 con sudo, esegui i comandi <strong>direttamente sul server</strong>.
       L'installer richiede autorizzazione prima di installare Docker da repository
       apt firmato, il token Cloudflare via terminale senza eco e una API key
