@@ -16,7 +16,7 @@ function make() {
   project.config.description = "Generate an app with verified checkpoint";
   return project;
 }
-function bound(p: FactoryProject) {
+function bound(p: FactoryProject): FactoryProject {
   return {...p, githubSync:{owner:git.owner,repo:git.repo,branch:git.branch,
     lastCommit:OLD,syncedLocalUpdatedAt:p.updatedAt,syncedAt:"2026-11-17T10:00:00.000Z"}};
 }
