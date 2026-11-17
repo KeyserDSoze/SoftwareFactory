@@ -125,6 +125,20 @@ export async function pushGeneratedFiles(git: GitConfig, token: string, files: R
  * insufficient: someone may have updated the checkpoint but not the sources.
  * This does not prove the author of a commit or the absence of other files.
  */
+/** Re-read the branch HEAD after a human confirmation. A confirmation dialog
+ * can remain open while another device advances the branch. This is a
+ * read-only last-moment guard, not an inter-device transaction or lease.
+ */
+export async function readGithubHeadSha(git: GitConfig, token: string): Promise<string> {
+  validateGitConfig(git);
+  const ref = await request<{object?:{sha?:string}}>(
+    "/repos/" + git.owner + "/" + git.repo + "/git/ref/heads/" +
+    git.branch.split("/").map(encodeURIComponent).join("/"), token);
+  if (!/^[a-f0-9]{40}$/i.test(ref?.object?.sha || ""))
+    throw new GitHubError("HEAD GitHub non valida.");
+  return ref.object!.sha!;
+}
+
 export async function gitBlobObjectSha(content: string): Promise<string> {
   if (typeof content !== "string" || typeof globalThis.crypto?.subtle?.digest !== "function")
     throw new GitHubError("Hash Git non disponibile nel browser: nessun riconoscimento automatico.");
