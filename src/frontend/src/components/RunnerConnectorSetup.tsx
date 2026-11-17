@@ -51,16 +51,19 @@ export default function RunnerConnectorSetup({ endpoint, authRevision }: { endpo
     }
   };
 
-  const commands = `# Prima: installa Docker Engine ROOTLESS, Docker Compose e Node.js
-# Accedi come utente dedicato Linux UID 1000 (non root).
+  const commands = `# Ubuntu/Debian dedicato: prima installa Node.js e disponi di sudo.
+# Accedi come utente Linux dedicato UID 1000 (NON root).
 git clone https://github.com/KeyserDSoze/SoftwareFactory.git
 cd SoftwareFactory
+node src/runner/scripts/interactive-install.mjs
+# L'installer richiede conferma esplicita INSTALLA prima di usare sudo,
+# poi origin GitHub Pages, hostname HTTPS e token Cloudflare nascosto,
+# API key personalizzata oppure generata. Installa Docker rootless,
+# riavvio systemd user/linger e il container cloudflared via Compose.`;
+  const manualCommands = `# Alternativa se Docker rootless è già predisposto:
 node src/runner/scripts/host-setup.mjs setup --origin=${location.origin}
-# Crea .env privato (0600), key random e directory private (0700).
-# La chiave si legge soltanto sul server e si inserisce in Settings → Runner API key.
 node src/runner/scripts/host-setup.mjs start
-# Esegue preflight host+Compose; se OK avvia API + worker.
-# Per connessioni remote, configura separatamente Tunnel/HTTPS.`;
+# Per Tunnel: token nel file privato .env e poi start --tunnel.`;
 
   return <div className="runner-connector-setup">
     <div className="panel-subtitle"><Server size={15} /> Installa o collega il tuo connector Linux</div>
@@ -79,12 +82,24 @@ node src/runner/scripts/host-setup.mjs start
       ? "Sul PC Linux con Docker rootless e Node.js, usa http://localhost:8787 soltanto quando il browser gira sullo stesso PC. In caso contrario configura un accesso HTTPS."
       : "Sulla VM dedicata usa Docker rootless, directory private e firewall. L'API Compose ascolta solo su 127.0.0.1; per raggiungerla da remoto configura separatamente HTTPS/Tunnel e Access."}</p>
     <p className="helper">
-      Dopo aver installato Docker rootless, Docker Compose e Node.js, esegui questi comandi
-      <strong> sul PC/server scelto</strong> con un utente dedicato Linux UID 1000.
-      Lo script crea chiave e file .env 0600 senza stamparli o inviarli al browser.
-      Controlla manualmente la configurazione prima di avviare servizi non fidati.
+      Dopo avere installato Node.js su Ubuntu/Debian e predisposto un account Linux
+      dedicato UID 1000 con sudo, esegui i comandi <strong>direttamente sul server</strong>.
+      L'installer richiede autorizzazione prima di installare Docker da repository
+      apt firmato, il token Cloudflare via terminale senza eco e una API key
+      personalizzata o generata. Il servizio Cloudflare viene installato come container
+      restartable nello stack rootless, non come processo privilegiato sull'host.
     </p>
     <pre className="runner-setup-code">{commands}</pre>
+    <details><summary>Bootstrap manuale su Docker rootless già installato</summary>
+      <pre className="runner-setup-code">{manualCommands}</pre>
+    </details>
+    <p className="helper"><strong>Cloudflare:</strong> crea prima un tunnel nel pannello
+      Zero Trust e copia il token del connettore. Nell'installer inserisci l'URL HTTPS
+      pubblico che userai (es. https://runner.example.com); al termine configura
+      il Public Hostname del tunnel con service <code>http://runner-api:8787</code>
+      (porta interna 8787, non localhost del container). Il DNS e Access si
+      configurano sul tuo account Cloudflare. Abilita i preflight CORS/OPTIONS.
+      Il token rimane sull'host; la API key si usa in questa app.</p>
     <p className="helper">Il preflight deve essere superato prima dell'avvio.
       Per prerequisiti, permessi, creazione directory e configurazione del tunnel consulta{" "}
       <a href="https://github.com/KeyserDSoze/SoftwareFactory/blob/main/docs/runner.md"
