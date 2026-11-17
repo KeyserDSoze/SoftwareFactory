@@ -89,6 +89,7 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
   const writerLeaseRef = useRef<ProjectWriterLease | null>(null);
+  const projectSwitchRef = useRef(false);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -268,6 +269,10 @@ export default function App() {
   const paths = Object.keys(files).sort();
   const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
   function changeProject(nextProject: FactoryProject): boolean {
+    if (projectSwitchRef.current && nextProject.id === projectRef.current.id) {
+      setError("Cambio progetto in corso: modifica rimandata.");
+      return false;
+    }
     if (!writerLeaseRef.current || writerLeaseRef.current.projectId !== nextProject.id) {
       setError("Scrittura rifiutata: il progetto non ha il lock esclusivo della scheda. " +
         "Chiudi eventuali schede concorrenti e riprova.");
@@ -295,18 +300,26 @@ export default function App() {
     }
   }
   async function changeProjectWithLease(nextProject: FactoryProject): Promise<boolean> {
+    if (projectSwitchRef.current)
+      throw Error("Cambio progetto già in corso: la nuova operazione è stata annullata.");
+    projectSwitchRef.current = true;
     const old = writerLeaseRef.current;
-    if (old?.projectId === nextProject.id) return changeProject(nextProject);
-    const lease = await acquireProjectWriterLease(nextProject.id);
-    writerLeaseRef.current = lease;
-    setWriterLeaseReady(true);
-    if (!changeProject(nextProject)) {
-      writerLeaseRef.current = old;
-      lease.release();
-      return false;
+    try {
+      if (old?.projectId === nextProject.id) return changeProject(nextProject);
+      setWriterLeaseReady(false);
+      const lease = await acquireProjectWriterLease(nextProject.id);
+      writerLeaseRef.current = lease;
+      if (!changeProject(nextProject)) {
+        writerLeaseRef.current = old;
+        lease.release();
+        return false;
+      }
+      old?.release();
+      return true;
+    } finally {
+      projectSwitchRef.current = false;
+      setWriterLeaseReady(Boolean(writerLeaseRef.current));
     }
-    old?.release();
-    return true;
   }
   function editConfig(change: (config: ProjectConfig) => void) {
     if (busy || localConflict) return;
@@ -400,7 +413,10 @@ export default function App() {
     } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
   }
   async function switchProject(id: string) {
-    if (busy || localConflict || !writerLeaseReady || id === projectRef.current.id) return;
+    if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current ||
+        id === projectRef.current.id) return;
+    projectSwitchRef.current = true;
+    setWriterLeaseReady(false);
     try {
       const selected = loadLocalProject(id);
       if (!confirm("Passare a «" + selected.config.name + "»? " +
@@ -434,6 +450,10 @@ export default function App() {
       setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
       setNotice("Progetto locale aperto. Verifica destinazione GitHub e sblocca il PAT prima di pubblicare.");
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally {
+      projectSwitchRef.current = false;
+      setWriterLeaseReady(Boolean(writerLeaseRef.current));
+    }
   }
   function downloadZip() {
     clearMessages();
