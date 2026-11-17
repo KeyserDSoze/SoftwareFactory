@@ -1,4 +1,5 @@
 import type { FactoryProject, FrontendKind, ProjectConfig } from "../domain/types";
+import { githubTestWorkflow, githubTestScript, GITHUB_TEST_WORKFLOW_PATH, GITHUB_TEST_SCRIPT_PATH } from "./github-test-workflow";
 
 const PLAYWRIGHT_VERSION = "1.64.1"; // Keep in sync with the runner browser image.
 function lines(...parts: string[]): string { return parts.join("\n") + "\n"; }
@@ -958,5 +959,19 @@ export function generateFiles(project: FactoryProject): Record<string, string> {
       "metadata:", "  name: " + slug + "-api", "spec:", "  selector:",
       "    app: " + slug + "-api", "  ports:", "    - port: 80", "      targetPort: 8080");
   }
+  // A second test backend: the user may manually dispatch an allowlisted
+  // workflow with a GitHub PAT. Never commit a PAT or dispatch automatically.
+  files[GITHUB_TEST_WORKFLOW_PATH] = githubTestWorkflow(c.dotnetVersion);
+  files[GITHUB_TEST_SCRIPT_PATH] = githubTestScript;
+  files["README.md"] += "\n## SoftwareFactory test via GitHub Actions (opzionale)\n\n" +
+    "Dopo il push sul branch predefinito, avvia manualmente il workflow " +
+    "`SoftwareFactory selectable tests` in GitHub Actions o dalla Factory " +
+    "tramite PAT fine-grained con permesso Actions:write. Scegli esplicitamente " +
+    "dotnet-build, dotnet-test, web-build, web-test o playwright. " +
+    "L'Action usa un runner effimero, non l'installazione Docker locale. " +
+    "Il report viene caricato sempre come artifact `softwarefactory-test-report`, " +
+    "file `report.json` schema v1, legato a request_id/run_id/ref/commit SHA. " +
+    "Step privi di test implementati risultano incomplete, non passed. " +
+    "Non viene applicata alcuna patch automaticamente dopo i test.\n";
   return files;
 }
