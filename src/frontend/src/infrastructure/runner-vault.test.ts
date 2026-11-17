@@ -40,7 +40,12 @@ describe("runner cloud vault E2EE and resource metrics", () => {
       expect(() => validateRunnerVault(bad)).toThrow(/Vault|Formato/);
     }
     const good = await encryptRunnerCredential(ENDPOINT, API_KEY, PASSWORD);
-    const changed = { ...good, ciphertext: "A" + good.ciphertext.slice(1) };
+    // A random Base64 ciphertext sometimes already starts with "A":
+    // overwriting "A" with "A" is NOT tampering and must not be expected to
+    // fail AES-GCM. Flip to a guaranteed different, valid Base64 character.
+    const flip = good.ciphertext[0] === "A" ? "B" : "A";
+    const changed = { ...good, ciphertext: flip + good.ciphertext.slice(1) };
+    expect(changed.ciphertext).not.toBe(good.ciphertext);
     await expect(decryptRunnerCredential(changed, PASSWORD)).rejects.toThrow(/Impossibile/);
   });
   it("uploads only ciphertext to Google appDataFolder, loads it without sending passphrase", async () => {
