@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { publishGithubWorkspace, importGithubWorkspace } from "./github-publication";
 import { encodeGithubWorkspace, githubProjectDirty } from "./github-workspace";
-import { persistProject, listLocalProjects, loadLocalProject, saveSecret } from "./store";
+import { persistProject, persistProjectIfUnchanged, localProjectSnapshot, listLocalProjects, loadLocalProject, saveSecret } from "./store";
 import type { FactoryProject, GitConfig } from "../domain/types";
 
 const SHA = "a".repeat(40), NEXT = "d".repeat(40);
@@ -71,6 +71,21 @@ describe("GitHub commit and local multi-project sync safety", () => {
     expect(loadLocalProject(b.id).githubDestination?.repo).toBe("second");
     expect(JSON.stringify([...storage].filter(([k])=>!k.startsWith("session.")))).not.toContain(PAT);
     expect(()=>loadLocalProject("../secret")).toThrow();
+  });
+  it("blocks a stale tab from silently overwriting a project modified in another tab", () => {
+    const local = makeProject();
+    persistProject(local);
+    const baseline = localProjectSnapshot(local.id);
+    expect(baseline).not.toBeNull();
+    const fromOtherTab = {...local,config:{...local.config,name:"Other-tab change"},
+      updatedAt:"2026-11-17T14:00:00Z"};
+    persistProject(fromOtherTab);
+    const stale = {...local,config:{...local.config,name:"Stale tab edit"}};
+    expect(() => persistProjectIfUnchanged(stale,baseline)).toThrow(/Conflitto locale/);
+    expect(loadLocalProject(local.id).config.name).toBe("Other-tab change");
+    const latestBaseline=localProjectSnapshot(local.id);
+    expect(persistProjectIfUnchanged({...fromOtherTab,config:{...fromOtherTab.config,name:"Approved edit"}},latestBaseline))
+      .toContain("Approved edit");
   });
   it("publishes source and checkpoint in one fast-forward commit and records exact HEAD", async () => {
     const p=makeProject();
