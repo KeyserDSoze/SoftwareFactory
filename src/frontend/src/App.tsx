@@ -23,7 +23,8 @@ import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
 import { discoverAiModels } from "./infrastructure/ai";
 import { resolveGithubToken } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
-import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/github-publication";
+import { publishGithubWorkspace, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
+import { inspectGithubRepository } from "./infrastructure/github-discovery";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
@@ -577,6 +578,59 @@ export default function App() {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
+  async function recoverLostGithubAck() {
+    const active = projectRef.current;
+    if (busy || localConflict || !writerLeaseReady ||
+        writerLeaseRef.current?.projectId !== active.id) {
+      setError("Recupero bloccato: occorre il lock esclusivo del progetto locale.");
+      return;
+    }
+    const git = { ...settingsRef.current.git };
+    if (!git.owner || !git.repo) {
+      setError("Seleziona prima una repository e un branch GitHub.");
+      return;
+    }
+    if (!window.confirm(t(normalizeLocale(settingsRef.current.language), "githubAckConfirmStart")))
+      return;
+    clearMessages(); setBusy(true); setOperation("GitHub ack recovery");
+    try {
+      const token = await resolveGithubToken(git, readSecret("github.pat"));
+      // This path NEVER invokes ensureRepository or pushGeneratedFiles.
+      const recovered = await recoverGithubAcknowledgement(active, git, token);
+      const target = await inspectGithubRepository(git, token);
+      if (projectRef.current !== active ||
+          JSON.stringify(settingsRef.current.git) !== JSON.stringify(git))
+        throw Error("Workspace o destinazione modificati durante il recupero: nessun ack.");
+      const warning = !target.privateRepo ?
+        t(normalizeLocale(settingsRef.current.language), "githubAckPublicWarning") + "\n\n" : "";
+      const parentText = recovered.firstBinding ?
+        t(normalizeLocale(settingsRef.current.language), "githubAckFirstBinding") :
+        "Parent " + recovered.parentSha.slice(0,12) + ".";
+      const confirmed = window.confirm(warning +
+        t(normalizeLocale(settingsRef.current.language), "githubAckConfirmEvidence") +
+        "\n" + git.owner + "/" + git.repo + "@" + git.branch +
+        "\nHEAD " + recovered.sha.slice(0,12) +
+        "\n" + parentText +
+        "\n" + recovered.verifiedFiles + " file verificati.\n\n" +
+        t(normalizeLocale(settingsRef.current.language), "githubAckConfirmFinal"));
+      if (!confirmed) return;
+      if (projectRef.current !== active ||
+          JSON.stringify(settingsRef.current.git) !== JSON.stringify(git))
+        throw Error("Workspace o destinazione modificati dopo la conferma: nessun ack.");
+      if (!changeProject({ ...recovered.project, githubDestination: git }))
+        throw Error("Verifica remota riuscita ma ack locale non salvato: conflitto tra schede.");
+      // Recovery is explicitly opt-in. Autosync needs a fresh decision;
+      // never revive a stopped outbox from a previous device/session.
+      editSettings(s => { s.githubAutoSync = false; });
+      localStorage.removeItem("softwarefactory.github.outbox." + active.id);
+      setGithubPreview(null);
+      setPublishConfirmed(false);
+      setLastPush(recovered.url);
+      setNotice(t(normalizeLocale(settingsRef.current.language), "githubAckSuccess") +
+        " " + recovered.sha.slice(0,12) + " · " + recovered.verifiedFiles + " file.");
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); setOperation(""); }
+  }
   async function importFromGithub(mode: "status" | "import") {
     if (busy || localConflict || !writerLeaseReady) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
@@ -925,7 +979,12 @@ export default function App() {
                 onClick={() => void importFromGithub("status")}><RefreshCw size={15}/> {t(normalizeLocale(settings.language), "githubRemoteHead")}</button>
               <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
                 onClick={() => void importFromGithub("import")}><Download size={15}/> {t(normalizeLocale(settings.language), "githubRemoteImport")}</button>
+              <button className="secondary" type="button"
+                disabled={busy || Boolean(localConflict) || !writerLeaseReady || !settings.git.owner || !settings.git.repo}
+                onClick={() => void recoverLostGithubAck()}><CheckCircle2 size={15}/>
+                {t(normalizeLocale(settings.language), "githubAckRecover")}</button>
             </div>
+            <p className="helper">{t(normalizeLocale(settings.language), "githubAckExplain")}</p>
             {githubPreview && githubPreview.repository.toLowerCase() ===
               (settings.git.owner + "/" + settings.git.repo).toLowerCase() &&
               githubPreview.branch === settings.git.branch && <div className="github-diff-preview">
