@@ -487,3 +487,17 @@ Cloudflare Access resta un'attività dell'operatore; GitHub Pages non trova
 automaticamente server privati. Vedi [guida runner](docs/runner.md),
 [ADR 0045](adr/0045-bookwriter-style-role-router-and-host-bootstrap.md)
 e [issue #89](https://github.com/KeyserDSoze/SoftwareFactory/issues/89).
+
+## Installer Docker/Cloudflare, risorse in tempo reale e cloud vault (#89)
+
+**Aggiornamento sperimentale.** Nella pagina `Settings → Remote runner` è presente una guida con un nuovo wizard interattivo da eseguire **sul PC/server Ubuntu o Debian dedicato** come utente Linux UID 1000. Dopo avere installato Node.js e clonato il repository:
+
+```bash
+node src/runner/scripts/interactive-install.mjs
+```
+
+Il wizard richiede conferma prima dei privilegi sudo, installa Docker Engine rootless e Docker Compose via apt con GPG verificata, domanda origin GitHub Pages e URL HTTPS del runner, **token Cloudflare in input nascosto**, API key personalizzata (almeno 32 caratteri) o random. Salva credenziali in `.env` 0600; abilita user systemd Docker + linger per i riavvii e avvia nello stesso Compose API, worker e `cloudflared` (restart automatico). Nel Cloudflare dashboard configura un **Published application** sul dominio scelto, usando servizio interno **`http://runner-api:8787`**, non localhost del container. Non inserire token Cloudflare nel browser. Il codice ha test automatizzati, **non è ancora validato sul server rootless né con reboot e Tunnel reali**. Non eseguire su server condivisi.
+
+`Settings` e il pannello runner espongono **CPU, RAM, disco, uptime e temperatura CPU se misurabile** attraverso `GET /v1/host-metrics` autenticata. Le misure sono aggregati visibili dal worker e non consumi energetici misurati. Un popup in basso a destra, ispirato a BookWriter, segue la fase AI e i task/test noti realmente al frontend (non streaming LLM né schedulazione autonoma).
+
+Puoi **cifrare e salvare URL + API key del runner** in un file vault separato dentro Google Drive appDataFolder o OneDrive App Folder, quindi sbloccarlo con passphrase su un altro dispositivo. Utilizza WebCrypto PBKDF2/AES-GCM: passphrase e token Cloudflare non vengono spediti al cloud, il file cloud conserva il solo ciphertext. Funzione manuale e a **connettore singolo**, senza gestione dei conflitti cloud/merge e senza recupero passphrase. [Guida runner](docs/runner.md), [ADR 0046](adr/0046-interactive-runner-installer-telemetry-cloud-vault.md), [feature #89](https://github.com/KeyserDSoze/SoftwareFactory/issues/89).
