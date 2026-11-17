@@ -1,12 +1,16 @@
 name: Publish Linux runner installer
-run-name: "Installer release ${{ inputs.version }}"
+run-name: "Installer ${{ github.event_name == 'workflow_run' && 'CI-approved candidate' || inputs.version }}"
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer tag, e.g. v0.2.0"
+        description: "Stable vX.Y.Z or experimental vX.Y.Z-rc.N"
         required: true
         type: string
+  workflow_run:
+    workflows: ["Factory CI"]
+    types: [completed]
+    branches: [main]
 permissions:
   contents: write
 concurrency:
@@ -14,39 +18,81 @@ concurrency:
   cancel-in-progress: false
 jobs:
   package-and-release:
+    # Only verified main CI runs from this exact repository can create
+    # a candidate release automatically. PR/fork code cannot do so.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
-      - name: Checkout reviewed main
+      - name: Checkout exact approved source
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Validate tag, branch and release state
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Determine version and check release state
+        id: version
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION_INPUT: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RESULT: ${{ github.event.workflow_run.conclusion }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Release only from main"; exit 1; }
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Stable SemVer only"; exit 1; }
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            [[ "$CI_RESULT" == success ]] || { echo "CI not successful"; exit 1; }
+            [[ -f .github/installer-release.version ]] || {
+              echo "No CI-approved candidate marker on this SHA: no release requested"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            }
+            VERSION="$(cat .github/installer-release.version)"
+            [[ "$(git rev-parse HEAD)" == "$CI_SHA" ]] || {
+              echo "Source SHA does not match the successful CI run"
+              exit 1
+            }
+            [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]] || {
+              echo "Automated release is restricted to SemVer prerelease candidates"
+              exit 1
+            }
+          else
+            [[ "$GITHUB_REF" == refs/heads/main ]] || {
+              echo "Manual release allowed only on main"; exit 1;
+            }
+            VERSION="$VERSION_INPUT"
+          fi
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || {
+            echo "Invalid SemVer release version"; exit 1;
+          }
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release already exists; refusing to overwrite"
+            if [[ "$EVENT_NAME" == workflow_run ]]; then
+              echo "Candidate release already exists: no overwrite"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Release already exists: refusing to overwrite"
             exit 1
           fi
-          # actions/checkout is shallow: only GitHub API can reliably detect
-          # an existing remote tag when it has never been fetched locally.
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
-            echo "Tag already exists remotely; refusing to repoint"
+            echo "Existing remote tag: refusing to repoint"
             exit 1
           fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Package reviewed source and checksum
+        if: steps.version.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release
-          # Includes runner code, Dockerfiles, compose, bilingual docs and
-          # interactive setup; excludes gitignored private .env and node_modules.
+          # Complete source bundle: installer, runner, Compose and IT/EN guide.
+          # git archive excludes ignored files and any local credentials.
           git archive --format=tar --prefix=softwarefactory-runner-installer/ HEAD \
             | gzip -n -9 > release/softwarefactory-runner-installer.tar.gz
           cd release
@@ -58,16 +104,25 @@ jobs:
             | grep -Fx softwarefactory-runner-installer/INSTALLER.en.md
           tar -tzf softwarefactory-runner-installer.tar.gz \
             | grep -Fx softwarefactory-runner-installer/INSTALLER.it.md
-      - name: Publish immutable release with downloads
+          tar -tzf softwarefactory-runner-installer.tar.gz \
+            | grep -Fx softwarefactory-runner-installer/RELEASE-INSTALLER.md
+      - name: Publish immutable Release or experimental prerelease
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_SHA: ${{ steps.version.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
+          EXTRA_ARGS=()
+          if [[ "$VERSION" == *-rc.* ]]; then
+            EXTRA_ARGS+=(--prerelease)
+          fi
           gh release create "$VERSION" \
             release/softwarefactory-runner-installer.tar.gz \
             release/softwarefactory-runner-installer.tar.gz.sha256 \
-            --target "$GITHUB_SHA" \
+            --target "$SOURCE_SHA" \
             --title "SoftwareFactory Runner Installer $VERSION" \
-            --notes-file RELEASE-INSTALLER.md
+            --notes-file RELEASE-INSTALLER.md \
+            "${EXTRA_ARGS[@]}"
