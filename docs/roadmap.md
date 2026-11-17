@@ -770,3 +770,12 @@ Decisione: [ADR 0049](../adr/0049-local-project-exclusive-writer-web-locks.md), 
 - [x] Unit test recovery: successo con binding, primo push, prove negative parent/file/checkpoint/HEAD, consenso public scope, solo GET. [ADR 0051](../adr/0051-github-lost-ack-tree-reconciliation.md).
 - [ ] Verifica finale Factory CI + Pages dell'ultimo SHA, browser E2E mockato del flusso UI e PAT live reale in almeno due browser/dispositivi; callback persa e riavvio prima del salvataggio ack.
 - [ ] Multi-commit remote divergence, merge controllato e CAS multi-device rimangono manuali/bloccanti: NON estendere questo recupero a un writer automatico.
+
+## OIDC/PostgreSQL duplicate callback in-flight — stress regression (#93, 17 novembre 2026)
+
+- [x] Aggiunto un **19° test full-stack Chromium** che autentica la SPA via OIDC CI (Authorization Code/PKCE) e invia una **vera POST** a ASP.NET Core/PostgreSQL. Playwright attende la risposta reale dal server, ma la trattiene prima della consegna al browser.
+- [x] In pendenza della risposta, il browser usa lo stesso `oidcManager().events.load(user, true)` due volte per ricreare notifiche `userLoaded` con token identico. Verifica input non azzerato, POST accettata, elemento visibile, record realmente presente nel DB e pulizia via DELETE.
+- [x] La verifica full-stack conta automaticamente i test dichiarati; niente retry, `test.skip` nel percorso OIDC, `continue-on-error` o response mocking del CRUD.
+- [ ] Più esecuzioni CI e IdP esterno necessari per diagnosi della flakiness originaria. La regressione è deterministica per la race ipotizzata, non dimostra che ogni intermittenza sia eliminata.
+
+Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.md). Issue [#93](https://github.com/KeyserDSoze/SoftwareFactory/issues/93) e [#9](https://github.com/KeyserDSoze/SoftwareFactory/issues/9).

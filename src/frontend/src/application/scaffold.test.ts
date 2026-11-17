@@ -153,6 +153,12 @@ describe("application scaffold", () => {
     expect(e2e).toContain('const createResponsePromise = page.waitForResponse');
     expect(e2e).toContain('response.request().method() === "POST"');
     expect(e2e).toContain('expect(createResponse.ok(), "Real API create returned HTTP " + createResponse.status())');
+    expect(e2e).toContain('test("duplicate OIDC userLoaded notifications cannot discard a real PostgreSQL POST"');
+    expect(e2e).toContain('const response = await route.fetch();');
+    expect(e2e).toContain('await manager.events.load(user, true);');
+    expect(e2e).toContain('await expect(page.getByLabel("Titolo elemento")).toHaveValue(unique);');
+    expect(e2e).toContain('await route.fulfill({ response });');
+    expect(e2e).toContain('await expect(page.getByText(unique, { exact: true })).toBeVisible();');
     // A negative API outcome is a test failure, never a silently green run.
     expect(e2e).not.toContain('continueOnError: true');
   });
