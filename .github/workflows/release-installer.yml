@@ -34,8 +34,10 @@ jobs:
             echo "Release already exists; refusing to overwrite"
             exit 1
           fi
-          if git rev-parse --verify -q "refs/tags/$VERSION" >/dev/null; then
-            echo "Tag already exists; refusing to repoint"
+          # actions/checkout is shallow: only GitHub API can reliably detect
+          # an existing remote tag when it has never been fetched locally.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag already exists remotely; refusing to repoint"
             exit 1
           fi
       - name: Package reviewed source and checksum
