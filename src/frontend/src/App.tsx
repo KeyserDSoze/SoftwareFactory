@@ -388,7 +388,20 @@ export default function App() {
         "La destinazione GitHub è impostata come PUBBLICA: codice, brief, checkpoint AI " +
         "e proposte in corso possono essere visibili a chiunque. Autorizzi espressamente il push?");
       if (!git.privateRepo && !publicConsent) return;
-      const result = await publishGithubWorkspace(start, git, token, publicConsent);
+      let result;
+      try {
+        result = await publishGithubWorkspace(start, git, token, publicConsent);
+      } catch (reason) {
+        // GitHub's *actual* visibility can differ from the "create private"
+        // preference. This error is thrown BEFORE source commit creation.
+        if (!(reason instanceof Error) || !reason.message.includes("PUBBLICA") ||
+            publicConsent) throw reason;
+        if (!window.confirm("GitHub ha rilevato una repository realmente PUBBLICA, " +
+            "anche se nelle preferenze è selezionata la creazione privata. " +
+            "Autorizzi espressamente a rendere visibili sorgenti, checkpoint e bozze AI?"))
+          return;
+        result = await publishGithubWorkspace(start, git, token, true);
+      }
       setLastPush(result.url);
       localStorage.removeItem("softwarefactory.github.outbox." + start.id);
       if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
