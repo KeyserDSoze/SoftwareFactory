@@ -27,6 +27,7 @@ import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
+import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
 const NAV: { id: Tab; title: string; detail: string; icon: typeof Layers3 }[] = [
@@ -81,11 +82,13 @@ export default function App() {
   const [lastPush, setLastPush] = useState("");
   const [githubPreview, setGithubPreview] = useState<GithubWorkspaceComparison | null>(null);
   const [localConflict, setLocalConflict] = useState("");
+  const [writerLeaseReady, setWriterLeaseReady] = useState(false);
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
   const [runnerVaultPassphrase, setRunnerVaultPassphrase] = useState("");
   const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
+  const writerLeaseRef = useRef<ProjectWriterLease | null>(null);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -93,22 +96,41 @@ export default function App() {
   const busyRef = useRef(busy);
   busyRef.current = busy;
   useEffect(() => {
-    // On reload, never rewrite the project library with an old active-tab
-    // snapshot. A different copy on disk requires explicit user resolution.
-    const persisted = localBaselineRef.current.get(project.id) ?? null;
-    try {
-      const raw = JSON.stringify(project);
-      if (persisted && persisted !== raw &&
-          JSON.stringify(loadLocalProject(project.id)) !== raw)
-        throw Error("Il progetto attivo differisce dalla copia della libreria: verifica il conflitto locale prima di salvare.");
-      if (persisted !== raw) {
-        const confirmed = persistProjectIfUnchanged(project, persisted);
-        localBaselineRef.current.set(project.id, confirmed);
-      }
-      setProjectIndexRevision(v => v + 1);
-    } catch (error) {
-      setLocalConflict(error instanceof Error ? error.message : String(error));
-    }
+    let cancelled = false;
+    // Delay acquisition one microtask to survive React StrictMode's synthetic
+    // mount/cleanup cycle without confusing the second setup with a rival tab.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void acquireProjectWriterLease(project.id).then(lease => {
+        if (cancelled) { lease.release(); return; }
+        writerLeaseRef.current = lease;
+        const persisted = localBaselineRef.current.get(project.id) ?? null;
+        try {
+          // The per-project library is authoritative when opening a second tab.
+          // Never rewrite a newer copy with a stale active-project pointer.
+          const raw = JSON.stringify(projectRef.current);
+          if (persisted && persisted !== raw &&
+              JSON.stringify(loadLocalProject(project.id)) !== raw)
+            throw Error("Il progetto attivo differisce dalla copia della libreria: verifica il conflitto locale prima di salvare.");
+          if (persisted !== raw) {
+            const confirmed = persistProjectIfUnchanged(projectRef.current, persisted);
+            localBaselineRef.current.set(project.id, confirmed);
+          }
+          setWriterLeaseReady(true);
+          setProjectIndexRevision(v => v + 1);
+        } catch (error) {
+          setLocalConflict(error instanceof Error ? error.message : String(error));
+        }
+      }).catch(error => {
+        if (!cancelled)
+          setLocalConflict(error instanceof Error ? error.message : String(error));
+      });
+    });
+    return () => {
+      cancelled = true;
+      writerLeaseRef.current?.release();
+      writerLeaseRef.current = null;
+    };
   }, []);
   useEffect(() => {
     const storageChanged = (event: StorageEvent) => {
@@ -246,6 +268,11 @@ export default function App() {
   const paths = Object.keys(files).sort();
   const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
   function changeProject(nextProject: FactoryProject): boolean {
+    if (!writerLeaseRef.current || writerLeaseRef.current.projectId !== nextProject.id) {
+      setError("Scrittura rifiutata: il progetto non ha il lock esclusivo della scheda. " +
+        "Chiudi eventuali schede concorrenti e riprova.");
+      return false;
+    }
     if (localConflict) {
       setError("Conflitto locale aperto: salva prima un backup e scegli la versione corretta.");
       return false;
@@ -266,6 +293,20 @@ export default function App() {
       setPublishConfirmed(false);
       return false;
     }
+  }
+  async function changeProjectWithLease(nextProject: FactoryProject): Promise<boolean> {
+    const old = writerLeaseRef.current;
+    if (old?.projectId === nextProject.id) return changeProject(nextProject);
+    const lease = await acquireProjectWriterLease(nextProject.id);
+    writerLeaseRef.current = lease;
+    setWriterLeaseReady(true);
+    if (!changeProject(nextProject)) {
+      writerLeaseRef.current = old;
+      lease.release();
+      return false;
+    }
+    old?.release();
+    return true;
   }
   function editConfig(change: (config: ProjectConfig) => void) {
     if (busy || localConflict) return;
@@ -349,23 +390,40 @@ export default function App() {
     }
   }
   function pause() { abortRef.current?.abort(); }
-  function newProject() {
-    if (busy || localConflict || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
+  async function newProject() {
+    if (busy || localConflict || !writerLeaseReady || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
       "ma esporta un backup ZIP/cloud per proteggerlo da cancellazione browser.")) return;
-    if (!changeProject(createProject())) return;
-    editSettings(s => { s.git = { ...DEFAULT_SETTINGS.git }; s.githubAutoSync = false; });
-    setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
+    try {
+      if (!await changeProjectWithLease(createProject())) return;
+      editSettings(s => { s.git = { ...DEFAULT_SETTINGS.git }; s.githubAutoSync = false; });
+      setTab("workspace"); clearMessages(); setRunLog([]); setLastPush("");
+    } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
   }
-  function switchProject(id: string) {
-    if (busy || localConflict || id === projectRef.current.id) return;
+  async function switchProject(id: string) {
+    if (busy || localConflict || !writerLeaseReady || id === projectRef.current.id) return;
     try {
       const selected = loadLocalProject(id);
       if (!confirm("Passare a «" + selected.config.name + "»? " +
         "Le modifiche attuali restano nella libreria locale. Nessun push automatico in questa operazione.")) return;
-      // The baseline is captured at the point of explicit selection. If another
-      // tab changes it before our write, the guarded write refuses the switch.
-      localBaselineRef.current.set(id, localProjectSnapshot(id));
-      if (!changeProject(selected)) return;
+      // Acquire the destination's exclusive writer lease before trusting or
+      // persisting the selected snapshot (another tab may have changed it).
+      const selectedOnRequest = localProjectSnapshot(id);
+      const lease = await acquireProjectWriterLease(id);
+      const previousLease = writerLeaseRef.current;
+      try {
+        const selectedNow = localProjectSnapshot(id);
+        if (selectedNow !== selectedOnRequest)
+          throw Error("Il progetto è cambiato durante il cambio scheda: rileggi la libreria.");
+        localBaselineRef.current.set(id, selectedNow);
+        writerLeaseRef.current = lease;
+        if (!changeProject(selected)) return;
+        previousLease?.release();
+      } catch (error) {
+        writerLeaseRef.current = previousLease;
+        throw error;
+      } finally {
+        if (writerLeaseRef.current !== lease) lease.release();
+      }
       editSettings(s => {
         s.git = selected.githubDestination ? { ...selected.githubDestination } :
           selected.githubSync ? { ...s.git, owner: selected.githubSync.owner,
@@ -435,7 +493,7 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
   }
-  function recoverLocalConflict() {
+  async function recoverLocalConflict() {
     if (!localConflict || busy) return;
     try {
       if (!window.confirm("Esportare il progetto di questa scheda come backup JSON prima di caricare " +
@@ -444,6 +502,8 @@ export default function App() {
       if (!window.confirm("Confermi di aver SALVATO il file di recupero? Il progetto della " +
           "scheda corrente sarà sostituito con la versione più recente della libreria locale.")) return;
       const id = projectRef.current.id;
+      if (!writerLeaseRef.current || writerLeaseRef.current.projectId !== id)
+        writerLeaseRef.current = await acquireProjectWriterLease(id);
       const remote = localProjectSnapshot(id);
       if (!remote) throw Error("Nessun progetto aggiornato trovato nella libreria locale.");
       const fresh = loadLocalProject(id);
@@ -452,6 +512,7 @@ export default function App() {
       setProject(fresh);
       setProjectIndexRevision(v => v + 1);
       setLocalConflict("");
+      setWriterLeaseReady(true);
       editSettings(s => { s.githubAutoSync = false; });
       setNotice("Versione della libreria locale caricata. Autosync disabilitato per sicurezza.");
     } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
@@ -513,7 +574,7 @@ export default function App() {
       }
       if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
         throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
-      if (!changeProject({ ...imported.project, githubDestination: { ...git } }))
+      if (!await changeProjectWithLease({ ...imported.project, githubDestination: { ...git } }))
         throw Error("Importazione non applicata: copia locale modificata durante l'operazione.");
       editSettings(s => { s.githubAutoSync = false; });
       setPublishConfirmed(false);
@@ -556,7 +617,7 @@ export default function App() {
       else {
         if (!confirm("Ripristinare il progetto dal cloud e sostituire quello locale corrente?")) return;
         const recovered = await restoreCloud(settingsRef.current);
-        if (!changeProject({ ...recovered.project, stages: recovered.project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) }))
+        if (!await changeProjectWithLease({ ...recovered.project, stages: recovered.project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) }))
           throw Error("Ripristino cloud non applicato: conflitto locale.");
         if (recovered.settings) editSettings(s => {
           s.profiles = recovered.settings!.profiles;
@@ -613,7 +674,7 @@ export default function App() {
       })}</nav>
       <div className="sidebar-bottom"><div className="project-mini"><div className="mini-head"><span className="status-dot" /> PROGETTO ATTIVO</div><strong title={project.config.name}>{project.config.name || "Senza nome"}</strong>
         <div className="mini-progress"><span style={{ width: progress + "%" }} /></div><small>{completed} / {STAGES.length} fasi completate · {progress}%</small></div>
-        <button className="subtle full" onClick={newProject}><Plus size={16} /> Nuovo progetto</button>
+        <button className="subtle full" disabled={!writerLeaseReady || Boolean(localConflict)} onClick={() => void newProject()}><Plus size={16} /> Nuovo progetto</button>
         <div className="sidebar-credit">Local-first · dati nel browser</div>
       </div>
     </aside>
@@ -646,7 +707,7 @@ export default function App() {
               <h3>{t(normalizeLocale(settings.language), "githubProjectsTitle")}</h3></div>
               <Layers3 size={18}/></div>
             <label>{t(normalizeLocale(settings.language), "githubProjectsOpen")}
-              <select value={project.id} disabled={busy} onChange={e => switchProject(e.target.value)}>
+              <select value={project.id} disabled={busy} onChange={e => void switchProject(e.target.value)}>
                 {localProjects.some(x => x.id === project.id) ? null :
                   <option value={project.id}>{project.config.name} · corrente</option>}
                 {localProjects.map(x => <option value={x.id} key={x.id}>
