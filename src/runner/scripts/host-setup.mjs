@@ -49,7 +49,7 @@ export function renderRunnerEnv({ origin, root, apiKey }) {
     "RUNNER_DOCKER_SOCKET=/run/user/1000/docker.sock",
     "RUNNER_ALLOW_NET_DEPS=false",
     "RUNNER_MAX_ACCEPTED_PER_MINUTE=5",
-    "CLOUDFLARE_TUNNEL_TOKEN=",
+    "CLOUDFLARE_TUNNEL_TOKEN=REPLACE_ONLY_WHEN_USING_CLOUDFLARE",
     "",
   ].join("\n");
 }
