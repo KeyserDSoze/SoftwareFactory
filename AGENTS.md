@@ -678,3 +678,10 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
   controllati: non esporre Docker socket ai job, alla API o alla SPA. Prima dell'installer
   automatico servono pairing monouso, revoca/rotazione, artefatti verificati, test su host
   reale e documentazione di uninstall. Vedi ADR 0044 e issue #87.
+
+## Installer host locale per runner connector (#88, parte di #87 M2)
+
+- Script `src/runner/scripts/host-install.mjs` eseguibile **soltanto dall'operatore su Linux UID 1000**. `--check` è read-only (git clean main SHA40, private env O_NOFOLLOW, preflight Compose e host). `--apply --confirm-install` richiede anche immutabile canary image digest, `runVmAcceptance()` realmente passato con cleanup, lock POSIX esclusivo nel `RUNNER_DATA_DIR` approvato, verifica assenza stack Compose esistenti e rootless probe immediatamente prima di ogni Docker.
+- Il deployment iniziale usa solo `docker compose --project-name sf-runner ... up --detach --build --no-deps runner-api runner-worker` su `DOCKER_HOST=unix:///run/user/1000/docker.sock` (nessun Cloudflare, SSH, socket rootful, installazione da browser, `down -v` o prune). Host path .env è argomento, ma **mai credenziali nei flag** o log. Non modificare uno stack già esistente. Non cancellare container/dati automaticamente se un'installazione fallisce parzialmente.
+- Dopo startup verificare **due container esatti** in `sf-runner`, API senza socket, worker con socket rootless, stato running, e GET in loopback con negativo 401, capabilities protocol 1, worker readiness e execution-readiness rootless autenticata. Per `key-file`/`tenants` il bearer di sola verifica proviene da `RUNNER_PROBE_BEARER` nella private env, mai da file registry o pagina browser.
+- Receipt `ready_to_install` non equivale a installazione; `installed` è una conferma locale **non firmata** soltanto dopo tutti i controlli. La CI verifica mock/race/env drift/static policy ma non può certificare VM Linux rootless reale: per #87 M2 resta collaudo host, packaging/revoca/update/uninstall e successivi #87 M3-M5. ADR 0044.

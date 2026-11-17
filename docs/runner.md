@@ -889,3 +889,32 @@ scoped credentials revocabili, uninstall, policy/quote e supporto fullstack
 multicontainer orchestrato dal worker (non socket Docker dentro i job).
 Dettagli in [ADR 0044](../adr/0044-runner-connector-onboarding-and-container-orchestration.md)
 e [issue #87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87).
+
+## Installer iniziale del runner connector su un host Linux (#88, #87 M2)
+
+Il percorso iniziale del connector rimane **manuale e locale all'host**. La Factory non deve ricevere SSH root, installare Docker nel browser o avviare comandi arbitrari sul PC tramite un endpoint. L'operatore clona SoftwareFactory su una VM Linux **dedicata**, prepara Docker rootless sotto l'utente **UID/GID 1000**, Compose v2 e un file env **privato mode 0600** (con API key, origins, path assoluti safe e rootless socket come documentato sopra). Non utilizzare un host con segreti o altri workload importanti. Controlla la SHA e la firma/provenienza del clone con strumenti Git affidabili prima di procedere.
+
+```bash
+# Sull'HOST Linux uid=1000, nella repository SoftwareFactory su main:
+git status --short
+git rev-parse HEAD   # copiare la SHA-40 APPROVATA dall'operatore
+# Ottenere un image digest node@sha256:... da registry e approvarlo
+# prima dell'installazione; non accettare "node:latest" come canary.
+#
+# 1) Solo letture (git, private-env, Compose config e rootless host checks).
+node src/runner/scripts/host-install.mjs \
+  --env-file=/srv/softwarefactory/private/runner.env \
+  --commit=<SHA40_APPROVATA> --image=node@sha256:<DIGEST64> --check
+#
+# 2) Prima installazione esplicitamente confermata, SOLO sullo stesso host:
+node src/runner/scripts/host-install.mjs \
+  --env-file=/srv/softwarefactory/private/runner.env \
+  --commit=<SHA40_APPROVATA> --image=node@sha256:<DIGEST64> \
+  --apply --confirm-install
+```
+
+Per credenziali da file aggiungere `--runner-key-file`, per tenant `--tenants` (esclusivo), o `--operator-registry` soltanto quando ammesso. In key-file/tenants l'env privata deve contenere una `RUNNER_PROBE_BEARER` dedicata e revocabile per il check HTTP dopo l'avvio. La CLI non acquisisce segreti in URL, parametri o output; fornisce soltanto una receipt `ready_to_install` per `--check` o `installed` per il deploy con prove positive.
+
+**Gates applicativi di `--apply`:** origine Git `main` senza file modificati/untracked e SHA-40 fissata; env privata verificata tramite lettura single-FD; `preflight compose` e `preflight host`; VM acceptance con canary digest-pinned che richiede daemon rootless, rete `none`, fs read-only, cleanup verificato. La CLI crea una claim atomica nel data dir certificato e **rifiuta di toccare stack già presenti** (`com.docker.compose.project=sf-runner`). Reinterroga il daemon rootless prima di ogni Docker e avvia solo `runner-api` e `runner-worker` con project `sf-runner` e DOCKER_HOST fissato a `unix:///run/user/1000/docker.sock`. Cloudflare Tunnel e servizi aggiuntivi non vengono abilitati. Verifica due container running e label Compose corrette, socket in worker e **non** API, poi le risposte **GET** `/v1/capabilities`, `/v1/readiness`, `/v1/execution-readiness` con bearer privato via `http://127.0.0.1:8787`. CORS e autenticazione non vanno dedotti dalla sola `/healthz`. Nessun job, POST o build di app utente viene lanciato durante il check (il canary è una container-isolation check esplicita nell'apply).
+
+**Failure e limiti:** se Compose `up` fallisce a metà, la CLI **non** esegue automaticamente `down`, `prune`, `rm`, revoca token o modifica env: occorre fermare le attività concorrenti e ispezionare manualmente host/container/evidenze prima del recupero. La receipt locale non è firmata off-host e non costituisce certificazione di VM reale; la CI esegue test unitari con probe Docker simulato e i normali smoke Docker **rootful** GitHub. Un test su PC Linux/VM rootless dedicato è ancora obbligatorio per chiudere M2 di #87. Installazione da browser, systemd user lifecycle, update/uninstall/revoke e pairing one-time appartengono ai milestone successivi.

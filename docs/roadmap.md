@@ -645,3 +645,9 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - Alla suite Chromium↔ASP.NET Core/PostgreSQL/OIDC via HTTP privato si aggiunge un test di backend **Production con authority HTTPS** verificata: provider su `identity-tls:9443`, CA+cert SAN ephemeral, API trusted CA e API senza CA (401 obbligatorio).
 - Node senza CA deve respingere la connessione; con CA, l'API trusted deve validare JWT RS256 original/rotated kid, alterazioni firma, reader/editor e negare ruoli ambiguamente firmati. Ripulire i materiali CA privati e tutte le istanze Docker a fine CI.
 - Test Node delle sole origini di issuer consentite, `npm check` e integrazione Docker reale, ADR 0043. Fuori scope: IdP HTTPS commerciale esterno, revoca certificati CRL/OCSP, ingress TLS/CORS production e simulazione VM rootless (#9/#2).
+
+## v0.2 — Installazione iniziale locale runner connector, M2 parziale (#88/#87)
+
+- CLI operator-only per Linux UID 1000: `--check` read-only su Git main SHA immutabile, private env 0600 e preflight Compose/host; `--apply --confirm-install` richiede VM acceptance canary rootless digest-pinned, claim esclusiva, assenza di stack esistenti e `docker compose up --build` del solo runner-api/runner-worker, senza Tunnel/SSH/host rootful.
+- Controlli runtime post-avvio sui container esatti, mount socket solo nel worker e GET rootless readiness autenticati via loopback; receipt locale e segreti mai mostrati. Test Node deterministici su policy, mutazioni dell'env, concorrenza, Docker rootful/sostituito, percorsi falsificati e profili credenziali; CI Factory tradizionale conferma non regressione.
+- **Resta in #87 M2:** collaudo reale su PC/VM Linux con rootless e lifecycle di packaging/version pin, update/rollback, uninstall e revoke; #87 M3 pairing temporaneo, M4 topologie fullstack amministrate, M5 attenuazione rischi multi-host/off-host. ADR 0044.
