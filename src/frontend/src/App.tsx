@@ -269,10 +269,6 @@ export default function App() {
   const paths = Object.keys(files).sort();
   const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
   function changeProject(nextProject: FactoryProject): boolean {
-    if (projectSwitchRef.current && nextProject.id === projectRef.current.id) {
-      setError("Cambio progetto in corso: modifica rimandata.");
-      return false;
-    }
     if (!writerLeaseRef.current || writerLeaseRef.current.projectId !== nextProject.id) {
       setError("Scrittura rifiutata: il progetto non ha il lock esclusivo della scheda. " +
         "Chiudi eventuali schede concorrenti e riprova.");
@@ -322,7 +318,7 @@ export default function App() {
     }
   }
   function editConfig(change: (config: ProjectConfig) => void) {
-    if (busy || localConflict) return;
+    if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current) return;
     const config = structuredClone(projectRef.current.config);
     change(config);
     if (!changeProject(invalidateStages(updateConfig(projectRef.current, config)))) return;
@@ -353,7 +349,7 @@ export default function App() {
   }
   function clearMessages() { setError(""); setNotice(""); }
   async function execute(from: StageId, runAll: boolean) {
-    if (busy || localConflict) return;
+    if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current) return;
     clearMessages();
     if (!projectRef.current.config.name.trim() || !projectRef.current.config.description.trim()) {
       setError("Inserisci nome e descrizione prima di avviare il workflow."); setTab("workspace"); return;
