@@ -677,3 +677,13 @@ con scadenza/revoca; cloud profile E2EE e CAS/conflict management; sandbox
 multi-container governate dal worker; collaudo on-prem/VM/tunnel reali.
 Tracciamento in [#89](https://github.com/KeyserDSoze/SoftwareFactory/issues/89)
 e [#87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87).
+
+## Installer completo Cloudflare / telemetria / popup e vault (incremento #89, 17 nov 2026)
+
+Prima implementazione su main:
+- Wizard Linux TTY Ubuntu/Debian uid 1000 che installa Docker rootless via repo apt firmato, raccoglie token Cloudflare (input nascosto) e API key generata/custom; configura user service Docker persistente + Cloudflare Tunnel in Compose con restart, e stampa le istruzioni del Public Hostname → `http://runner-api:8787`.
+- API `GET /v1/host-metrics` su dati aggregate host-worker per CPU, RAM, disco e temperatura CPU se disponibile; nessuna visibilità in multi-tenant, client autenticato, dashboard nella UI anche durante test.
+- Popup BookWriter-style bottom-right con attività e durata ricavate da pipeline e runner reali, collassabile.
+- Vault manuale E2EE nel cloud app folder per singolo connector: URL e API key con PBKDF2-SHA256 600k/AES-256-GCM; token Cloudflare non trasferito.
+
+**Da completare:** collaudo reale Ubuntu/Debian VM con reboot e Cloudflare/Access; pacchetto versionato e installazione Node/UID 1000 guidata; pinning del container cloudflared e file-backed tunnel token; registro con molti runner, CAS/ETag e gestione conflitti cloud, rotazione/revoca, vault multi-credential e sync automatica; per-job CPU/RAM, Grafana e tariffe energetiche soltanto con dati verificabili; live LLM streaming come BookWriter e PM/tester scheduler indipendente dal browser. Issue #89/#87 **rimangono aperte**.
