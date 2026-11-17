@@ -74,7 +74,7 @@ async function getDeviceKey(db: IDBDatabase): Promise<CryptoKey> {
 }
 export async function sealGithubPat(pat: string, key: CryptoKey): Promise<EncryptedPat> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv,
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource,
     additionalData: AAD }, key, new TextEncoder().encode(assertGithubPat(pat)));
   return { version: 1, iv: b64(iv), ciphertext: b64(new Uint8Array(ciphertext)) };
 }
@@ -87,8 +87,8 @@ export async function unsealGithubPat(raw: unknown, key: CryptoKey): Promise<str
   if (iv.length !== 12) throw Error("IV PAT cifrato non valido.");
   const encrypted = from64(entry.ciphertext, 32);
   try {
-    const result = await crypto.subtle.decrypt({ name: "AES-GCM", iv,
-      additionalData: AAD }, key, encrypted);
+    const result = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv as BufferSource,
+      additionalData: AAD }, key, encrypted as BufferSource);
     return assertGithubPat(new TextDecoder("utf-8", { fatal: true }).decode(result));
   } catch { throw Error("PAT locale alterato o chiave dispositivo non disponibile."); }
 }
