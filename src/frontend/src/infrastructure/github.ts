@@ -101,8 +101,17 @@ export async function pushGeneratedFiles(git: GitConfig, token: string, files: R
     method: "POST", body: JSON.stringify({ message: "feat: generate application scaffold with SoftwareFactory", tree: tree.sha, parents: [parentSha] }),
   });
   // GitHub rejects non-fast-forward ref updates: no implicit merge, no force push.
-  await request(root + "/git/refs/heads/" + git.branch.split("/").map(encodeURIComponent).join("/"), token, {
-    method: "PATCH", body: JSON.stringify({ sha: commit.sha, force: false }),
-  });
+  const shaPattern = /^[a-f0-9]{40}$/i;
+  if (!shaPattern.test(commit.sha)) throw new GitHubError("GitHub non ha restituito lo SHA di commit valido.");
+  const advanced = await request<{ object: { sha: string } }>(
+    root + "/git/refs/heads/" + git.branch.split("/").map(encodeURIComponent).join("/"), token, {
+      method: "PATCH", body: JSON.stringify({ sha: commit.sha, force: false }),
+    });
+  if (advanced?.object?.sha !== commit.sha)
+    throw new GitHubError("Il ref update non ha confermato il commit atteso: controlla la HEAD prima di continuare.");
+  // Explicit readback is required before calling this a remote write success.
+  const verified = await request<{ object: { sha: string } }>(refPath, token);
+  if (verified?.object?.sha !== commit.sha)
+    throw new GitHubError("GitHub HEAD diversa dal commit appena creato: la sincronizzazione locale resta non confermata.");
   return { sha: commit.sha, url: "https://github.com/" + git.owner + "/" + git.repo + "/commit/" + commit.sha, branch: git.branch };
 }
