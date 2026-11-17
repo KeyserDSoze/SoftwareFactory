@@ -21,7 +21,10 @@ import { generateFiles } from "./application/scaffold";
 import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
   saveEncryptedRunnerVault, restoreEncryptedRunnerVault } from "./infrastructure/cloud";
 import { discoverAiModels } from "./infrastructure/ai";
-import { ensureRepository, pushGeneratedFiles, resolveGithubToken } from "./infrastructure/github";
+import { resolveGithubToken } from "./infrastructure/github";
+import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
+import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/github-publication";
+import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { loadProject, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
@@ -233,16 +236,81 @@ export default function App() {
     if (!publishConfirmed) { setError("Conferma il contenuto da pubblicare sul repository."); return; }
     if (!paths.length) { setError("Inserisci nome e descrizione per generare lo scaffold."); return; }
     setBusy(true); setOperation("GitHub sync");
+    const start = projectRef.current;
     try {
       const git = settingsRef.current.git;
       const token = await resolveGithubToken(git, readSecret("github.pat"));
-      await ensureRepository(git, token);
-      const result = await pushGeneratedFiles(git, token, files);
+      const result = await publishGithubWorkspace(start, git, token);
       setLastPush(result.url);
-      setNotice("Commit creato su " + result.branch + ": " + result.sha.slice(0, 9) + ". Nessun force push.");
+      if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
+        changeProject(result.project);
+        setNotice("Commit " + result.sha.slice(0,12) + " verificato sul branch " + result.branch +
+          " con checkpoint ripristinabile. Nessun force push.");
+      } else {
+        // The remote write may have succeeded, but local edits appeared meanwhile.
+        // We must not mark an unconfirmed later snapshot as saved.
+        setError("Commit remoto riuscito ma workspace locale cambiato durante il push. Prima di ripubblicare, verifica la HEAD GitHub.");
+      }
       setPublishConfirmed(false);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
+  }
+  async function importFromGithub(mode: "status" | "import") {
+    if (busy) return;
+    clearMessages(); setBusy(true); setOperation("GitHub import");
+    try {
+      const git = settingsRef.current.git;
+      const token = await resolveGithubToken(git, readSecret("github.pat"));
+      if (mode === "status") {
+        const remote = await inspectGithubWorkspace(git, token);
+        const local = projectRef.current;
+        setNotice(remote.project
+          ? "GitHub " + remote.headSha.slice(0,12) + " · progetto " + remote.project.config.name +
+            " · " + (githubBindingMatches(local, git) && local.githubSync?.lastCommit === remote.headSha
+              ? "HEAD invariata dall'ultimo sync." : "HEAD diversa/non ancora associata: scegli importa se opportuno.")
+          : "La repository esiste ma non contiene ancora un checkpoint SoftwareFactory.");
+        return;
+      }
+      const initial = projectRef.current;
+      const imported = await importGithubWorkspace(initial, git, token);
+      if (initial.id !== imported.project.id) {
+        if (!window.confirm("Il progetto GitHub è DIVERSO da quello locale (" +
+          initial.config.name + " → " + imported.project.config.name +
+          "). Importare significa sostituire il progetto aperto. Esporta prima uno ZIP e salva un backup locale. Continuare?")) return;
+      } else if (githubProjectDirty(initial, git) &&
+                 !window.confirm("Ci sono modifiche locali non confermate su GitHub. " +
+                   "L'importazione sostituirà lo stato aperto senza fondere le differenze. " +
+                   "Salva uno ZIP di recupero prima. Continuare?")) return;
+      if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
+        throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
+      changeProject(imported.project);
+      editSettings(s => { s.githubAutoSync = false; });
+      setPublishConfirmed(false);
+      setNotice("Checkpoint GitHub " + imported.sha.slice(0,12) +
+        " ripristinato. Autosync disattivato su questo dispositivo fino a nuovo consenso.");
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); setOperation(""); }
+  }
+  function toggleGithubAutoSync(enabled: boolean) {
+    if (enabled && (!githubBindingMatches(projectRef.current, settingsRef.current.git) ||
+        !projectRef.current.githubSync?.lastCommit)) {
+      setError("Prima pubblica il primo checkpoint GitHub e attendi la conferma del commit."); return;
+    }
+    if (enabled && !navigator.locks?.request) {
+      setError("Web Locks non disponibili: autosync disabilitato per evitare scritture concorrenti."); return;
+    }
+    if (enabled && !readSecret("github.pat")) {
+      setError("Sblocca il PAT sul dispositivo prima di abilitare autosync."); return;
+    }
+    if (enabled && !window.confirm("Abilitare salvataggi automatici dei checkpoint su GitHub " +
+      "(inclusi output AI, bozze e proposte non approvate) quando la pagina rimane aperta? " +
+      "La repository deve essere privata o esplicitamente autorizzata alla pubblicazione."))
+      return;
+    if (enabled && !settingsRef.current.git.privateRepo &&
+        !window.confirm("Repository impostata come PUBBLICA: autorizzi anche l'autosync su GitHub?")) return;
+    editSettings(s => { s.githubAutoSync = enabled; });
+    setNotice(enabled ? "Autosync GitHub attivato (solo pagina aperta, massimo ogni 2 minuti)." :
+      "Autosync GitHub disattivato. Le modifiche locali restano disponibili.");
   }
   async function cloudAction(kind: "save" | "load") {
     clearMessages(); setBusy(true); setOperation("Cloud " + kind);
@@ -463,13 +531,21 @@ export default function App() {
             <p className="helper">Vai su Code Agent per scegliere .NET build/test, React build/test e Playwright. L’agent restituisce exit code e log; senza dipendenze Node già disponibili offline alcuni step possono fallire o essere saltati.</p>
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">SOURCE CONTROL</span><h3>GitHub</h3></div><GitBranch size={20} /></div>
-            <div className="form-grid"><label>Owner<input value={settings.git.owner} placeholder="Username o organizzazione" onChange={e => editSettings(s => { s.git.owner = e.target.value; })} /></label>
-              <label>Repository<input value={settings.git.repo} placeholder="my-application" onChange={e => editSettings(s => { s.git.repo = e.target.value; })} /></label>
-              <label>Branch<input value={settings.git.branch} placeholder="main oppure feature/nome" onChange={e => editSettings(s => { s.git.branch = e.target.value; })} /></label>
-              <label>Tipo connessione<select value={settings.git.authMode} onChange={e => editSettings(s => { s.git.authMode = e.target.value as "pat" | "app"; })}><option value="pat">PAT fine-grained</option><option value="app">GitHub App · gateway server</option></select></label>
-              {settings.git.authMode === "pat" ? <label>PAT (temporaneo)<SecretInput secretKey="github.pat" placeholder="github_pat_..." /></label> :
-                <label>GitHub App token gateway HTTPS<input value={settings.git.appGateway} placeholder="https://your-backend.example.com/github/token" onChange={e => editSettings(s => { s.git.appGateway = e.target.value; })} /></label>}</div>
-            <label className="checkline"><input type="checkbox" checked={settings.git.privateRepo} onChange={e => editSettings(s => { s.git.privateRepo = e.target.checked; })} /> Crea repository privata se non esiste (richiede permessi GitHub)</label>
+            <GitHubConnectionPanel settings={settings} busy={busy}
+              onGitChange={change => editSettings(s => { change(s.git); s.githubAutoSync = false; })}
+              onAutoSyncChange={toggleGithubAutoSync}
+              hasPublishedCheckpoint={githubBindingMatches(project, settings.git)}
+              onNotice={setNotice} onError={setError}/>
+            <p className="helper">Checkpoint GitHub: {githubBindingMatches(project, settings.git) ?
+              project.githubSync!.lastCommit.slice(0,12) + " · " +
+              (githubProjectDirty(project, settings.git) ? "modifiche locali non salvate" : "sincronizzato") :
+              "nessun primo commit confermato per questa destinazione"}.</p>
+            <div className="button-group">
+              <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
+                onClick={() => void importFromGithub("status")}><RefreshCw size={15}/> Verifica HEAD remota</button>
+              <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
+                onClick={() => void importFromGithub("import")}><Download size={15}/> Importa checkpoint GitHub</button>
+            </div>
             <p className="helper">Push atomico con Git Data API e fast-forward, senza force push. Per GitHub App serve un broker sicuro: non mettere una chiave privata App nella SPA. Il merge dei branch resta una decisione esplicita su GitHub.</p>
             <label className="checkline"><input type="checkbox" checked={publishConfirmed} onChange={e => setPublishConfirmed(e.target.checked)} /> Ho verificato file e visibilità della repository; autorizzo creazione e commit.</label>
             <div className="button-group align-right"><button className="secondary" onClick={() => setTab("stack")}><FileText size={15} /> Anteprima file</button>
