@@ -160,7 +160,8 @@ export default function App() {
           // confirm the SNAPSHOT revision, not later edits.
           const binding = { ...result.project.githubSync!,
             syncedLocalUpdatedAt: snapshot.updatedAt };
-          changeProject({ ...latest, githubSync: binding });
+          if (!changeProject({ ...latest, githubSync: binding }))
+            throw Error("Ack GitHub non salvato: conflitto locale. Il commit remoto può essere riuscito.");
           localStorage.removeItem(key);
           setLastPush(result.url);
           setNotice("GitHub autosync: confermato " + result.sha.slice(0,12) +
@@ -391,7 +392,8 @@ export default function App() {
       setLastPush(result.url);
       localStorage.removeItem("softwarefactory.github.outbox." + start.id);
       if (projectRef.current.id === start.id && projectRef.current.updatedAt === start.updatedAt) {
-        changeProject({ ...result.project, githubDestination: { ...git } });
+        if (!changeProject({ ...result.project, githubDestination: { ...git } }))
+          throw Error("Commit remoto riuscito ma ack locale bloccato da un'altra scheda. Verifica HEAD GitHub prima di riprovare.");
         setNotice("Commit " + result.sha.slice(0,12) + " verificato sul branch " + result.branch +
           " con checkpoint ripristinabile. Nessun force push.");
       } else {
@@ -481,7 +483,8 @@ export default function App() {
       }
       if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
         throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
-      changeProject({ ...imported.project, githubDestination: { ...git } });
+      if (!changeProject({ ...imported.project, githubDestination: { ...git } }))
+        throw Error("Importazione non applicata: copia locale modificata durante l'operazione.");
       editSettings(s => { s.githubAutoSync = false; });
       setPublishConfirmed(false);
       setGithubPreview(null);
