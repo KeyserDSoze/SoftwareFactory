@@ -685,3 +685,26 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - Il deployment iniziale usa solo `docker compose --project-name sf-runner ... up --detach --build --no-deps runner-api runner-worker` su `DOCKER_HOST=unix:///run/user/1000/docker.sock` (nessun Cloudflare, SSH, socket rootful, installazione da browser, `down -v` o prune). Host path .env è argomento, ma **mai credenziali nei flag** o log. Non modificare uno stack già esistente. Non cancellare container/dati automaticamente se un'installazione fallisce parzialmente.
 - Dopo startup verificare **due container esatti** in `sf-runner`, API senza socket, worker con socket rootless, stato running, e GET in loopback con negativo 401, capabilities protocol 1, worker readiness e execution-readiness rootless autenticata. Per `key-file`/`tenants` il bearer di sola verifica proviene da `RUNNER_PROBE_BEARER` nella private env, mai da file registry o pagina browser.
 - Receipt `ready_to_install` non equivale a installazione; `installed` è una conferma locale **non firmata** soltanto dopo tutti i controlli. La CI verifica mock/race/env drift/static policy ma non può certificare VM Linux rootless reale: per #87 M2 resta collaudo host, packaging/revoca/update/uninstall e successivi #87 M3-M5. ADR 0044.
+
+
+## Software house BookWriter-style e host bootstrap (#89)
+
+- `domain/agent-roles.ts` è il catalogo dei ruoli. Solo sei ruoli pipeline
+  e i tre Code Agent (fullstack/reviewer/fix) sono eseguiti realmente;
+  non dichiarare PM, tester o altri ruoli come worker autonomi.
+- Le chiamate AI devono risolvere **endpoint, modello e thinking del ruolo**
+  prima di inviare la richiesta: fallback soltanto da assegnazione di fase e
+  profilo configurati, mai provider improvvisati. Automatico omette
+  `reasoning_effort`, explicit value va validato. Modelli che non
+  supportano thinking richiedono futura capability discovery; non fingere
+  rilevamento non implementato.
+- `host-setup.mjs setup` crea solo file/dir privati come uid 1000 e mai
+  stampa segreti; `start` verifica rootless e Compose prima di avviare.
+  Non aggiungere `curl|bash`, token CLI, socket Docker ad API/job o
+  installazioni remote di shell dal browser. Test e docs per ogni modifica.
+- Il backup cloud attuale contiene settings/project non segreti e runner URL,
+  non token; recuperare chiavi tramite futuro vault E2EE di BookWriter con
+  controllo conflitti, non salvarle in chiaro nel profilo.
+- Il browser GitHub Pages parla con API HTTPS attraverso dominio stabile,
+  reverse proxy/Tunnel opzionale e CORS allowlist esplicita. Il backup cloud
+  non è un relay. Vedi ADR 0045 e issue #89/#87.
