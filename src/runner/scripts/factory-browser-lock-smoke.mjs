@@ -185,7 +185,7 @@ if (!inside) {
         sessionStorage.setItem("softwarefactory.secret.github.pat",token);
       },pat);
       let headReads=0,restCalls=0;
-      await page.route("https://api.github.com/**",async route => {
+      await page.route("https://api.github.com/repos/octocat/demo/**",async route => {
         const request=route.request(),url=request.url();
         // Authorization/X-GitHub-Api-Version can cause a browser CORS preflight.
         // Respond to OPTIONS without treating it as a GitHub write.
