@@ -82,6 +82,11 @@ if (!inside) {
     await expect(second.getByText("Conflitto locale tra schede"))
       .toBeVisible({timeout:15000});
     await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeDisabled();
+    // A stale tab cannot persist a draft even if its text field is editable.
+    await second.getByLabel("Nome progetto").fill("Stale tab must not write");
+    const guardedName = await second.evaluate(() =>
+      JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").config?.name);
+    assert.equal(guardedName, "Tab A holds exclusive writer lease");
     const secondId = await second.evaluate(() =>
       JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").id);
     assert.equal(secondId,firstId,"The two tabs must refer to the same project");
@@ -89,6 +94,12 @@ if (!inside) {
     // Closing the owner releases the actual Web Lock. The rival tab must
     // explicitly export its stale snapshot before adopting the latest version.
     await first.close();
+    const recovery=second.getByRole("button",{name:"Salva backup e carica versione aggiornata"});
+    // Declining the first consent must leave the rival tab blocked.
+    second.once("dialog",dialog => void dialog.dismiss());
+    await recovery.click();
+    await expect(second.getByText("Conflitto locale tra schede")).toBeVisible();
+    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeDisabled();
     let approvals=0;
     second.on("dialog",async dialog => {approvals++;await dialog.accept();});
     const downloadPromise=second.waitForEvent("download",{timeout:20000});
