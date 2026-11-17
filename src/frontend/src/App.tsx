@@ -145,7 +145,10 @@ export default function App() {
         setProjectIndexRevision(v => v + 1);
       if (event.storageArea === localStorage &&
           event.key === "softwarefactory.project.library.v1." + id &&
-          event.newValue !== localBaselineRef.current.get(id)) {
+          event.newValue !== localBaselineRef.current.get(id) &&
+          // Storage notifications can arrive after a user-controlled recovery
+          // has already read a newer version. Ignore superseded notifications.
+          event.newValue === localStorage.getItem(event.key)) {
         // If this tab never acquired A because the writer is in another tab,
         // retain that knowledge: switching to an unrelated B remains safe.
         setLocalConflict("Un'altra scheda ha modificato il progetto aperto. " +
