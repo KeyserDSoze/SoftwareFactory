@@ -451,7 +451,9 @@ export default function App() {
   }
   async function publish() {
     clearMessages();
-    if (localConflict) { setError("Conflitto locale: risolvilo prima di pubblicare."); return; }
+    if (localConflict || !writerLeaseReady || writerLeaseRef.current?.projectId !== projectRef.current.id) {
+      setError("Progetto non protetto dal lock locale: non pubblicare finché il controllo di scrittura non è pronto."); return;
+    }
     if (!publishConfirmed) { setError("Conferma il contenuto da pubblicare sul repository."); return; }
     if (!paths.length) { setError("Inserisci nome e descrizione per generare lo scaffold."); return; }
     setBusy(true); setOperation("GitHub sync");
@@ -534,7 +536,7 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
   async function importFromGithub(mode: "status" | "import") {
-    if (busy || localConflict) return;
+    if (busy || localConflict || !writerLeaseReady) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
     try {
       const git = settingsRef.current.git;
@@ -585,6 +587,9 @@ export default function App() {
     finally { setBusy(false); setOperation(""); }
   }
   function toggleGithubAutoSync(enabled: boolean) {
+    if (enabled && (!writerLeaseReady || writerLeaseRef.current?.projectId !== projectRef.current.id)) {
+      setError("Autosync non abilitabile senza lock esclusivo della scheda."); return;
+    }
     if (enabled && (!githubBindingMatches(projectRef.current, settingsRef.current.git) ||
         !projectRef.current.githubSync?.lastCommit)) {
       setError("Prima pubblica il primo checkpoint GitHub e attendi la conferma del commit."); return;
@@ -698,7 +703,7 @@ export default function App() {
             <p>{localConflict}</p>
             <p>Questa scheda non sovrascriverà la versione salvata dall'altra.
               Esporta prima il JSON di recupero e scegli esplicitamente se caricare la versione aggiornata.</p>
-            <button className="secondary" disabled={busy} onClick={recoverLocalConflict}>
+            <button className="secondary" disabled={busy} onClick={() => void recoverLocalConflict()}>
               <Download size={15}/> Salva backup e carica versione aggiornata
             </button>
           </section>}
@@ -775,9 +780,11 @@ export default function App() {
           <section className="panel activity-panel"><div className="panel-title"><div><span className="eyebrow">OPERATION LOG</span><h3>Attività della sessione</h3></div><Activity size={20} /></div>
             {runLog.length ? runLog.map((item, i) => <div key={i} className="log-line"><span className="status-dot" /> {item}</div>) : <p className="dimmed">Le attività appariranno qui dopo il primo task. I checkpoint sono salvati nel progetto.</p>}</section>
         </>}
-        {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy}
+        {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy || !writerLeaseReady || Boolean(localConflict)}
           onBusy={(active, label) => { setBusy(active); setOperation(active ? label || "Code Agent" : ""); }}
-          onProjectChange={changeProject} onNotice={setNotice} onError={setError} />}
+          onProjectChange={next => {
+            if (!changeProject(next)) throw Error("Modifica Code Agent non persistita: lock locale o conflitto.");
+          }} onNotice={setNotice} onError={setError} />}
         {tab === "stack" && <>
           <SectionHead eyebrow="FACTORY / BLUEPRINT" title="Architettura componibile" text="Puoi modificare frontend, hosting e servizi in qualsiasi momento. I piani AI dipendenti dalla configurazione vengono invalidati." />
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">TARGET APPLICATIONS</span><h3>Frontend multipli</h3></div><Code2 size={20} /></div>
@@ -903,7 +910,7 @@ export default function App() {
             <p className="helper">Push atomico con Git Data API e fast-forward, senza force push. Per GitHub App serve un broker sicuro: non mettere una chiave privata App nella SPA. Il merge dei branch resta una decisione esplicita su GitHub.</p>
             <label className="checkline"><input type="checkbox" checked={publishConfirmed} onChange={e => setPublishConfirmed(e.target.checked)} /> Ho verificato file e visibilità della repository; autorizzo creazione e commit.</label>
             <div className="button-group align-right"><button className="secondary" onClick={() => setTab("stack")}><FileText size={15} /> Anteprima file</button>
-              <button className="primary" disabled={busy || Boolean(localConflict) || !publishConfirmed || !paths.length} onClick={() => void publish()}><GitCommit size={17} /> Pubblica su GitHub</button></div>
+              <button className="primary" disabled={busy || !writerLeaseReady || Boolean(localConflict) || !publishConfirmed || !paths.length} onClick={() => void publish()}><GitCommit size={17} /> Pubblica su GitHub</button></div>
             {lastPush && <a className="link-result" href={lastPush} target="_blank" rel="noopener noreferrer">Apri ultimo commit <ExternalLink size={14} /></a>}
           </section>
           <section className="panel"><div className="panel-title"><div><span className="eyebrow">BACKUP & RESTORE</span><h3>Google Drive / OneDrive</h3></div><Cloud size={20} /></div>
