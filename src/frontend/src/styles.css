@@ -71,8 +71,9 @@ button.primary,button.secondary,button.outline,button.subtle,button.danger-butto
 .background-task-details { border-top:1px solid #e2e8f0; padding:12px; font-size:12px; }
 .background-task-details p { margin:0 0 8px; }
 .shell { padding-bottom: 20px; }
+/* Reserve scroll space under the floating task card on desktop too. */
+.shell:has(.background-task-toast) .page { padding-bottom: 250px; }
 @media(max-width:680px) {
  .runner-resource-grid{grid-template-columns:1fr}
  .background-task-toast{bottom:calc(12px + env(safe-area-inset-bottom,0px))}
- .shell:has(.background-task-toast) .page {padding-bottom:250px}
 }
