@@ -77,3 +77,30 @@ button.primary,button.secondary,button.outline,button.subtle,button.danger-butto
  .runner-resource-grid{grid-template-columns:1fr}
  .background-task-toast{bottom:calc(12px + env(safe-area-inset-bottom,0px))}
 }
+
+/* Downloadable versioned installer + translated operator guide (#90). */
+.installer-release-panel { border: 1px solid #bfd8e0; background: #f5fafc; border-radius: 14px;
+  padding: 17px; margin: 15px 0; min-width: 0; }
+.installer-release-panel > strong { display: inline-flex; align-items: center; gap: 8px; }
+.installer-release-assets { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 11px 0; }
+.installer-release-assets span, .installer-release-assets a { display: inline-flex; align-items: center;
+  gap: 6px; font-size: 12px; }
+.installer-release-assets a { border: 1px solid #bfd8e0; background: white; border-radius: 8px;
+  padding: 9px 12px; font-weight: 600; text-decoration: none; }
+.installer-release-assets a:hover { border-color: #0f766e; }
+.installer-guide { border-top: 1px solid #cbd5e1; margin-top: 11px; padding-top: 10px; }
+.installer-guide summary { font-size: 13px; font-weight: 700; cursor: pointer; }
+.installer-guide ol { padding-left: 23px; font-size: 12px; line-height: 1.75; }
+.installer-guide li { padding: 5px 0; overflow-wrap: anywhere; }
+.installer-guide .button-group a { display: inline-flex; align-items: center; gap: 4px; }
+.language-select { display: inline-flex; align-items: center; margin-right: 10px; }
+.language-select select { min-height: 34px; border: 1px solid #cbd5e1; border-radius: 8px;
+  font-size: 12px; background: white; padding: 5px; color: #0f172a; }
+.github-actions-panel .runner-checks { margin: 12px 0; }
+.github-actions-panel .runner-report a { display: inline-flex; align-items: center; gap: 5px; }
+@media (max-width: 640px) {
+  .installer-release-panel { padding: 12px; }
+  .installer-release-assets { flex-direction: column; align-items: flex-start; }
+  .language-select { margin-right: 3px; }
+}
