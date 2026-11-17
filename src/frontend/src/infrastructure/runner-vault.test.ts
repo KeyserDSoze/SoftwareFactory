@@ -60,7 +60,7 @@ describe("runner cloud vault E2EE and resource metrics", () => {
         const body = String(options.body);
         const match = body.match(/\{\s*"schemaVersion":1[^\r\n]*/);
         if (!match) throw Error("vault payload missing");
-        const extracted = match[0].split("\r\n")[0].split("--")[0];
+        const extracted = match[0].split("\r\n")[0];
         vault = extracted.trim();
         return { ok: true, json: async () => ({}) };
       }
