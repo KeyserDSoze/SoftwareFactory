@@ -9,6 +9,7 @@ import { beginRepairSession, getRepairSession, advanceRepairSession } from "./co
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
 import { loadRunnerTenantsFile, authenticateRunnerTenant } from "./tenants.mjs";
+import { readWorkerMetrics } from "./host-metrics.mjs";
 
 export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
@@ -125,6 +126,18 @@ export function createRunnerServer({
     if (repairRoute ? !repairOperator :
         tenantMode ? !activeTenant : !authenticate(req.headers.authorization, activeRunnerKey)) {
       send(401, { error: "unauthorized" }); return;
+    }
+    if (req.method === "GET" && req.url === "/v1/host-metrics") {
+      // The API reads only bounded aggregate snapshots from its shared data mount.
+      // The worker has Docker access; this process does not. Never read /proc on API.
+      try {
+        const snapshot = await readWorkerMetrics(dataDir, workerHeartbeatMaxAgeSeconds * 1000);
+        send(200, snapshot);
+      } catch {
+        res.writeHead(503, { ...headers, "Retry-After": "5" });
+        res.end(JSON.stringify({ error: "host_metrics_unavailable" }));
+      }
+      return;
     }
     if (req.method === "GET" && req.url === "/v1/execution-readiness") {
       // API never opens the Docker socket. It verifies the last daemon result
