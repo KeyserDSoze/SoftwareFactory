@@ -32,7 +32,7 @@ describe("application scaffold", () => {
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain("run-name: 'SoftwareFactory tests ${{ inputs.request_id }}'");
     expect(workflow).toContain("persist-credentials: false");
-    expect(workflow).toContain("permissions:\\n  contents: read");
+    expect(workflow).toContain("permissions:\n  contents: read");
     for (const input of ["dotnet_build", "dotnet_test", "web_build", "web_test", "playwright"])
       expect(workflow).toContain("      " + input + ":");
     expect(workflow).toContain("Upload JSON report even if tests fail");
