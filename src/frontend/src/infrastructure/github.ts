@@ -115,3 +115,74 @@ export async function pushGeneratedFiles(git: GitConfig, token: string, files: R
     throw new GitHubError("GitHub HEAD diversa dal commit appena creato: la sincronizzazione locale resta non confermata.");
   return { sha: commit.sha, url: "https://github.com/" + git.owner + "/" + git.repo + "/commit/" + commit.sha, branch: git.branch };
 }
+
+
+/** Verify a remote commit's complete generated source snapshot without writing.
+ *
+ * For an ambiguous/lost GitHub PUSH acknowledgement we accept only a single
+ * current HEAD whose Git tree contains exact blob IDs for EVERY generated
+ * source plus the portable checkpoint. A matching JSON checkpoint alone is
+ * insufficient: someone may have updated the checkpoint but not the sources.
+ * This does not prove the author of a commit or the absence of other files.
+ */
+export async function gitBlobObjectSha(content: string): Promise<string> {
+  if (typeof content !== "string" || typeof crypto?.subtle?.digest !== "function")
+    throw new GitHubError("Hash Git non disponibile nel browser: nessun riconoscimento automatico.");
+  const bytes = new TextEncoder().encode(content);
+  const prefix = new TextEncoder().encode("blob " + bytes.byteLength + "\0");
+  const full = new Uint8Array(prefix.length + bytes.length);
+  full.set(prefix);
+  full.set(bytes, prefix.length);
+  const digest = await crypto.subtle.digest("SHA-1", full);
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+export async function verifyGithubCommitFiles(
+  git: GitConfig, token: string, headSha: string, files: Record<string, string>,
+  previousHeadSha?: string,
+): Promise<{ verifiedFiles: number; parentSha: string }> {
+  validateGitConfig(git);
+  const SHA = /^[a-f0-9]{40}$/i;
+  if (!SHA.test(headSha) || (previousHeadSha && !SHA.test(previousHeadSha)))
+    throw new GitHubError("SHA GitHub non valido per la verifica.");
+  const entries = Object.entries(files);
+  if (!entries.length || entries.length > 1000 || entries.some(([path, data]) =>
+    typeof data !== "string" || !path || path.includes("\\") || path.includes("..") ||
+    path.startsWith("/") || path.split("/").some(part => !part || part === ".")))
+    throw new GitHubError("Sorgenti GitHub non validi per la verifica.");
+  const root = "/repos/" + git.owner + "/" + git.repo;
+  const commit = await request<{ sha?: string; parents?: Array<{sha?: string}>; tree?: {sha?: string} }>(
+    root + "/git/commits/" + headSha, token);
+  if (commit.sha?.toLowerCase() !== headSha.toLowerCase() ||
+      !Array.isArray(commit.parents) || commit.parents.length !== 1 ||
+      !SHA.test(commit.parents[0]?.sha || "") ||
+      (previousHeadSha && commit.parents[0].sha?.toLowerCase() !== previousHeadSha.toLowerCase()) ||
+      !SHA.test(commit.tree?.sha || ""))
+    throw new GitHubError("Commit GitHub non figlio della HEAD attesa o metadata non verificabili. Nessun ack.");
+  const tree = await request<{ truncated?: boolean;
+    tree?: Array<{path?: string; sha?: string; type?: string; mode?: string}> }>(
+    root + "/git/trees/" + commit.tree!.sha + "?recursive=1", token);
+  if (tree.truncated !== false || !Array.isArray(tree.tree) || tree.tree.length > 5000)
+    throw new GitHubError("Albero GitHub incompleto o troppo grande: impossibile verificare i file.");
+  const expected = new Map<string,string>();
+  // Do not trust SHA-1 digests received in the JSON: compute Git blob IDs
+  // from the exact UTF-8 bytes that SoftwareFactory would publish right now.
+  for (const [path, data] of entries) {
+    if (expected.has(path)) throw new GitHubError("Percorso file GitHub duplicato.");
+    expected.set(path, await gitBlobObjectSha(data));
+  }
+  const found = new Set<string>();
+  for (const entry of tree.tree) {
+    if (!entry.path || !expected.has(entry.path)) continue;
+    if (found.has(entry.path) || entry.type !== "blob" || entry.mode !== "100644" ||
+        entry.sha?.toLowerCase() !== expected.get(entry.path))
+      throw new GitHubError("Contenuto dei file GitHub diverso dal workspace locale: ack vietato.");
+    found.add(entry.path);
+  }
+  if (found.size !== expected.size)
+    throw new GitHubError("Sorgenti mancanti nel commit remoto: ack vietato.");
+  const ref = await request<{object?: {sha?: string}}>(root + "/git/ref/heads/" +
+    git.branch.split("/").map(encodeURIComponent).join("/"), token);
+  if (ref.object?.sha?.toLowerCase() !== headSha.toLowerCase())
+    throw new GitHubError("HEAD GitHub cambiata durante il controllo: nessun ack.");
+  return { verifiedFiles: found.size, parentSha: commit.parents[0].sha! };
+}
