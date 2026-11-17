@@ -156,6 +156,11 @@ if (!inside) {
     try {
       const page = await importContext.newPage();
       await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled({timeout:15000});
+      await page.getByLabel("Descrizione dell'idea").fill(
+        "Application created solely for the GitHub import concurrency browser test.");
+      await expect(page.getByLabel("Descrizione dell'idea"))
+        .toHaveValue("Application created solely for the GitHub import concurrency browser test.");
       const before = await page.evaluate(() =>
         JSON.parse(localStorage.getItem("softwarefactory.project.v1") || "{}"));
       assert.match(before.id,/^[0-9a-f-]{36}$/i);
