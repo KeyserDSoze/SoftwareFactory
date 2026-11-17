@@ -518,7 +518,7 @@ describe("application scaffold", () => {
       expect(production.services.web.ports[0].host_ip).toBe("127.0.0.1");
       expect(String(production.services.web.ports[0].published)).toBe("3000");
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  });
+  }, 30000); // Docker Compose CLI can be slow under parallel CI workloads.
   it("renders optional services before top-level volumes across all database variants", () => {
     const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
       HOME: process.env.HOME || "/tmp" };
