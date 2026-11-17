@@ -13,6 +13,8 @@ export interface AiProfile {
   label: string;
   baseUrl: string;
   model: string;
+  /** Inventory from a user-triggered GET /models, not automatic discovery. */
+  models?: string[];
   enabled: boolean;
   /** BookWriter-style endpoint fallback. Automatic omits reasoning_effort. */
   reasoningEffort?: ThinkingChoice;
