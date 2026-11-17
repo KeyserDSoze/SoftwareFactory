@@ -83,6 +83,7 @@ export default function App() {
   const [githubPreview, setGithubPreview] = useState<GithubWorkspaceComparison | null>(null);
   const [localConflict, setLocalConflict] = useState("");
   const [writerLeaseReady, setWriterLeaseReady] = useState(false);
+  const [writerContended, setWriterContended] = useState(false);
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
   const [runnerVaultPassphrase, setRunnerVaultPassphrase] = useState("");
   const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
@@ -117,14 +118,18 @@ export default function App() {
             const confirmed = persistProjectIfUnchanged(projectRef.current, persisted);
             localBaselineRef.current.set(project.id, confirmed);
           }
+          setWriterContended(false);
           setWriterLeaseReady(true);
           setProjectIndexRevision(v => v + 1);
         } catch (error) {
           setLocalConflict(error instanceof Error ? error.message : String(error));
         }
       }).catch(error => {
-        if (!cancelled)
-          setLocalConflict(error instanceof Error ? error.message : String(error));
+        if (!cancelled) {
+          const msg = error instanceof Error ? error.message : String(error);
+          setWriterContended(msg.includes("Progetto già in modifica in un'altra scheda"));
+          setLocalConflict(msg);
+        }
       });
     });
     return () => {
@@ -136,9 +141,12 @@ export default function App() {
   useEffect(() => {
     const storageChanged = (event: StorageEvent) => {
       const id = projectRef.current.id;
+      if (event.storageArea === localStorage && event.key === "softwarefactory.project.index.v1")
+        setProjectIndexRevision(v => v + 1);
       if (event.storageArea === localStorage &&
           event.key === "softwarefactory.project.library.v1." + id &&
           event.newValue !== localBaselineRef.current.get(id)) {
+        setWriterContended(false);
         setLocalConflict("Un'altra scheda ha modificato il progetto aperto. " +
           "Questa scheda non deve sovrascrivere la versione aggiornata.");
         setPublishConfirmed(false);
@@ -274,7 +282,10 @@ export default function App() {
         "Chiudi eventuali schede concorrenti e riprova.");
       return false;
     }
-    if (localConflict) {
+    const takingOtherProject = projectSwitchRef.current && writerContended &&
+      nextProject.id !== projectRef.current.id &&
+      writerLeaseRef.current?.projectId === nextProject.id;
+    if (localConflict && !takingOtherProject) {
       setError("Conflitto locale aperto: salva prima un backup e scegli la versione corretta.");
       return false;
     }
@@ -289,6 +300,7 @@ export default function App() {
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setWriterContended(false);
       setLocalConflict(message);
       setError("Scrittura locale sospesa: " + message);
       setPublishConfirmed(false);
@@ -311,6 +323,7 @@ export default function App() {
         return false;
       }
       old?.release();
+      if (writerContended) { setLocalConflict(""); setWriterContended(false); }
       return true;
     } finally {
       projectSwitchRef.current = false;
@@ -400,7 +413,8 @@ export default function App() {
   }
   function pause() { abortRef.current?.abort(); }
   async function newProject() {
-    if (busy || localConflict || !writerLeaseReady || !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
+    if (busy || (localConflict && !writerContended) || (!writerLeaseReady && !writerContended) ||
+        !confirm("Creare un nuovo progetto? Quello corrente resta nella libreria locale, " +
       "ma esporta un backup ZIP/cloud per proteggerlo da cancellazione browser.")) return;
     try {
       if (!await changeProjectWithLease(createProject())) return;
@@ -409,7 +423,8 @@ export default function App() {
     } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
   }
   async function switchProject(id: string) {
-    if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current ||
+    if (busy || (localConflict && !writerContended) ||
+        (!writerLeaseReady && !writerContended) || projectSwitchRef.current ||
         id === projectRef.current.id) return;
     projectSwitchRef.current = true;
     setWriterLeaseReady(false);
@@ -435,6 +450,7 @@ export default function App() {
           return;
         }
         previousLease?.release();
+        if (writerContended) { setLocalConflict(""); setWriterContended(false); }
       } catch (error) {
         writerLeaseRef.current = previousLease;
         throw error;
@@ -535,6 +551,7 @@ export default function App() {
       setProject(fresh);
       setProjectIndexRevision(v => v + 1);
       setLocalConflict("");
+      setWriterContended(false);
       setWriterLeaseReady(true);
       editSettings(s => { s.githubAutoSync = false; });
       setNotice("Versione della libreria locale caricata. Autosync disabilitato per sicurezza.");
@@ -700,7 +717,8 @@ export default function App() {
       })}</nav>
       <div className="sidebar-bottom"><div className="project-mini"><div className="mini-head"><span className="status-dot" /> PROGETTO ATTIVO</div><strong title={project.config.name}>{project.config.name || "Senza nome"}</strong>
         <div className="mini-progress"><span style={{ width: progress + "%" }} /></div><small>{completed} / {STAGES.length} fasi completate · {progress}%</small></div>
-        <button className="subtle full" disabled={!writerLeaseReady || Boolean(localConflict)} onClick={() => void newProject()}><Plus size={16} /> Nuovo progetto</button>
+        <button className="subtle full" disabled={(!writerLeaseReady && !writerContended) ||
+          Boolean(localConflict && !writerContended)} onClick={() => void newProject()}><Plus size={16} /> Nuovo progetto</button>
         <div className="sidebar-credit">Local-first · dati nel browser</div>
       </div>
     </aside>
