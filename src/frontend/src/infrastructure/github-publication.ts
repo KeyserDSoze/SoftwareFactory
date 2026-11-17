@@ -4,10 +4,10 @@
  */
 import type { FactoryProject, GitConfig } from "../domain/types";
 import { workspaceFiles } from "../domain/development";
-import { ensureRepository, pushGeneratedFiles } from "./github";
+import { ensureRepository, pushGeneratedFiles, verifyGithubCommitFiles } from "./github";
 import { inspectGithubRepository } from "./github-discovery";
 import { encodeGithubWorkspace, inspectGithubWorkspace,
-  GITHUB_WORKSPACE_PATH, githubBindingMatches } from "./github-workspace";
+  GITHUB_WORKSPACE_PATH, githubBindingMatches, portableGithubProject } from "./github-workspace";
 export type PublishedGithubWorkspace = {
   project: FactoryProject; url: string; sha: string; branch: string;
 };
@@ -55,4 +55,50 @@ export async function importGithubWorkspace(
     githubSync: { owner: git.owner, repo: git.repo, branch: git.branch,
       lastCommit: remote.headSha, syncedLocalUpdatedAt: original.updatedAt,
       syncedAt: new Date().toISOString() } }, sha: remote.headSha };
+}
+
+
+/** Read-only reconciliation of a commit that may have succeeded after a lost
+ * HTTP response or after the remote write but before local acknowledgement.
+ * Never push again, import another project, or call this from autosync.
+ *
+ * This proves the CURRENT remote HEAD has the exact portable project content
+ * and every exact source blob that the current local snapshot would produce.
+ * A previously acknowledged binding additionally requires one direct parent
+ * equal to its last known commit, rejecting other devices' advanced branches.
+ */
+export async function recoverGithubAcknowledgement(
+  project: FactoryProject, git: GitConfig, token: string,
+): Promise<PublishedGithubWorkspace & { verifiedFiles: number; parentSha: string; firstBinding: boolean }> {
+  // Validate and re-render locally before trusting any remote data.
+  const files = { ...workspaceFiles(project),
+    [GITHUB_WORKSPACE_PATH]: encodeGithubWorkspace(project) };
+  const previouslyBound = githubBindingMatches(project, git);
+  const previousSha = previouslyBound ? project.githubSync!.lastCommit : undefined;
+  const remote = await inspectGithubWorkspace(git, token);
+  if (!remote.project)
+    throw Error("Nessun checkpoint GitHub da riconciliare. Nessuna modifica remota eseguita.");
+  if (previousSha === remote.headSha)
+    throw Error("HEAD GitHub già nota: non esiste un nuovo commit da riconciliare.");
+  if (project.id !== remote.project.id ||
+      JSON.stringify(portableGithubProject(project)) !==
+        JSON.stringify(portableGithubProject(remote.project)))
+    throw Error("Checkpoint remoto diverso dal progetto locale: importazione manuale necessaria. Nessun ack.");
+  const evidence = await verifyGithubCommitFiles(
+    git, token, remote.headSha, files, previousSha,
+  );
+  const priorConsent = previouslyBound && project.githubSync?.publicConsent === true;
+  return {
+    project: { ...project, githubSync: {
+      owner: git.owner, repo: git.repo, branch: git.branch,
+      lastCommit: remote.headSha, syncedLocalUpdatedAt: project.updatedAt,
+      syncedAt: new Date().toISOString(),
+      publicConsent: priorConsent,
+    } },
+    sha: remote.headSha,
+    branch: git.branch,
+    url: "https://github.com/" + git.owner + "/" + git.repo + "/commit/" + remote.headSha,
+    verifiedFiles: evidence.verifiedFiles, parentSha: evidence.parentSha,
+    firstBinding: !previouslyBound,
+  };
 }
