@@ -144,6 +144,18 @@ describe("application scaffold", () => {
     expect(browser).toContain('await releaseGate');
     expect(browser).toContain("Object.keys(sessionStorage)");
   });
+  it("does not invalidate an in-flight save for duplicate OIDC userLoaded callbacks", () => {
+    const files = generateFiles(example());
+    const ui = files["src/frontend/web/src/WorkItems.tsx"];
+    const e2e = files["src/frontend/web/e2e/smoke.spec.ts"];
+    expect(ui).toContain('if (nextToken && activeToken.current === nextToken && !logoutFence.current) return;');
+    expect(ui).toContain('sessionEpoch.current++;');
+    expect(e2e).toContain('const createResponsePromise = page.waitForResponse');
+    expect(e2e).toContain('response.request().method() === "POST"');
+    expect(e2e).toContain('expect(createResponse.ok(), "Real API create returned HTTP " + createResponse.status())');
+    // A negative API outcome is a test failure, never a silently green run.
+    expect(e2e).not.toContain('continueOnError: true');
+  });
   it("fences every generated PostgreSQL mutation and 401 to the active OIDC session", () => {
     const files = generateFiles(example());
     const component = files["src/frontend/web/src/WorkItems.tsx"];
