@@ -651,3 +651,29 @@ Nessun task AI può affermare che il prodotto è compilato/testato senza un risu
 - CLI operator-only per Linux UID 1000: `--check` read-only su Git main SHA immutabile, private env 0600 e preflight Compose/host; `--apply --confirm-install` richiede VM acceptance canary rootless digest-pinned, claim esclusiva, assenza di stack esistenti e `docker compose up --build` del solo runner-api/runner-worker, senza Tunnel/SSH/host rootful.
 - Controlli runtime post-avvio sui container esatti, mount socket solo nel worker e GET rootless readiness autenticati via loopback; receipt locale e segreti mai mostrati. Test Node deterministici su policy, mutazioni dell'env, concorrenza, Docker rootful/sostituito, percorsi falsificati e profili credenziali; CI Factory tradizionale conferma non regressione.
 - **Resta in #87 M2:** collaudo reale su PC/VM Linux con rootless e lifecycle di packaging/version pin, update/rollback, uninstall e revoke; #87 M3 pairing temporaneo, M4 topologie fullstack amministrate, M5 attenuazione rischi multi-host/off-host. ADR 0044.
+
+
+## Software house multi-ruolo BookWriter-style + installazione host (#89, 17 novembre 2026)
+
+Prima tranche su `main`:
+- 23 ruoli dichiarati con responsabilità e routing endpoint/modello/thinking.
+  Sei ruoli eseguono le fasi AI Factory, developer/reviewer/fix sono
+  effettivamente usati dal Code Agent; gli altri sono configurabili ma inattivi.
+- L'API AI riceve il modello per ruolo e un `reasoning_effort` esplicito
+  per low/medium/high/xhigh; automatic non lo invia. Ancora da allineare
+  a BookWriter su discovery `/models`, capabilities provider, streaming,
+  token limits, costi, output e interfaccia di manutenzione endpoint.
+- Bootstrap CLI su Linux uid 1000 per generare config privata e avviare la
+  stack runner preflightata; tunnel/reverse proxy ancora da configurare
+  manualmente; non è un installer dal browser.
+- Il backup app folder esistente trasferisce settings non segreti,
+  ora comprensivi di runnerEndpoint e agentRoutes anche al ripristino.
+  Non c'è vault cifrato, sync automatico/versionato né merge multi-device.
+
+**Milestone aperte**: scheduler PM persistente con timeline, handoff
+analista→architect→developer→tester→fix→review→re-test; model inventory e
+reasoning capabilities BookWriter; installer host versionato/firmato e pairing
+con scadenza/revoca; cloud profile E2EE e CAS/conflict management; sandbox
+multi-container governate dal worker; collaudo on-prem/VM/tunnel reali.
+Tracciamento in [#89](https://github.com/KeyserDSoze/SoftwareFactory/issues/89)
+e [#87](https://github.com/KeyserDSoze/SoftwareFactory/issues/87).
