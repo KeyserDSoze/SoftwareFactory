@@ -1,6 +1,6 @@
 # ADR 0049 — Browser Web Locks: singola scheda writer per progetto
 
-Data: 17 novembre 2026 · Stato: **implementato in codice, collaudo Chromium/CI in corso**
+Data: 17 novembre 2026 · Stato: **implementato; smoke Chromium reale passato in CI intermedia, collaudo finale in corso**
 Issue [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92), epica [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91). Complementa [ADR 0048](0048-github-pat-project-sync-bookwriter-parity.md).
 
 ## Problema
@@ -19,7 +19,7 @@ La libreria locale usa localStorage e una copia per-progetto `softwarefactory.pr
 
 ## Verifica
 
-Unit test `project-writer-lease.test.ts`: stesso ID conteso, due ID indipendenti, release idempotente, assenza browser API = fail-closed. Real Chromium smoke `src/runner/scripts/factory-browser-lock-smoke.mjs` usa due/tre schede sulla Factory compilata, verifica bloccaggio ed esplicito export/restore del JSON dopo aver chiuso il writer. Eseguito dalla Factory CI in container Playwright networkless, read-only, no extra caps, socket Docker mai montato nel browser.
+Unit test `project-writer-lease.test.ts`: stesso ID conteso, due ID indipendenti, release idempotente, assenza browser API = fail-closed. Real Chromium smoke `src/runner/scripts/factory-browser-lock-smoke.mjs` usa due/tre schede sulla Factory compilata, verifica bloccaggio ed esplicito export/restore del JSON dopo aver chiuso il writer. Eseguito dalla Factory CI in container Playwright networkless, read-only, no extra caps, socket Docker mai montato nel browser. Step Chromium passato nel run [44144764617](https://github.com/KeyserDSoze/SoftwareFactory/actions/runs/44144764617); il test copre anche il rifiuto della conferma e una scrittura da scheda obsoleta nelle versioni successive.
 
 ## Limitazioni e minacce
 
