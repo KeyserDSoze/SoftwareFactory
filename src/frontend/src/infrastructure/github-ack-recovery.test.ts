@@ -4,7 +4,7 @@ import { workspaceFiles } from "../domain/development";
 import type { FactoryProject, GitConfig } from "../domain/types";
 import { encodeGithubWorkspace, GITHUB_WORKSPACE_PATH } from "./github-workspace";
 import { recoverGithubAcknowledgement } from "./github-publication";
-import { gitBlobObjectSha } from "./github";
+import { gitBlobObjectSha, readGithubHeadSha } from "./github";
 
 const OLD = "a".repeat(40), REMOTE = "d".repeat(40), TREE = "b".repeat(40);
 const PAT = "github_pat_" + "x".repeat(50);
@@ -131,6 +131,14 @@ describe("GitHub lost acknowledgement recovery (read-only)",()=>{
     expect(unbound.firstBinding).toBe(true);
     expect(unbound.project.githubSync!.publicConsent).toBe(false);
     expect(otherDestination.repo).not.toBe(git.repo);
+  });
+  it("detects a HEAD change that happens while a user confirmation dialog is open",async()=>{
+    const project=bound(make());
+    const calls=await mockRecovery(project,{afterReadHead:"f".repeat(40)});
+    expect(await readGithubHeadSha(git,PAT)).toBe(REMOTE);
+    const headAfterConfirm=await readGithubHeadSha(git,PAT);
+    expect(headAfterConfirm).not.toBe(REMOTE);
+    expect(calls.every(call=>call.method==="GET")).toBe(true);
   });
   it("computes exact standard Git UTF-8 blob IDs (not a hash of a JS character count)",async()=>{
     expect(await gitBlobObjectSha("hello\n")).toBe("ce013625030ba8dba906f756967f9e9ca394464a");
