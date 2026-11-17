@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG: ProjectConfig = {
   },
 };
 export const DEFAULT_SETTINGS: FactorySettings = {
+  language: "it",
   profiles: [{ id: "default", label: "OpenAI-compatible", baseUrl: "https://api.openai.com/v1", model: "", enabled: true }],
   assignments: { features: "default", competitors: "default", technical: "default", architecture: "default", adversarial: "default", implementation: "default" },
   searchEndpoint: "",
