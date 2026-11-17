@@ -736,3 +736,7 @@ In GitHub Actions, oltre ai controlli della Factory, compilare l'API .NET e il w
 - OneDrive usa eTag condizionale, Google Drive version check *best effort*; non chiamare l'implementazione Google CAS atomica. Cloud PAT vault e runner vault hanno AAD indipendenti, passphrase non archiviate.
 - GitHub Action report v1 lega run/sha/ref/attempt; generare una richiesta fix da fallimento solo se lo SHA del report coincide con `githubSync.lastCommit` del progetto senza nuove modifiche. Log non fidati, nessun auto-fix, approvazione o deploy.
 - I test provider reali e security review restano aperti nella #91: non dichiarare completata produzione/BookWriter parity totale fino alla convalida end-to-end e UX accessibile multilingua.
+
+## Release candidate sperimentale del runner (#90)
+
+Il workflow `.github/workflows/release-installer.yml` accetta dispatch manuale per tag stabili o prerelease, ma può anche pubblicare un `vX.Y.Z-rc.N` automaticamente dopo `Factory CI` conclusa **success** sullo stesso SHA `main` e nello stesso repository, **solo quando il commit contiene** `.github/installer-release.version`. Il checkout è pinned al SHA CI, mai a branch arbitrario. Non pubblicare release candidate da PR o fork. Il job è idempotente se la Release esiste e non modifica tag. Asset checksum e guide IT/EN indispensabili. La SPA mostra avviso su prerelease e non esegue installazione. Prerelease != VM test o production readiness: mantenere issue #87/#90 aperte fino a test on-host.
