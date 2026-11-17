@@ -7,11 +7,31 @@ const name = "softwarefactory-runner-installer.tar.gz";
 type Asset = { name: string; browser_download_url: string; size: number };
 type Release = { tag_name: string; html_url: string; draft: boolean; prerelease: boolean; assets: Asset[] };
 export function installerReleaseAssetLink(release: Release, assetName: string): string | null {
-  if (!/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.draft || release.prerelease) return null;
-  const asset = release.assets?.find(item => item.name === assetName);
-  if (!asset || asset.size <= 0 || asset.size > 100_000_000) return null;
+  if (!release || typeof release !== "object" ||
+      !/^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(release.tag_name) ||
+      typeof release.draft !== "boolean" || typeof release.prerelease !== "boolean" ||
+      release.draft || release.prerelease !== release.tag_name.includes("-rc.") ||
+      ![name, name + ".sha256"].includes(assetName) ||
+      !Array.isArray(release.assets) || release.assets.length > 50) return null;
+  const assets = release.assets.filter(item => item && item.name === assetName);
+  if (assets.length !== 1 || !Number.isSafeInteger(assets[0].size) ||
+      assets[0].size <= 0 || assets[0].size > 100_000_000) return null;
   const expected = repository + "/releases/download/" + release.tag_name + "/" + assetName;
-  return asset.browser_download_url === expected ? expected : null;
+  return assets[0].browser_download_url === expected ? expected : null;
+}
+/** Prefer stable Releases; show only a marked experimental RC when there is
+ * no valid stable installer. Never construct URLs from untrusted API fields.
+ */
+export function selectInstallerRelease(value: unknown): Release | null {
+  if (!Array.isArray(value) || value.length > 20) return null;
+  const eligible = value.filter((r: unknown): r is Release => {
+    if (!r || typeof r !== "object" || Array.isArray(r)) return false;
+    const release = r as Release;
+    return Boolean(installerReleaseAssetLink(release, name) &&
+      installerReleaseAssetLink(release, name + ".sha256") &&
+      release.html_url === repository + "/releases/tag/" + release.tag_name);
+  });
+  return eligible.find(r => !r.prerelease) ?? eligible.find(r => r.prerelease) ?? null;
 }
 export default function InstallerReleasePanel({ locale }: { locale: FactoryLocale }) {
   const [release, setRelease] = useState<Release | null>(null);
@@ -20,17 +40,16 @@ export default function InstallerReleasePanel({ locale }: { locale: FactoryLocal
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("https://api.github.com/repos/KeyserDSoze/SoftwareFactory/releases/latest", {
+        const response = await fetch("https://api.github.com/repos/KeyserDSoze/SoftwareFactory/releases?per_page=20", {
           method: "GET", mode: "cors", redirect: "error", cache: "no-store",
+          credentials: "omit", referrerPolicy: "no-referrer",
           headers: { Accept: "application/vnd.github+json" }, signal: controller.signal,
         });
-        if (!response.ok) throw Error("no latest release");
-        const parsed: unknown = await response.json();
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw Error("invalid release");
-        const r = parsed as Release;
-        if (!installerReleaseAssetLink(r, name) || !installerReleaseAssetLink(r, name + ".sha256") ||
-            r.html_url !== repository + "/releases/tag/" + r.tag_name)
-          throw Error("release has no verified installer assets");
+        if (!response.ok) throw Error("release list not available");
+        const raw = await response.text();
+        if (raw.length > 1_500_000) throw Error("release list too large");
+        const r = selectInstallerRelease(JSON.parse(raw) as unknown);
+        if (!r) throw Error("no verified installer release");
         if (!controller.signal.aborted) { setRelease(r); setState("ready"); }
       } catch {
         if (!controller.signal.aborted) setState("missing");
@@ -49,6 +68,9 @@ export default function InstallerReleasePanel({ locale }: { locale: FactoryLocal
         {t(locale, "releaseNotes")}</a>.</p>}
     {state === "ready" && release && <div className="installer-release-assets" role="status">
       <span><ShieldCheck size={16}/> {t(locale, "releaseAvailable")}: <code>{release.tag_name}</code></span>
+      {release.prerelease && <p role="alert" className="code-agent-warning">
+        <ShieldAlert size={15}/> {t(locale, "releaseExperimental")}
+      </p>}
       <a href={installerReleaseAssetLink(release, name)!} target="_blank" rel="noopener noreferrer">
         <Download size={15}/> {t(locale, "releaseDownload")}</a>
       <a href={installerReleaseAssetLink(release, name + ".sha256")!} target="_blank" rel="noopener noreferrer">
