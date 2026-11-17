@@ -687,3 +687,17 @@ Prima implementazione su main:
 - Vault manuale E2EE nel cloud app folder per singolo connector: URL e API key con PBKDF2-SHA256 600k/AES-256-GCM; token Cloudflare non trasferito.
 
 **Da completare:** collaudo reale Ubuntu/Debian VM con reboot e Cloudflare/Access; pacchetto versionato e installazione Node/UID 1000 guidata; pinning del container cloudflared e file-backed tunnel token; registro con molti runner, CAS/ETag e gestione conflitti cloud, rotazione/revoca, vault multi-credential e sync automatica; per-job CPU/RAM, Grafana e tariffe energetiche soltanto con dati verificabili; live LLM streaming come BookWriter e PM/tester scheduler indipendente dal browser. Issue #89/#87 **rimangono aperte**.
+
+## v0.3 — Installer nelle Release e test GitHub Actions selettivi (#90, 17 nov 2026)
+
+- [x] Workflow amministrativo manuale `Publish Linux runner installer`: archivio sorgente completo, `sha256sum` e note, guide IT/EN, versionamento SemVer stabile, politica no-overwrite. La pubblicazione reale richiede un avvio esplicito da `main`.
+- [x] SPA interroga l'ultima Release pubblica, propone download installer e checksum se presenti, guida localizzata IT/EN e selettore lingua persistente. Le schermate legacy sono ancora in italiano.
+- [x] Scaffolding applicazioni include `softwarefactory-tests.yml` dispatch su selezione booleana di build/test .NET e React e Playwright smoke mock, reporter JSON versionato con stato `passed/failed/incomplete` e artifact `if: always()`.
+- [x] UI Code Agent seleziona backend Docker oppure GitHub Actions, usa PAT per dispatch e polling di un run correlato con UUID, SHA, ref, attempt; valida ZIP e JSON (import manuale se CORS blocca redirect); fallimenti possono predisporre richiesta fix con consenso senza eseguirla o applicarla.
+- [ ] Pubblicare realmente una Release `vX.Y.Z` e verificare download e checksum dalla SPA.
+- [ ] Collaudare PAT dispatch su un repository app generato con workflow sul default branch, più combinazioni test, risultato success/failure e accessibilità ZIP da browser reali.
+- [ ] Migrare a i18n tutte le schermate e ogni stringa dei workflow, evitare componenti con testo hardcoded.
+- [ ] Integrare validazione/persistenza report e provenance off-host nel flusso tester→fix→independent reviewer→re-test, senza aggirare i gate runner esistenti.
+- [ ] Firma supply-chain del pacchetto Release, pin di Action/immagini, test installer su VM Ubuntu/Debian con reboot e Cloudflare Tunnel.
+
+Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
