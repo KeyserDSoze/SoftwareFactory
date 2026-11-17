@@ -38,6 +38,7 @@ export default function AgentRoleRouter({ settings, onChange }: Props) {
         const assignment = settings.agentRoutes?.[role.id];
         const fallback = roleFallbackStage(role.id);
         const inherited = settings.profiles.find(p => p.id === settings.assignments[fallback]);
+        const chosen = settings.profiles.find(p => p.id === (assignment?.profileId || settings.assignments[fallback]));
         return <div className="agent-role-row" key={role.id}>
           <div className="agent-role-heading"><strong>{role.name}</strong>
             <span>{EXECUTED_ROLES.includes(role.id) ? "Collegato a task reali" : "Predisposto, non eseguito"}</span></div>
@@ -52,8 +53,10 @@ export default function AgentRoleRouter({ settings, onChange }: Props) {
               </select>
             </label>
             <label>Modello per ruolo
-              <input value={assignment?.modelId ?? ""} placeholder="Eredita dal profilo"
+              <input list={"role-models-" + role.id} value={assignment?.modelId ?? ""} placeholder="Eredita dal profilo"
                 onChange={e => change(role.id, "modelId", e.target.value)} />
+              <datalist id={"role-models-" + role.id}>{(chosen?.models || []).map(model =>
+                <option key={model} value={model} />)}</datalist>
             </label>
             <label>Thinking / reasoning
               <select value={assignment?.thinking ?? ""}
