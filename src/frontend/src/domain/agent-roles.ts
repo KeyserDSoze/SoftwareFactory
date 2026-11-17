@@ -12,6 +12,7 @@ export const AGENT_ROLES = [
   { id: "cloud_architect", name: "Cloud Architect", group: "Architettura", duty: "Infrastruttura cloud, costi, compliance e scaling." },
   { id: "onprem_architect", name: "On-Prem Architect", group: "Architettura", duty: "Server, reti private, storage, Docker e resilienza locale." },
   { id: "security_engineer", name: "Security Engineer", group: "Architettura", duty: "Threat model, identità, segreti e security gate indipendenti." },
+  { id: "fullstack_developer", name: "Full-stack Developer", group: "Sviluppo", duty: "Implementazione feature C# e React con test e review." },
   { id: "backend_developer", name: "Backend Developer", group: "Sviluppo", duty: "API, servizi, domini e test backend." },
   { id: "frontend_developer", name: "Frontend Developer", group: "Sviluppo", duty: "UI React, accessibilità e test frontend." },
   { id: "mobile_developer", name: "Mobile Developer", group: "Sviluppo", duty: "Client Android/iOS e test nativi." },
