@@ -6,7 +6,7 @@ const repository = "https://github.com/KeyserDSoze/SoftwareFactory";
 const name = "softwarefactory-runner-installer.tar.gz";
 type Asset = { name: string; browser_download_url: string; size: number };
 type Release = { tag_name: string; html_url: string; draft: boolean; prerelease: boolean; assets: Asset[] };
-function assetLink(release: Release, assetName: string): string | null {
+export function installerReleaseAssetLink(release: Release, assetName: string): string | null {
   if (!/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.draft || release.prerelease) return null;
   const asset = release.assets?.find(item => item.name === assetName);
   if (!asset || asset.size <= 0 || asset.size > 100_000_000) return null;
@@ -28,7 +28,7 @@ export default function InstallerReleasePanel({ locale }: { locale: FactoryLocal
         const parsed: unknown = await response.json();
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw Error("invalid release");
         const r = parsed as Release;
-        if (!assetLink(r, name) || !assetLink(r, name + ".sha256") ||
+        if (!installerReleaseAssetLink(r, name) || !installerReleaseAssetLink(r, name + ".sha256") ||
             r.html_url !== repository + "/releases/tag/" + r.tag_name)
           throw Error("release has no verified installer assets");
         if (!controller.signal.aborted) { setRelease(r); setState("ready"); }
@@ -49,9 +49,9 @@ export default function InstallerReleasePanel({ locale }: { locale: FactoryLocal
         {t(locale, "releaseNotes")}</a>.</p>}
     {state === "ready" && release && <div className="installer-release-assets" role="status">
       <span><ShieldCheck size={16}/> {t(locale, "releaseAvailable")}: <code>{release.tag_name}</code></span>
-      <a href={assetLink(release, name)!} target="_blank" rel="noopener noreferrer">
+      <a href={installerReleaseAssetLink(release, name)!} target="_blank" rel="noopener noreferrer">
         <Download size={15}/> {t(locale, "releaseDownload")}</a>
-      <a href={assetLink(release, name + ".sha256")!} target="_blank" rel="noopener noreferrer">
+      <a href={installerReleaseAssetLink(release, name + ".sha256")!} target="_blank" rel="noopener noreferrer">
         <ShieldCheck size={15}/> {t(locale, "releaseChecksum")}</a>
     </div>}
     <details className="installer-guide" open>
