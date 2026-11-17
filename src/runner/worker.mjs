@@ -176,7 +176,12 @@ export async function runWorker({
 } = {}) {
   console.log("Runner worker is polling jobs; Docker socket must be rootless and host-isolated");
   const heartbeat = await startWorkerHeartbeat({ dataDir, intervalMs: heartbeatIntervalMs });
-  const metrics = await startWorkerMetrics({ dataDir });
+  // Telemetry is optional: a failed sensor/disk read must NEVER stop test execution.
+  let metrics = null;
+  try { metrics = await startWorkerMetrics({
+    dataDir, onError: () => console.error("Runner resource telemetry unavailable"),
+  }); }
+  catch { console.error("Runner resource telemetry unavailable"); }
   try {
     while (!stop()) {
     let entries = [];
@@ -246,7 +251,7 @@ export async function runWorker({
     } else await new Promise(resolve => setTimeout(resolve, pollMs));
     }
   } finally {
-    await metrics.stop();
+    await metrics?.stop();
     await heartbeat.stop();
   }
 }
