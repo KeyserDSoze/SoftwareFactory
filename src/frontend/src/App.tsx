@@ -44,6 +44,9 @@ const FRONTENDS: { id: FrontendKind; title: string; detail: string }[] = [
   { id: "unity", title: "Unity", detail: "3D / game, placeholder" },
 ];
 const formatDate = (stamp?: string) => stamp ? new Date(stamp).toLocaleString("it-IT") : "—";
+function safeLocalSnapshot(id: string): string | null {
+  try { return localProjectSnapshot(id); } catch { return null; }
+}
 function IconStatus({ status }: { status: string }) {
   if (status === "complete") return <CheckCircle2 size={18} className="ok" />;
   if (status === "running") return <RefreshCw size={18} className="spinning accent" />;
@@ -84,7 +87,7 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
   const localBaselineRef = useRef<Map<string,string|null>>(
-    new Map([[project.id, localProjectSnapshot(project.id)]]));
+    new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
   const oauthChecked = useRef(false);
   const busyRef = useRef(busy);
