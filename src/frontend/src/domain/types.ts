@@ -87,6 +87,8 @@ export interface FactoryProject {
   githubSync?: {
     owner: string; repo: string; branch: string; lastCommit: string;
     syncedLocalUpdatedAt: string; syncedAt: string;
+    /** Explicit consent for public repository publication; never inferred from config. */
+    publicConsent?: boolean;
   };
   /** Non-secret GitHub Actions dispatch binding; PAT stays in sessionStorage. */
   githubTestReceipt?: {
