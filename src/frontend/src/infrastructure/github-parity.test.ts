@@ -62,7 +62,7 @@ describe("GitHub BookWriter parity: PAT, cloud, discovery and checkpoints", () =
     let vault = "";
     vi.stubGlobal("fetch",vi.fn(async (url:string,init:RequestInit) => {
       calls.push({url,init});
-      if (url.includes("/drive/v3/files?")) return {ok:true,json:async()=>({
+      if (url.includes("/drive/v3/files?") && !url.includes("/upload/")) return {ok:true,json:async()=>({
         files:vault ? [{id:"valid1234",name:"softwarefactory-github-pat-v1.json",version:"1"}] : [],
       })};
       if (url.includes("/upload/")) {
@@ -119,7 +119,8 @@ describe("GitHub BookWriter parity: PAT, cloud, discovery and checkpoints", () =
     const encoded=encodeGithubWorkspace(p);
     expect(encoded).toContain("softwarefactory-workspace");
     expect(encoded).not.toContain("githubToken");
-    expect(decodeGithubWorkspace(encoded)).toMatchObject({id:p.id,stages:[{status:"complete"}]});
+    expect(decodeGithubWorkspace(encoded).id).toBe(p.id);
+    expect(decodeGithubWorkspace(encoded).stages[0].status).toBe("complete");
     p.stages[0].output="Secret leaked: "+PAT;
     expect(()=>encodeGithubWorkspace(p)).toThrow(/segreto/);
     const bad=JSON.parse(encoded);
