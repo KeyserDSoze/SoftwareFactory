@@ -25,6 +25,7 @@ import { resolveGithubToken } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, importGithubWorkspace } from "./infrastructure/github-publication";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
+import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
@@ -75,6 +76,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [runLog, setRunLog] = useState<string[]>([]);
   const [lastPush, setLastPush] = useState("");
+  const [githubPreview, setGithubPreview] = useState<GithubWorkspaceComparison | null>(null);
   const [runnerSecretRevision, setRunnerSecretRevision] = useState(0);
   const [runnerVaultPassphrase, setRunnerVaultPassphrase] = useState("");
   const [runnerTaskActivity, setRunnerTaskActivity] = useState<RunnerTaskActivity | null>(null);
@@ -365,6 +367,22 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); setOperation(""); }
   }
+  function downloadRecoveryProject(project: FactoryProject): void {
+    // Explicit single-project recovery file; no PAT, AI API or cloud credentials
+    // are included (they are stored in the browser's session/device vault).
+    const backup = JSON.stringify({
+      kind: "softwarefactory-local-recovery", schemaVersion: 1,
+      exportedAt: new Date().toISOString(), project,
+    }, null, 2);
+    if (backup.length > 1_500_000)
+      throw Error("Progetto troppo grande per il backup di sicurezza in browser.");
+    const url = URL.createObjectURL(new Blob([backup], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "softwarefactory-recovery-" + project.id + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
   async function importFromGithub(mode: "status" | "import") {
     if (busy) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
@@ -374,28 +392,42 @@ export default function App() {
       if (mode === "status") {
         const remote = await inspectGithubWorkspace(git, token);
         const local = projectRef.current;
-        setNotice(remote.project
-          ? "GitHub " + remote.headSha.slice(0,12) + " · progetto " + remote.project.config.name +
-            " · " + (githubBindingMatches(local, git) && local.githubSync?.lastCommit === remote.headSha
-              ? "HEAD invariata dall'ultimo sync." : "HEAD diversa/non ancora associata: scegli importa se opportuno.")
-          : "La repository esiste ma non contiene ancora un checkpoint SoftwareFactory.");
+        const comparison = remote.project ?
+          compareGithubWorkspaces(local, remote.project, git, remote.headSha) : null;
+        setGithubPreview(comparison);
+        setNotice(comparison ?
+          "GitHub " + comparison.headSha.slice(0,12) + " · " +
+          (comparison.remoteAdvanced ? "HEAD diversa" : "HEAD già confermata") +
+          " · " + (comparison.onlyLocal.length + comparison.onlyRemote.length +
+            comparison.changed.length) + " file di differenza (anteprima sotto)." :
+          "La repository esiste ma non contiene ancora un checkpoint SoftwareFactory.");
         return;
       }
       const initial = projectRef.current;
       const imported = await importGithubWorkspace(initial, git, token);
-      if (initial.id !== imported.project.id) {
-        if (!window.confirm("Il progetto GitHub è DIVERSO da quello locale (" +
-          initial.config.name + " → " + imported.project.config.name +
-          "). Importare significa sostituire il progetto aperto. Esporta prima uno ZIP e salva un backup locale. Continuare?")) return;
-      } else if (githubProjectDirty(initial, git) &&
-                 !window.confirm("Ci sono modifiche locali non confermate su GitHub. " +
-                   "L'importazione sostituirà lo stato aperto senza fondere le differenze. " +
-                   "Salva uno ZIP di recupero prima. Continuare?")) return;
+      const compared = compareGithubWorkspaces(initial, imported.project, git, imported.sha);
+      setGithubPreview(compared);
+      const replacing = initial.id !== imported.project.id ||
+        githubProjectDirty(initial, git) || compared.changed.length > 0 ||
+        compared.onlyLocal.length > 0 || compared.onlyRemote.length > 0;
+      if (replacing) {
+        if (!window.confirm("ATTENZIONE: importazione GitHub " +
+          (compared.sameProject ? "dello stesso progetto" : "di un progetto diverso") +
+          ". File differenti: " + (compared.onlyLocal.length + compared.onlyRemote.length +
+          compared.changed.length) +
+          ". Prima di sostituire lo stato locale viene scaricato un backup di recupero JSON. " +
+          "Se il browser lo blocca, annulla l'operazione. Procedere al download?")) return;
+        downloadRecoveryProject(initial);
+        if (!window.confirm("Hai effettivamente SALVATO il backup JSON sul tuo dispositivo? " +
+          "Procedendo verrà sostituito il progetto aperto senza merge automatico. " +
+          "Un vecchio report di test o una vecchia review NON saranno considerati validi.")) return;
+      }
       if (initial.id !== projectRef.current.id || initial.updatedAt !== projectRef.current.updatedAt)
         throw Error("Il progetto locale è cambiato durante l'importazione: operazione annullata.");
       changeProject({ ...imported.project, githubDestination: { ...git } });
       editSettings(s => { s.githubAutoSync = false; });
       setPublishConfirmed(false);
+      setGithubPreview(null);
       setNotice("Checkpoint GitHub " + imported.sha.slice(0,12) +
         " ripristinato. Autosync disattivato su questo dispositivo fino a nuovo consenso.");
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -683,6 +715,30 @@ export default function App() {
               <button className="secondary" type="button" disabled={busy || !settings.git.owner || !settings.git.repo}
                 onClick={() => void importFromGithub("import")}><Download size={15}/> {t(normalizeLocale(settings.language), "githubRemoteImport")}</button>
             </div>
+            {githubPreview && githubPreview.repository.toLowerCase() ===
+              (settings.git.owner + "/" + settings.git.repo).toLowerCase() &&
+              githubPreview.branch === settings.git.branch && <div className="github-diff-preview">
+                <strong>Confronto in sola lettura · {githubPreview.headSha.slice(0,12)}</strong>
+                <p className="helper">Remoto: {githubPreview.projectName} ·
+                  {githubPreview.sameProject ? " stesso progetto" : " PROGETTO DIFFERENTE"} ·
+                  {githubPreview.remoteAdvanced ? " branch remoto avanzato/non associato" : " HEAD già nota"}.
+                  Modifiche locali: {githubPreview.localDirty ? "presenti" : "nessuna"}.
+                  Non vengono risolti automaticamente i conflitti.</p>
+                <p className="helper">Solo in locale: {githubPreview.onlyLocal.length} ·
+                  Solo in GitHub: {githubPreview.onlyRemote.length} ·
+                  File con contenuto diverso: {githubPreview.changed.length}.
+                  {githubPreview.truncated ? " Elenco abbreviato." : ""}</p>
+                {(["onlyLocal","onlyRemote","changed"] as const).map(group =>
+                  githubPreview[group].length ? <details key={group}>
+                    <summary>{group === "onlyLocal" ? "File presenti solo in locale" :
+                      group === "onlyRemote" ? "File presenti solo su GitHub" :
+                      "File modificati"} ({githubPreview[group].length})</summary>
+                    <ul>{githubPreview[group].map(path => <li key={path}><code>{path}</code></li>)}</ul>
+                  </details> : null)}
+                <p className="helper">Il controllo mostra nomi e differenze di file generati,
+                  non applica patch. Per importare un progetto diverso o con divergenze
+                  bisogna scaricare prima il backup locale.</p>
+              </div>}
             <p className="helper">Push atomico con Git Data API e fast-forward, senza force push. Per GitHub App serve un broker sicuro: non mettere una chiave privata App nella SPA. Il merge dei branch resta una decisione esplicita su GitHub.</p>
             <label className="checkline"><input type="checkbox" checked={publishConfirmed} onChange={e => setPublishConfirmed(e.target.checked)} /> Ho verificato file e visibilità della repository; autorizzo creazione e commit.</label>
             <div className="button-group align-right"><button className="secondary" onClick={() => setTab("stack")}><FileText size={15} /> Anteprima file</button>
