@@ -130,7 +130,7 @@ export function main(argv = process.argv.slice(2)) {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() ||
           stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600)
         throw new Error("File .env non privato.");
-      const token = readFileSync(envFile, "utf8").split("\\n").find(line => line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="))?.slice(24);
+      const token = readFileSync(envFile, "utf8").split(/\r?\n/).find(line => line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="))?.slice(24);
       validateCloudflareToken(token);
     }
     runChecked("docker", ["compose", "--env-file", "docker/runner/.env",
