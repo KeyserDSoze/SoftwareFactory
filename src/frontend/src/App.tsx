@@ -15,6 +15,7 @@ import type { AiProfile, FactoryProject, FactorySettings, FrontendKind, ProjectC
 import { commitStage, invalidateStages, runStage, stageReady } from "./application/pipeline";
 import { generateFiles } from "./application/scaffold";
 import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin } from "./infrastructure/cloud";
+import { discoverAiModels } from "./infrastructure/ai";
 import { ensureRepository, pushGeneratedFiles, resolveGithubToken } from "./infrastructure/github";
 import { loadProject, loadSettings, persistProject, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 
@@ -101,6 +102,24 @@ export default function App() {
   function editSettings(change: (settings: FactorySettings) => void) {
     const copy = structuredClone(settingsRef.current);
     change(copy); settingsRef.current = copy; setSettings(copy);
+  }
+  async function readProviderModels(profile: AiProfile) {
+    const captured = settingsRef.current.profiles.find(p => p.id === profile.id);
+    if (!captured) return;
+    const key = readSecret("ai." + profile.id);
+    try {
+      const models = await discoverAiModels(captured, key);
+      if (settingsRef.current.profiles.find(p => p.id === profile.id) !== captured ||
+          readSecret("ai." + profile.id) !== key)
+        throw new Error("Endpoint o credenziali cambiati durante /models: risultato scartato.");
+      editSettings(s => {
+        const target = s.profiles.find(p => p.id === profile.id);
+        if (target) target.models = models;
+      });
+      setNotice("Catalogo /models letto: " + models.length + " identificatori. Nessun modello scelto automaticamente.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    }
   }
   function clearMessages() { setError(""); setNotice(""); }
   async function execute(from: StageId, runAll: boolean) {
@@ -335,7 +354,9 @@ export default function App() {
               s.profiles = s.profiles.filter(p => p.id !== profile.id); for (const st of STAGES) if (s.assignments[st.id] === profile.id) s.assignments[st.id] = s.profiles[0]?.id || "";
             })}><Trash2 size={16} /></button></div>
               <div className="form-grid"><label>Etichetta<input value={profile.label} onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.label = e.target.value; })} /></label>
-                <label>Modello<input value={profile.model} placeholder="es. gpt-4.1 / modello locale" onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.model = e.target.value; })} /></label>
+                <label>Modello<input list={"ai-models-" + profile.id} value={profile.model} placeholder="es. gpt-4.1 / modello locale" onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.model = e.target.value; })} />
+                  <datalist id={"ai-models-" + profile.id}>{(profile.models || []).map(model => <option key={model} value={model}/>)}</datalist>
+                </label>
                 <label>Base URL OpenAI-compatible<input value={profile.baseUrl} placeholder="https://api.../v1" onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.baseUrl = e.target.value; })} /></label>
                 <label>API key (temporanea)<SecretInput secretKey={"ai." + profile.id} placeholder="API key · mai esportata" /></label>
                 <label>Thinking predefinito endpoint<select value={profile.reasoningEffort ?? ""} onChange={e => editSettings(s => {
@@ -347,6 +368,10 @@ export default function App() {
                   <option value="low">Low</option><option value="medium">Medium</option>
                   <option value="high">High</option><option value="xhigh">Extra high</option>
                 </select></label></div>
+              <div className="button-group"><button className="secondary" type="button" onClick={() => void readProviderModels(profile)}>
+                <RefreshCw size={14} /> Leggi /models</button>
+                <span className="helper">{profile.models?.length || 0} modelli disponibili. Modifica esplicita, nessuna selezione automatica.</span>
+              </div>
               <label className="checkline"><input type="checkbox" checked={profile.enabled} onChange={e => editSettings(s => { s.profiles.find(p => p.id === profile.id)!.enabled = e.target.checked; })} /> Endpoint abilitato</label>
             </div>)}
             <div className="panel-subtitle">Modello per task</div><div className="routing-grid">{STAGES.map(stage => <label key={stage.id}>{stage.label}<select value={settings.assignments[stage.id]} onChange={e => editSettings(s => { s.assignments[stage.id] = e.target.value; })}>
