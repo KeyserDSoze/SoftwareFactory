@@ -46,7 +46,7 @@ export const messages = {
     githubAckConfirmFinal: "Riconoscere questa HEAD come checkpoint locale confermato? L'autosync verrà disattivato e non sarà eseguito alcun push. Il confronto non prova l'autore del commit.",
     githubAckFirstBinding: "Primo collegamento: genitore del commit non precedentemente attestato.",
     githubAckPublicWarning: "ATTENZIONE: la repository GitHub risulta PUBBLICA. Questo riconoscimento non autorizza futuri push pubblici.",
-    githubAckSuccess: "Conferma locale recuperata per il commit"
+    githubAckSuccess: "Conferma locale recuperata per il commit",
     notImplemented: "Non implementato su questo progetto", offline: "Non disponibile", busy: "Invio...",
   },
   en: {
@@ -92,7 +92,7 @@ export const messages = {
     githubAckConfirmFinal: "Acknowledge this remote HEAD as the local checkpoint? Autosync will be disabled and no push is performed. This comparison does not establish who authored the commit.",
     githubAckFirstBinding: "Initial binding: commit parent was not previously acknowledged.",
     githubAckPublicWarning: "WARNING: the GitHub repository is PUBLIC. This acknowledgement does not grant consent for future public pushes.",
-    githubAckSuccess: "Local acknowledgement recovered for commit"
+    githubAckSuccess: "Local acknowledgement recovered for commit",
     notImplemented: "Not implemented in this project", offline: "Unavailable", busy: "Submitting...",
   },
 } as const;
