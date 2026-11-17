@@ -741,7 +741,7 @@ Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
 ## Exclusive writer Web Locks e prova reale Chromium (#92)
 
 - [x] Un lease `navigator.locks` esclusivo, `ifAvailable:true`, vive per tutta la sessione editor di un progetto. Due schede nella stessa origin non possono contemporaneamente modificarlo. L'assenza di Web Locks blocca il salvataggio (no fallback insicuro).
-- [x] Acquisire prima il lock del progetto destinazione nel cambio, import GitHub con ID diverso e cloud restore; rilasciare il precedente solo dopo commit locale; serializzare i cambi in corso.
+- [x] Acquisire prima il lock del progetto destinazione nel cambio, import GitHub con ID diverso e cloud restore; rilasciare il precedente solo dopo commit locale; serializzare i cambi in corso. Una scheda bloccata su A può aprire/creare B senza sottrarre il lease ad A.
 - [x] React StrictMode-safe acquisizione al mount, cleanup/release e retry dopo chiusura scheda concorrente tramite backup JSON e conferme.
 - [x] Bloccare AI Factory, Code Agent, autosync, import e push finché non è attivo un lease, e propagare errore quando un aggiornamento locale non viene persistito.
 - [x] Unit test Web Lock concorrenza, release, progetti diversi, API mancante.
