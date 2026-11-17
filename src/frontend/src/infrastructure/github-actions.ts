@@ -199,6 +199,12 @@ export async function loadGithubActionReport(
   const blob = await response.blob();
   required(blob.size > 0 && blob.size <= 1_000_000, "ZIP artifact non valido o troppo grande.");
   const zip = new Uint8Array(await blob.arrayBuffer());
+  return parseGithubActionReportZip(zip, receipt, run);
+}
+export function parseGithubActionReportZip(
+  zip: Uint8Array, receipt: GithubActionReceipt, run: GitHubWorkflowRun,
+): GithubActionReport {
+  required(zip.length > 0 && zip.length <= 1_000_000, "ZIP artifact troppo grande.");
   let extracted: Record<string, Uint8Array>;
   try {
     extracted = unzipSync(zip, { filter: file => file.name === "report.json" && file.originalSize <= 100000 });
