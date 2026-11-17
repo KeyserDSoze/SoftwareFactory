@@ -82,6 +82,11 @@ if (!inside) {
     await expect(second.getByText("Conflitto locale tra schede"))
       .toBeVisible({timeout:15000});
     await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
+    // The writer can keep editing while the rival is blocked, without
+    // preventing the rival from creating a DIFFERENT project.
+    await first.getByLabel("Nome progetto").fill("Tab A updated while rival waits");
+    await expect(second.getByRole("button",{name:"Nuovo progetto"})).toBeEnabled();
+    await first.getByLabel("Nome progetto").fill("Tab A holds exclusive writer lease");
     // A stale tab cannot persist a draft even if its text field is editable.
     await second.getByLabel("Nome progetto").fill("Stale tab must not write");
     const guardedName = await second.evaluate(() =>
