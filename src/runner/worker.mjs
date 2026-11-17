@@ -6,6 +6,7 @@ import { isInfrastructureFailure, planStep, planWebDependencies, runDockerStep }
 import { recordJobEvidence, verifyJobEvidence } from "./evidence.mjs";
 import { withAdmissionLock } from "./admission.mjs";
 import { startWorkerHeartbeat } from "./heartbeat.mjs";
+import { startWorkerMetrics } from "./host-metrics.mjs";
 import { readRunnerInput } from "./input.mjs";
 import { rememberStartedJob, selectNextQueuedJob } from "./scheduler.mjs";
 
@@ -175,6 +176,7 @@ export async function runWorker({
 } = {}) {
   console.log("Runner worker is polling jobs; Docker socket must be rootless and host-isolated");
   const heartbeat = await startWorkerHeartbeat({ dataDir, intervalMs: heartbeatIntervalMs });
+  const metrics = await startWorkerMetrics({ dataDir });
   try {
     while (!stop()) {
     let entries = [];
@@ -244,6 +246,7 @@ export async function runWorker({
     } else await new Promise(resolve => setTimeout(resolve, pollMs));
     }
   } finally {
+    await metrics.stop();
     await heartbeat.stop();
   }
 }
