@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { encodeGithubWorkspace, decodeGithubWorkspace, inspectGithubWorkspace,
+import { encodeGithubWorkspace, decodeGithubWorkspace, portableGithubProject, inspectGithubWorkspace,
   githubProjectDirty, githubBindingMatches } from "./github-workspace";
 import { encryptGithubPatCloud, decryptGithubPatCloud,
   validateGithubPatVault } from "./github-pat-cloud-crypto";
@@ -127,6 +127,37 @@ describe("GitHub BookWriter parity: PAT, cloud, discovery and checkpoints", () =
     bad.project.development={ revision:0,overrides:{"docker/.env":"secret"},
       originals:{"docker/.env":null},history:[] };
     expect(()=>decodeGithubWorkspace(JSON.stringify(bad))).toThrow();
+  });
+  it("strips runner evidence and approvals when exporting/importing a checkpoint across devices", () => {
+    const p = project();
+    p.development = {revision: 3, overrides: {}, originals: {}, history: [],
+      lastRunnerJobId: "job-from-other-device",
+      lastRunnerEvidence: {id: "job-from-other-device",digest:"a".repeat(64),
+        endpoint:"https://runner.example.com",label:"old test",steps:["web-build"],
+        submittedAt:new Date().toISOString(),proposalId:"proposal",revision:3},
+      pending: {id:"proposal",request:"fix",summary:"Fix",createdAt:new Date().toISOString(),
+        revision:3,edits:[],tests:[],assumptions:[],review:{
+          verdict:"pass",report:"Old device review",completedAt:new Date().toISOString()},
+        repairCount:1,
+        repairSession:{id:"old-session",rootJobId:"job",rootProposalId:"proposal",
+          endpoint:"https://runner.example.com"},
+        repairTrail:[{attempt:1,failedJobId:"job",failedDigest:"digest",steps:["web-build"]}],
+      },
+    };
+    const encrypted = encodeGithubWorkspace(p);
+    expect(encrypted).not.toContain("job-from-other-device");
+    expect(encrypted).not.toContain("old-session");
+    expect(encrypted).not.toContain("Old device review");
+    const portable = decodeGithubWorkspace(encrypted);
+    expect(portable.development?.lastRunnerJobId).toBeUndefined();
+    expect(portable.development?.lastRunnerEvidence).toBeUndefined();
+    expect(portable.development?.pending?.review).toBeUndefined();
+    expect(portable.development?.pending?.repairSession).toBeUndefined();
+    const old = JSON.parse(encrypted);
+    old.project.development.lastRunnerEvidence = p.development.lastRunnerEvidence;
+    old.project.development.pending.review = p.development.pending.review;
+    expect(decodeGithubWorkspace(JSON.stringify(old)).development?.lastRunnerEvidence).toBeUndefined();
+    expect(portableGithubProject(p).development?.pending?.review).toBeUndefined();
   });
   it("reads exact branch HEAD and decodes a checkpoint without modifying it", async () => {
     const p=project();
