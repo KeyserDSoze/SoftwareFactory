@@ -701,3 +701,20 @@ Prima implementazione su main:
 - [ ] Firma supply-chain del pacchetto Release, pin di Action/immagini, test installer su VM Ubuntu/Debian con reboot e Cloudflare Tunnel.
 
 Vedi `adr/0047-release-installer-and-actions-test-backends.md` e issue #90.
+
+## GitHub/PAT parity BookWriter — issue #91, 17 nov 2026
+
+- [x] Device PAT cifrato AES-GCM con CryptoKey non estraibile IndexedDB, sblocco/manual session, cancellazione locale senza fingere revoca GitHub.
+- [x] Cloud vault GitHub PAT indipendente dal vault runner e dal normale backup; passphrase PBKDF2/AES-GCM, schema v1, OneDrive conditional eTag/Google version guard best effort.
+- [x] Ricerca guidata PAT repository, privacy/default branch/metadata permessi, conferma esplicita per visibilità pubblica, scelta manuale disponibile.
+- [x] Libreria progetti locali con destinazione GitHub per progetto e PAT condiviso; commit di checkpoint versionato ripristinabile in repository, import esplicito e collisioni remote bloccanti.
+- [x] Autosync opt-in solo mentre Pages è aperta, intervallo minimo 2 minuti, Web Locks, outbox metadata e backoff limitato, blocco al cambiamento della HEAD remoto.
+- [x] Il passaggio di errori JSON Actions verso Code Agent richiede corrispondenza SHA dello snapshot e assenza di modifiche locali stale; nessun auto-apply.
+- [ ] Test provider reali: PAT scoped repos, Google appDataFolder / OneDrive ETag, due dispositivi, redirect asset ZIP GitHub e browser Pages.
+- [ ] CAS atomico certificato per Google, lease cross-device o coordinatore server e verifica XSS/CSRF/csp a fondo, hardening ulteriori.
+- [ ] Migrazione repository legacy senza snapshot `workspace-state.v1.json`; merge assistito e confronto visuale diff in conflitti GitHub.
+- [ ] Localizzazione i18n integrale della SPA, accessibilità e UI e2e di tutti i pulsanti nuovi.
+- [ ] Recovery di commit con risposta persa e stato outbox cross-tab transazionale oltre ai blocchi HEAD conservativi.
+- [ ] Security acceptance e CI finali complete con link esito, mantenere #91 aperta finché non verificato.
+
+[ADR 0048](../adr/0048-github-pat-project-sync-bookwriter-parity.md) e [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91).
