@@ -83,7 +83,7 @@ jobs:
         run: |
           docker pull mcr.microsoft.com/playwright:v1.64.1-noble
           timeout 300s node src/runner/scripts/playwright-smoke.mjs src/frontend/generated-fixture
-      - name: Browser E2E Factory multi-tab writer lease, recovery and GitHub import race
+      - name: Browser E2E Factory writer lease, GitHub import race and lost-ack reconciliation
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
         run: timeout 180s node src/runner/scripts/factory-browser-lock-smoke.mjs

@@ -779,3 +779,12 @@ Decisione: [ADR 0049](../adr/0049-local-project-exclusive-writer-web-locks.md), 
 - [ ] Più esecuzioni CI e IdP esterno necessari per diagnosi della flakiness originaria. La regressione è deterministica per la race ipotizzata, non dimostra che ogni intermittenza sia eliminata.
 
 Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.md). Issue [#93](https://github.com/KeyserDSoze/SoftwareFactory/issues/93) e [#9](https://github.com/KeyserDSoze/SoftwareFactory/issues/9).
+
+## Recupero GitHub con conferma persa: Chromium UI + source evidence (#91, 17/11/2026)
+
+- [x] Scenario browser reale sul frontend Factory già compilato, in Docker networkless. Mock **solo** GitHub REST; i blob Git vengono calcolati da `workspaceFiles` e `encodeGithubWorkspace` della stessa Factory per un progetto locale completo.
+- [x] Rifiuto del primo consenso → nessuna richiesta REST; tree con `README.md` corrotto → ack bloccato e progetto preservato; tree integro → due conferme, verifica finale HEAD, aggiornamento di `githubSync` e persistenza dopo reload senza modificare il contenuto.
+- [x] Nessuna richiesta GitHub POST/PATCH, credenziali simulate solo in `sessionStorage`, nessun autosync implicito, nessun riconoscimento di consenso per pubblicazioni pubbliche.
+- [ ] Confermare Factory CI e Pages del nuovo SHA; PAT live, commit acknowledgement perso su rete vera, profili multipli e cross-device restano aperti (#91/#92).
+
+[ADR 0051](../adr/0051-github-lost-ack-tree-reconciliation.md).

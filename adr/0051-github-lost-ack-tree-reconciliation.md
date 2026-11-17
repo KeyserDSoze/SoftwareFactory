@@ -1,6 +1,6 @@
 # ADR 0051 — Riconciliazione GitHub del commit con acknowledgement perso
 
-Data: 17 novembre 2026 · Stato: **implementato in codice, da confermare in Factory CI finale**. Tracciamento [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91) e [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92). Complementa [ADR 0048](0048-github-pat-project-sync-bookwriter-parity.md) e [ADR 0049](0049-local-project-exclusive-writer-web-locks.md).
+Data: 17 novembre 2026 · Stato: **implementato; regressione Chromium browser aggiunta**. Tracciamento [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91) e [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92). Complementa [ADR 0048](0048-github-pat-project-sync-bookwriter-parity.md) e [ADR 0049](0049-local-project-exclusive-writer-web-locks.md).
 
 ## Motivazione
 
@@ -24,3 +24,9 @@ Implementare un'azione esplicita **«Recupera conferma commit»**, separata da P
 `github-ack-recovery.test.ts` copre caso già associato e primo push, parent diverso, checkpoint di un altro progetto, stage/patch mismatch, blob alterato, albero troncato, assenza checkpoint, HEAD cambiata dopo verifica, consenso pubblico limitato alla destinazione, zero metodi write, vector standard Git blob ID. La Factory CI esegue typecheck, Vitest, build, generated Playwright e fullstack .NET/OIDC/PostgreSQL.
 
 Senza PAT/cliente con permessi Contents read e accesso a GitHub REST non è possibile verificare; il recupero fallisce chiuso. Le API possono cambiare fra lettura HEAD finale e ack locale: la conferma è una *osservazione puntuale*, non un lease globale multi-device; il successivo push deve sempre ripetere il controllo HEAD. Non recupera commit se c'è qualsiasi differenza in locale, un interleaving di più commit, branch cambiata o tree senza tutta la snapshot. Restano aperti test PAT/browser/provider reali e firma supply-chain.
+
+## Verifica end-to-end della UI di recupero (17 novembre 2026)
+
+La Factory include anche una prova Chromium reale nel container Docker isolato della CI (script `src/runner/scripts/factory-browser-lock-smoke.mjs`). Il test prepara un progetto locale valido, genera i blob Git effettivi tramite `src/runner/scripts/github-ack-browser-fixture.ts` usando `workspaceFiles` e `encodeGithubWorkspace` del generatore (non dati inventati manualmente) e simula via Playwright **soltanto le risposte REST GitHub**; nessuna credenziale live. Dimostra che rifiutare il consenso iniziale non legge la repo; alterare il blob di un sorgente lascia l'ack locale vuoto; correggere il tree permette il recupero solo dopo **due conferme**, HEAD riletta dopo conferma, autosync spento e stesso snapshot dopo reload. Nessuna chiamata POST/PATCH al remoto, il test fallisce se ne intercetta una.
+
+Non equiparare questa prova mock REST a un collaudo PAT/GitHub reale o a una transazione cross-device; i rischi documentati sopra restano aperti. Esito CI da verificare sul commit che introduce lo scenario.

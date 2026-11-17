@@ -242,6 +242,138 @@ if (!inside) {
     } finally {
       await importContext.close();
     }
+
+    // Browser-level reconciliation of a lost GitHub push acknowledgement (#91).
+    // Build expected Git blob IDs using the REAL scaffold generator: a matching
+    // checkpoint alone cannot validate arbitrary remote source contents.
+    const recoveryContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await recoveryContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      await page.getByLabel("Descrizione dell'idea").fill(
+        "Valid fully generated fixture for a real Chromium lost GitHub commit acknowledgement test.");
+      await expect(page.getByLabel("Descrizione dell'idea"))
+        .toHaveValue("Valid fully generated fixture for a real Chromium lost GitHub commit acknowledgement test.");
+      const before=await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}"));
+      const fixture=spawnSync("node",[
+        path.join(root,"src/frontend/node_modules/tsx/dist/cli.mjs"),
+        path.join(root,"src/runner/scripts/github-ack-browser-fixture.ts"),
+      ],{input:JSON.stringify(before),encoding:"utf8",maxBuffer:2_000_000,timeout:20000});
+      if(fixture.status!==0)
+        throw Error("Unable to compute actual generated Git fixture: "+
+          String(fixture.stderr||fixture.error||fixture.status).slice(0,600));
+      const {checkpoint,tree}=JSON.parse(fixture.stdout);
+      assert.ok(tree.length>20,"Reconciliation must validate real application source files");
+      const remoteSha="d".repeat(40),parentSha="a".repeat(40),treeSha="b".repeat(40);
+      const pat="github_pat_"+"y".repeat(50);
+      await page.evaluate(token => {
+        const settings=JSON.parse(localStorage.getItem("softwarefactory.settings.v1")||"{}");
+        settings.git={owner:"octocat",repo:"demo",branch:"main",
+          privateRepo:true,authMode:"pat",appGateway:""};
+        settings.githubAutoSync=false;
+        localStorage.setItem("softwarefactory.settings.v1",JSON.stringify(settings));
+        sessionStorage.setItem("softwarefactory.secret.github.pat",token);
+      },pat);
+      let tampered=true,headReads=0,restReads=0,writeCalls=0;
+      await page.route("https://api.github.com/repos/octocat/demo**",async route => {
+        const request=route.request(),url=new URL(request.url());
+        if(request.method()==="OPTIONS") {
+          await route.fulfill({status:204,headers:{
+            "access-control-allow-origin":"*",
+            "access-control-allow-methods":"GET, OPTIONS",
+            "access-control-allow-headers":"authorization, x-github-api-version, accept, content-type",
+          }});
+          return;
+        }
+        if(request.method()!=="GET") {
+          writeCalls++;
+          await route.fulfill({status:405,headers:{"access-control-allow-origin":"*"}});
+          return;
+        }
+        restReads++;
+        let body;
+        if(url.pathname==="/repos/octocat/demo/git/ref/heads/main") {
+          headReads++;
+          body={object:{sha:remoteSha}};
+        } else if(url.pathname==="/repos/octocat/demo/contents/.softwarefactory/workspace-state.v1.json" &&
+          url.searchParams.get("ref")===remoteSha) {
+          body={type:"file",encoding:"base64",size:Buffer.byteLength(checkpoint,"utf8"),
+            content:Buffer.from(checkpoint,"utf8").toString("base64")};
+        } else if(url.pathname==="/repos/octocat/demo/git/commits/"+remoteSha) {
+          body={sha:remoteSha,parents:[{sha:parentSha}],tree:{sha:treeSha}};
+        } else if(url.pathname==="/repos/octocat/demo/git/trees/"+treeSha &&
+          url.searchParams.get("recursive")==="1") {
+          body={truncated:false,tree:tampered ?
+            tree.map(entry=>entry.path==="README.md" ?
+              {...entry,sha:"f".repeat(40)} : entry) : tree};
+        } else if(url.pathname==="/repos/octocat/demo") {
+          body={owner:{login:"octocat"},name:"demo",private:true,
+            default_branch:"main",archived:false,disabled:false,permissions:{push:true}};
+        } else throw Error("Unexpected GitHub recovery REST request: "+url.href);
+        await route.fulfill({status:200,headers:{"access-control-allow-origin":"*",
+          "content-type":"application/json"},body:JSON.stringify(body)});
+      });
+      await page.reload({waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      await page.getByTitle("Impostazioni").click();
+      const recover=page.getByRole("button",{name:"Recupera conferma commit"});
+      await expect(recover).toBeEnabled({timeout:15000});
+      // Refusing the initial consent must NOT even read remote GitHub.
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await recover.click();
+      assert.equal(restReads,0,"User-declined recovery must not contact GitHub");
+      let approvals=0;
+      page.on("dialog",dialog=>{approvals++;void dialog.accept();});
+      await recover.click();
+      await expect(page.getByRole("alert")).toContainText(
+        "Contenuto dei file GitHub diverso",{timeout:15000});
+      const rejected=await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}"));
+      assert.equal(rejected.githubSync?.lastCommit,undefined,
+        "One corrupted source blob must reject acknowledgement");
+      assert.equal(rejected.config.description,before.config.description);
+      assert.equal(approvals,1,"Tampered tree must fail before the final confirmation");
+      tampered=false;
+      await recover.click();
+      await expect(page.getByText("Conferma locale recuperata per il commit",{exact:false}))
+        .toBeVisible({timeout:20000});
+      await page.waitForFunction(sha =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}")
+          .githubSync?.lastCommit===sha,remoteSha,{timeout:15000});
+      const saved=await page.evaluate(() => ({
+        project:JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}"),
+        settings:JSON.parse(localStorage.getItem("softwarefactory.settings.v1")||"{}"),
+      }));
+      assert.equal(saved.project.id,before.id);
+      assert.equal(saved.project.updatedAt,before.updatedAt,
+        "Recovery must never claim generated source contents changed");
+      assert.deepEqual(saved.project.config,before.config);
+      assert.deepEqual(saved.project.stages,before.stages);
+      assert.equal(saved.project.githubSync.syncedLocalUpdatedAt,before.updatedAt);
+      assert.equal(saved.project.githubSync.publicConsent,false,
+        "Recovering a private repo cannot create future public publish consent");
+      assert.equal(saved.settings.githubAutoSync,false,
+        "Recovery must not silently enable GitHub autosync");
+      assert.equal(approvals,3,"Recovery success requires TWO explicit confirmations");
+      assert.equal(headReads,4,
+        "Failed tree: one HEAD; successful recovery: initial, verify and post-confirmation");
+      assert.equal(writeCalls,0,"Lost-ack reconciliation is strictly read-only");
+      assert.ok(restReads>=10,"Real commit, tree, checkpoint, repo and HEAD must all be fetched");
+      await page.reload({waitUntil:"networkidle"});
+      const afterReload=await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}"));
+      assert.equal(afterReload.githubSync.lastCommit,remoteSha,
+        "Acknowledgement must survive reload, with no implicit GitHub write");
+      assert.equal(afterReload.updatedAt,before.updatedAt);
+      assert.equal(writeCalls,0);
+      console.log("FACTORY_GITHUB_ACK_BROWSER_E2E_PASS: refused → corrupted Git blob blocked → exact source tree recovered → reload preserved, GET only");
+    } finally {
+      await recoveryContext.close();
+    }
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

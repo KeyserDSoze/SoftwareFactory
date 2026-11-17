@@ -757,3 +757,7 @@ Solo DOPO seconda conferma UI e writer Web Lock locale, `changeProject` può agg
 ## OIDC duplicate event / POST in-flight (#93, ADR 0053)
 
 Il test fullstack generato esercita **la vera POST** PostgreSQL in browser: Playwright usa `route.fetch()` per eseguire il roundtrip sul backend, trattiene solo la consegna della risposta a React, emette due `UserManager.events.load(user, true)` con lo **stesso** access token e verifica la UI e il DB. La prova fallisce se `switchSession` invalida `sessionEpoch` o svuota `title` a ogni callback identica; un vero cambio token/logout deve continuare a invalidare i risultati tardivi. Non simulare `200`/successo o mettere JWT/refresh token nei log. L'orchestratore usa il conteggio dichiarato nello spec generato, non un numero hardcoded; lasciare #93 aperta finché non si prova robustezza ripetuta/IdP esterno.
+
+## Recovery GitHub nella UI Chromium (#91)
+
+Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browser-lock-smoke.mjs` deve verificare il flusso reale di riconciliazione (consenso iniziale, file Git corrotti, due conferme su esito valido, HEAD riletta, stato dopo reload). I dati simulati sono **solo le risposte REST GitHub** e i blob di fixture si ricavano dal vero `workspaceFiles` del progetto, con Git SHA-1 canonico UTF-8. È un test offline su Docker senza rete; mai spacciarlo per prova live con PAT. Non consentire POST/PATCH neppure nella fixture e non accettare ack senza aver verificato tutti i sorgenti, checkpoint, lock locale e commit ancestry.
