@@ -137,8 +137,16 @@ test("tenant clients cannot read foreign reports or evidence and idempotency is 
       const evidence = await f.request(1, key, "/v1/jobs/" + owned + "/evidence");
       assert.equal(evidence.status, 200);
       assert.equal(verifyEvidenceExport(evidence.body).report.tenantId, key.split(".")[0]);
+      const plan = await f.request(0, key, "/v1/jobs/" + owned + "/plan");
+      assert.equal(plan.status, 200);
+      assert.equal(plan.body.jobId, owned);
+      assert.equal(plan.body.digest, local.body.digest);
+      assert.equal(plan.body.evidence.head, local.body.evidence.head);
+      assert.equal(JSON.stringify(plan.body).includes("tenantId"), false,
+        "PM plan must not contain tenant metadata or source code");
       assert.equal((await f.request(0, key, "/v1/jobs/" + foreign)).status, 404);
       assert.equal((await f.request(1, key, "/v1/jobs/" + foreign + "/evidence")).status, 404);
+      assert.equal((await f.request(1, key, "/v1/jobs/" + foreign + "/plan")).status, 404);
     }
     assert.equal((await verifyJobEvidence(f.dataDir, a.body.id)).report.tenantId, "alpha");
     assert.equal((await verifyJobEvidence(f.dataDir, b.body.id)).report.tenantId, "bravo");
@@ -152,7 +160,7 @@ test("tenant clients cannot read foreign reports or evidence and idempotency is 
     legacy.listen(0, "127.0.0.1"); await once(legacy, "listening");
     try {
       for (const id of [a.body.id, b.body.id]) {
-        for (const suffix of ["", "/evidence"]) {
+        for (const suffix of ["", "/evidence", "/plan"]) {
           const response = await fetch("http://127.0.0.1:" + legacy.address().port +
             "/v1/jobs/" + id + suffix, { headers: {
               Origin: origin, Authorization: "Bearer " + globalKey,
