@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
@@ -228,4 +228,94 @@ test("worker polling selects runnable upstream rather than older blocked depende
     assert.deepEqual(selected, [a.id]);
     assert.equal((await readReport(f.dataDir,b.id)).state, "queued");
   } finally { await f.close(); }
+});
+
+
+test("enforced DAG refuses a dependency with missing journal; a corrupt hardlink pauses worker claims", async () => {
+  const f = await fixture();
+  try {
+    const a = await f.submit(), b = await f.submit();
+    const created = await f.register(0, f.manifest(a,b));
+    assert.equal(created.status, 201);
+    const file = path.join(f.dataDir,"workflows",created.body.id+".json");
+    const alias=file+".hardlink";
+    await link(file,alias);
+    await assert.rejects(loadGuardedIndex(f.dataDir),{code:"WORKFLOW_INTEGRITY"});
+    await rm(alias);
+    await rm(path.join(f.dataDir,"jobs",a.id,"evidence.jsonl"));
+    await assert.rejects(executeJob(b.id,f.execution()),{code:"WORKFLOW_EVIDENCE"});
+    assert.equal((await readReport(f.dataDir,b.id)).state,"queued");
+  } finally { await f.close(); }
+});
+
+test("enforced workflows keep tenant ownership, auth revocation and mode rollback fail-closed", async () => {
+  const root = await mkdtemp(path.join(tmpdir(),"sf-enforced-tenant-"));
+  const dataDir=path.join(root,"data"), registryFile=path.join(root,"tenants.json");
+  await mkdir(dataDir,{mode:0o700});
+  const alpha="alpha."+"A".repeat(40), alphaNew="alpha."+"N".repeat(40);
+  const bravo="bravo."+"B".repeat(40);
+  const registry=a=>({ version:1,tenants:[
+    {id:"alpha",key:a,maxQueued:4,maxRetained:8,maxAcceptedPerMinute:0},
+    {id:"bravo",key:bravo,maxQueued:4,maxRetained:8,maxAcceptedPerMinute:0},
+  ] });
+  await writeFile(registryFile,JSON.stringify(registry(alpha)),{mode:0o600});
+  const servers=Array.from({length:2},()=>createRunnerServer({
+    apiKey:"",apiKeyFile:"",tenantsFile:registryFile,allowedOrigins:[origin],
+    dataDir,maxQueued:8,maxRetained:16,
+  }));
+  try {
+    for(const s of servers){s.listen(0,"127.0.0.1");await once(s,"listening");}
+    const urls=servers.map(s=>"http://127.0.0.1:"+s.address().port);
+    async function call(i,key,method,endpoint,body,extra={}){
+      const result=await fetch(urls[i]+endpoint,{method,headers:{
+        Origin:origin,Authorization:"Bearer "+key,
+        ...(body===undefined?{}:{"Content-Type":"application/json"}),...extra,
+      },...(body===undefined?{}:{body:JSON.stringify(body)})});
+      return {status:result.status,body:await result.json()};
+    }
+    async function submit(i,key){
+      const x=await call(i,key,"POST","/v1/jobs",{
+        label:"Tenant guarded job",files:source,steps:["dotnet-build"],
+      });assert.equal(x.status,202);return x.body;
+    }
+    const a=await submit(0,alpha),b=await submit(1,alpha);
+    const foreign=await submit(0,bravo);
+    const manifest={consent:true,enforced:true,label:"Tenant safe workflow",tasks:[
+      {id:"build",role:"devops_engineer",jobId:a.id,digest:a.digest,dependsOn:[]},
+      {id:"test",role:"tester",jobId:b.id,digest:b.digest,dependsOn:["build"]},
+    ]};
+    const created=await call(0,alpha,"POST","/v1/workflows",manifest,{
+      "Idempotency-Key":randomUUID(),
+    });
+    assert.equal(created.status,201);
+    assert.equal(created.body.enforced,true);
+    const endpoint="/v1/workflows/"+created.body.id;
+    assert.equal((await call(1,alpha,"GET",endpoint)).status,200);
+    assert.equal((await call(1,bravo,"GET",endpoint)).status,404);
+    const attack={...manifest,tasks:[manifest.tasks[0],{
+      ...manifest.tasks[1],jobId:foreign.id,digest:foreign.digest,
+    }]};
+    const foreignRegistration=await call(0,alpha,"POST","/v1/workflows",attack,{
+      "Idempotency-Key":randomUUID(),
+    });
+    assert.equal(foreignRegistration.status,404);
+    const legacy=createRunnerServer({
+      apiKey,tenantsFile:"",apiKeyFile:"",allowedOrigins:[origin],dataDir,
+    });
+    legacy.listen(0,"127.0.0.1");await once(legacy,"listening");
+    try{
+      const rr=await fetch("http://127.0.0.1:"+legacy.address().port+endpoint,{
+        headers:{Origin:origin,Authorization:"Bearer "+apiKey},
+      });
+      assert.equal(rr.status,404);
+    } finally {await new Promise(resolve=>legacy.close(resolve));}
+    const temp=registryFile+".new";
+    await writeFile(temp,JSON.stringify(registry(alphaNew)),{mode:0o600,flag:"wx"});
+    await rename(temp,registryFile);
+    assert.equal((await call(0,alpha,"GET",endpoint)).status,401);
+    assert.equal((await call(1,alphaNew,"GET",endpoint)).status,200);
+  } finally {
+    await Promise.all(servers.map(s=>new Promise(ok=>s.close(ok))));
+    await rm(root,{recursive:true,force:true});
+  }
 });
