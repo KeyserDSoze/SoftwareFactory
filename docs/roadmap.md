@@ -788,3 +788,9 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Confermare Factory CI e Pages del nuovo SHA; PAT live, commit acknowledgement perso su rete vera, profili multipli e cross-device restano aperti (#91/#92).
 
 [ADR 0051](../adr/0051-github-lost-ack-tree-reconciliation.md).
+
+## v0.3 — Eliminazione bypass bootstrap e bundle Release con provenance (#95)
+
+- Bloccato `host-setup start` legacy; il wizard chiede prima SHA40 e canary image digest e usa il percorso rootless `host-install --apply --confirm-install` della #88. Tunnel only dopo API/worker readiness autenticata.
+- Package tar.gz RC.2+: manifest SHA40+hash sorgenti, verifica SHA256 archivio esatta + bytes dei file estratti via tar read-only, check di symlink/extra file, tests in CI. RC.1 riconosciuta legacy unsafe e non consigliata dall'app.
+- Test Node per Git/Release, archivio malformato/tampered, fonte cambiata fra gate, token/cloudflared rifiutati senza readiness, CI Factory + Release candidate. Resta verifica **reale** su PC/VM Ubuntu/Debian uid1000 con Docker rootless, reboot systemd, Cloudflare Access e approvazione delle chiavi; #87/#89/#90/#2 restano aperte. ADR 0054.

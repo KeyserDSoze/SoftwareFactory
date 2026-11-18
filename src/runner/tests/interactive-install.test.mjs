@@ -3,7 +3,7 @@ import { test } from "node:test";
 import {
   parseLinuxDistro, validatePublicRunnerUrl, dockerRepoSource,
   hasVerifiedDockerFingerprint, rebootServicePlan,
-  cloudflareInstructions, provisionSignedDockerPackages,
+  cloudflareInstructions, provisionSignedDockerPackages, approveInstallerSource,
 } from "../scripts/interactive-install.mjs";
 import { renderRunnerEnv, validateCloudflareToken,
   validateOperatorApiKey } from "../scripts/host-setup.mjs";
@@ -83,4 +83,54 @@ test("startup has linger + rootless docker user service; Cloudflare route is pri
   for (const bad of ["http://runner.example.com", "https://runner.example.com/api", "https://user:pass@runner.example.com"]) {
     assert.throws(() => validatePublicRunnerUrl(bad));
   }
+});
+
+
+test("interactive Git installer approves clean pinned main and immutable canary digest", async () => {
+  const sha = "d".repeat(40), image = "node@sha256:" + "e".repeat(64);
+  const observed = [], prompts = [sha, image];
+  const plan = await approveInstallerSource({
+    gitPresent: true, root: "/not-used",
+    run: (cmd, argv) => {
+      observed.push([cmd, argv]);
+      return argv[0] === "rev-parse" ? sha + "\n" : "main\n";
+    },
+    verifyGit: async args => { observed.push(["verifiedGit", args]); return true; },
+    ask: async () => prompts.shift(),
+    write: () => {},
+  });
+  assert.deepEqual(plan, { commit: sha, image, sourceArgs: ["--commit=" + sha] });
+  assert.deepEqual(observed[2], ["verifiedGit", { commit: sha }]);
+});
+test("interactive Release installer requires archive digest, every extracted file and matching human approval", async () => {
+  const sha = "d".repeat(40), image = "node@sha256:" + "e".repeat(64);
+  const archive = "/home/test/Downloads/softwarefactory-runner-installer.tar.gz";
+  const checksum = "a".repeat(64), checked = [], asked = [archive, checksum, sha, image];
+  const plan = await approveInstallerSource({
+    gitPresent: false, root: "/home/test/Downloads/softwarefactory-runner-installer",
+    readManifest: () => ({ schemaVersion: 1, commit: sha }),
+    verifyArchive: async args => { checked.push(args); return { source: "approved-release", commit: sha }; },
+    ask: async () => asked.shift(),
+    write: () => {},
+  });
+  assert.equal(checked.length, 1);
+  assert.equal(checked[0].archive, archive);
+  assert.equal(checked[0].archiveSha256, checksum);
+  assert.deepEqual(plan, { commit: sha, image,
+    sourceArgs: ["--commit=" + sha, "--archive=" + archive, "--archive-sha256=" + checksum] });
+  for (const [mutate, reason] of [
+    [[archive, checksum, "wrong", image], /SHA sorgente non approvata/],
+    [[archive, checksum, sha, "node:latest"], /Digest canary/],
+  ]) await assert.rejects(approveInstallerSource({
+    gitPresent: false, root: "/home/test/release",
+    readManifest: () => ({ commit: sha }),
+    verifyArchive: async () => true,
+    ask: async () => mutate.shift(),
+  }), reason);
+  await assert.rejects(approveInstallerSource({
+    gitPresent: false, root: "/home/test/release",
+    readManifest: () => ({ commit: sha }),
+    verifyArchive: async () => { throw Error("tampered release"); },
+    ask: async () => [archive, checksum].shift(),
+  }), /tampered release/);
 });

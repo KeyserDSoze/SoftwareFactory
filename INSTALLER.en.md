@@ -40,3 +40,11 @@ In **Networking → Tunnels → Routes → Add route → Published application**
 ## 6. Check reboot and security
 
 Actually reboot your VM and verify `systemctl --user status docker`, runner container readiness and HTTPS access. Run an approved test and inspect its report. Full Ubuntu/Debian, reboot and Cloudflare Access validation is not yet certified. The current Compose tunnel token can be inspected by host Docker administrators; keep all host credentials private. Read [docs/runner.md](docs/runner.md) before upgrading or uninstalling. Do not rerun the installer on an existing installation.
+
+## Mandatory installer safeguards for RC.2+ (#95)
+
+**Do not use `v0.2.0-rc.1` for new installations.** That archive predates source manifests and the wizard used an unverified startup shortcut. Download `v0.2.0-rc.2` or newer from the app's release panel and use a dedicated VM only. After `sha256sum -c`, keep the original downloaded archive outside the extracted directory. When prompted, enter the **absolute path to the .tar.gz** (for example `/home/user/Downloads/softwarefactory-runner-installer.tar.gz`) and the **64-character SHA-256** from the verified `.sha256` file. This is not a secret. The wizard reads the manifest **from the approved archive** and checks the extracted files before any apt/sudo change.
+
+You must type the full **40-character Git commit SHA** and compare it with the Release source commit on GitHub, then supply an operator-approved immutable canary image `node@sha256:<digest64>` (never a mutable tag). The installer must run the real rootless VM acceptance and verify canary cleanup, then check authenticated loopback API/worker readiness **before** starting Cloudflared. Tunnel token input remains hidden on TTY; it is not an attestation or a credential to share with the browser. Failures require manual investigation, without automatic destructive rollback or Docker prune.
+
+For a clean Git `main` checkout you may still use `host-install` with `--commit` and `--image`; the old `host-setup start` shortcut now refuses. Tunnel-only command after a successful installation: `node src/runner/scripts/host-setup.mjs tunnel --confirm-tunnel`. **Limitations:** neither CI success nor a local receipt certifies a real VM reboot, externally configured Cloudflare DNS/Access/TLS, or production-grade trust.

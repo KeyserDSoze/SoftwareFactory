@@ -11,6 +11,9 @@ export function installerReleaseAssetLink(release: Release, assetName: string): 
       !/^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(release.tag_name) ||
       typeof release.draft !== "boolean" || typeof release.prerelease !== "boolean" ||
       release.draft || release.prerelease !== release.tag_name.includes("-rc.") ||
+      // rc.1 predates the verified-source manifest. Never recommend the
+      // insecure direct host-setup start path from that archived release.
+      release.tag_name === "v0.2.0-rc.1" ||
       ![name, name + ".sha256"].includes(assetName) ||
       !Array.isArray(release.assets) || release.assets.length > 50) return null;
   const assets = release.assets.filter(item => item && item.name === assetName);

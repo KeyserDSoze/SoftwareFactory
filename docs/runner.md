@@ -932,7 +932,7 @@ non esegue SSH dal sito e non modifica ambienti privilegiati.
 Da **quell'utente non root**, nella repository clonata:
 ```bash
 node src/runner/scripts/host-setup.mjs setup --origin=https://keyserdsoze.github.io
-node src/runner/scripts/host-setup.mjs start
+node src/runner/scripts/host-install.mjs --env-file=/absolute/private.env --commit=<SHA40> --image=node@sha256:<DIGEST64> --apply --confirm-install
 ```
 
 Sostituisci l'origin con **l'origin reale del sito** (protocollo+host+porta),
@@ -1011,3 +1011,9 @@ Il worker produce periodicamente un file di **metriche aggregate senza identific
 Dopo OAuth Google Drive/OneDrive, in Settings scegli **Vault cifrato del connector runner**. Inserisci passphrase (minimo 12 caratteri) e seleziona *Cifra e salva connector*: la SPA cifra localmente runner URL e API key, poi scrive un file `softwarefactory-runner-vault.v1.json` separato dai backup JSON del progetto. Sul nuovo PC con lo stesso account accedi al provider, inserisci la passphrase e premi *Apri vault su questo dispositivo*: le credenziali vengono caricate nella sola sessione e l'URL applicato alle impostazioni. **Non perdere la passphrase**; non c'è un recupero centralizzato. Token Cloudflare non incluso nel vault, resta sulla VM. **Concorrenza e registry multi-connector non sono ancora supportati**: evita salvataggi da due dispositivi contemporaneamente. Conserva la copia locale come fonte di verità fino ai controlli CAS/ETag futuri.
 
 Le funzionalità qui descritte sono **implementazioni incrementali non validate ancora su una VM vera**. Per installazioni production e più tenant occorrono prove reali, threat model, hardening del token e procedure di aggiornamento/revoca. Vedi ADR 0046 e issue #87/#89.
+
+## Fix sicurezza wizard e provenienza Release — #95
+
+**Rimosso il bypass:** `node src/runner/scripts/host-setup.mjs start` rifiuta; non usarlo anche se presente in vecchie guide. Era capace di lanciare API/worker/Tunnel senza canary e receipt. La CLI `host-install` è ora l'unico avvio iniziale approvato: il wizard `interactive-install` richiede approvazione esplicita del commit sorgente e dell'immagine canary digest-pinned, poi esegue `host-install --apply --confirm-install` con VM acceptance, lock, Docker rootless, stato container e readiness autenticate. Il tunnel parte solo dopo, con `host-setup tunnel --confirm-tunnel`. Non è una prova che Cloudflare Access o il DNS esterno funzionino.
+
+**Pacchetto scaricabile senza .git:** Release `v0.2.0-rc.2` (o successiva) contiene `.sf-installer-source.json` deterministico (commit e SHA256 di ciascun file). Prima di eseguire il wizard, l'operatore deve verificare `sha256sum -c` sull'archivio scaricato e trattenere il file `tar.gz` fuori dalla directory estratta. Il wizard richiede percorso assoluto del `tar.gz`, SHA256 attesa, corrispondenza col manifest interno e conferma manuale della SHA40 e `node@sha256:...`. L'archive verifier controlla tutti i file estratti e non accetta .git, symlink, file extra o modifiche in corsa; `docker/runner/.env` è esclusa soltanto perché viene creata dal wizard ed è soggetta ai controlli di private env. L'RC.1 precede questo contratto e non va usata per una nuova installazione. Le checksum pubblicate sulla stessa Release non sono firme indipendenti: verificare release/tag/source e usare una VM sacrificabile. Senza Docker rootless reale la CLI deve fallire; nessun fallback rootful. Per aggiornare/revocare/disinstallare rimane necessario workflow operatore distinto: non ripetere un install su stack esistente.

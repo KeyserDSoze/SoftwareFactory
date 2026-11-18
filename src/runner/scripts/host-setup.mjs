@@ -9,6 +9,9 @@ import { existsSync, lstatSync, mkdirSync, openSync, writeSync, closeSync, unlin
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readPrivateEnv, selectEndpointBearer, main as preflight } from "../preflight.mjs";
+import { probeRootlessDocker } from "../docker-probe.mjs";
+import { probeInstalledRunner } from "./host-install.mjs";
 
 export const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 export const envFile = join(repoRoot, "docker/runner/.env");
@@ -105,7 +108,69 @@ function runChecked(program, args) {
     env: { ...process.env, DOCKER_HOST: "unix:///run/user/1000/docker.sock" } });
   if (r.error || r.status !== 0) throw new Error("Preflight/installazione fallita: " + program + " (codice " + (r.status ?? "n/d") + ").");
 }
-export function main(argv = process.argv.slice(2)) {
+
+/** Tunnel-only operator confirmation after an actual rootless API+worker
+ * install. The private env is loaded via O_NOFOLLOW and kept only in memory.
+ * Callbacks are trusted Node unit-test seams, never HTTP or CLI overrides.
+ */
+export async function startVerifiedTunnel({
+  envPath = envFile, uid = process.getuid?.(), euid = process.geteuid?.(),
+  readEnv = readPrivateEnv, preflightCheck = argv => preflight(argv, { write: () => {} }),
+  rootlessProbe = probeRootlessDocker, readiness = probeInstalledRunner,
+  runCompose = (argv, options) => {
+    const r = spawnSync("docker", argv, {
+      ...options, cwd: repoRoot, encoding: "utf8",
+    });
+    if (r.error || r.status !== 0) throw Error("Tunnel Compose failed");
+    return true;
+  },
+} = {}) {
+  if (process.platform !== "linux" || uid !== 1000 || euid !== 1000 ||
+      !isAbsolute(envPath) || resolve(envPath) !== envPath) throw Error("Tunnel denied");
+  try {
+    const env = await readEnv(envPath);
+    const token = validateCloudflareToken(env.CLOUDFLARE_TUNNEL_TOKEN);
+    if (!token) throw Error("Tunnel denied");
+    if (Object.keys(env).some(key => /^(?:COMPOSE_[A-Z0-9_]+|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|NODE_OPTIONS|NODE_PATH)$/.test(key)))
+      throw Error("Tunnel denied");
+    const [host, compose] = await Promise.all([
+      preflightCheck(["host", "--env-file=" + envPath]),
+      preflightCheck(["compose", "--env-file=" + envPath]),
+    ]);
+    if (host?.mode !== "host" || host.status !== "passed" ||
+        host.dockerRootless !== true || host.uid !== 1000 ||
+        compose?.mode !== "compose" || compose.status !== "passed" ||
+        compose.apiLoopbackOnly !== true ||
+        compose.dockerSocketInWorkerOnly !== true ||
+        compose.tunnelServiceChecked !== true) throw Error("Tunnel denied");
+    if (await rootlessProbe({ host: "unix:///run/user/1000/docker.sock" }) !== true)
+      throw Error("Tunnel denied");
+    const bearer = selectEndpointBearer(env, { authMode: "inline", privateEnv: true });
+    if (await readiness({ bearer }) !== true) throw Error("Tunnel denied");
+    // A changed token/credential may alter the configured service or Access
+    // binding; do not act on it between the two private FD reads.
+    const after = await readEnv(envPath);
+    const canonical = object => JSON.stringify(
+      Object.entries(object).sort(([a], [b]) => a.localeCompare(b)));
+    if (canonical(env) !== canonical(after)) throw Error("Tunnel denied");
+    if (await rootlessProbe({ host: "unix:///run/user/1000/docker.sock" }) !== true)
+      throw Error("Tunnel denied");
+    await runCompose(["compose", "--project-name", "sf-runner",
+      "--env-file", envPath, "-f", join(repoRoot, "docker/runner/compose.yml"),
+      "--profile", "tunnel", "up", "-d", "--no-deps", "cloudflared"], {
+      timeout: 120000, maxBuffer: 8192,
+      env: { PATH: process.env.PATH || "/usr/bin:/bin",
+        HOME: process.env.HOME || "/tmp",
+        DOCKER_HOST: "unix:///run/user/1000/docker.sock" },
+    });
+    return { status: "tunnel-start-requested", rootless: true,
+      apiAuthenticated: true, publicAccessVerified: false };
+  } catch {
+    throw Error("Tunnel start refused; operator must review rootless host and Access.");
+  }
+}
+
+export async function main(argv = process.argv.slice(2)) {
   assertDedicatedHost();
   const [mode, ...flags] = argv;
   if (mode === "setup" && flags.length > 0 && flags.every(v => /^--(?:origin|root)=.+$/.test(v))) {
@@ -120,31 +185,22 @@ export function main(argv = process.argv.slice(2)) {
       ". Credenziale NON mostrata. Eseguire node src/runner/scripts/host-setup.mjs start dopo i prerequisiti Docker rootless.\n");
     return;
   }
-  if (mode === "start" && (flags.length === 0 || (flags.length === 1 && flags[0] === "--tunnel"))) {
-    // Preflight requires a private .env (mode 0600) and real rootless Docker.
-    runChecked(process.execPath, ["src/runner/preflight.mjs", "host", "--env-file=docker/runner/.env"]);
-    runChecked(process.execPath, ["src/runner/preflight.mjs", "compose", "--env-file=docker/runner/.env"]);
-    if (flags.includes("--tunnel")) {
-      // Reject placeholder/invalid tokens before starting a flapping container.
-      const stat = lstatSync(envFile);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() ||
-          stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600)
-        throw new Error("File .env non privato.");
-      const token = readFileSync(envFile, "utf8").split(/\r?\n/).find(line => line.startsWith("CLOUDFLARE_TUNNEL_TOKEN="))?.slice(24);
-      validateCloudflareToken(token);
-    }
-    runChecked("docker", ["compose", "--env-file", "docker/runner/.env",
-      "-f", "docker/runner/compose.yml",
-      ...(flags.includes("--tunnel") ? ["--profile", "tunnel"] : []),
-      "up", "-d", "--build"]);
-    process.stdout.write("Servizi avviati; controllare /healthz e le readiness autenticate. Il tunnel pubblico richiede una configurazione separata.\n");
+  if (mode === "start")
+    throw new Error("Avvio diretto disabilitato: usare host-install.mjs con canary rootless approvato.");
+  if (mode === "tunnel" && flags.length === 1 && flags[0] === "--confirm-tunnel") {
+    // A tunnel must never start before the installer has verified both
+    // runner services and their authenticated rootless readiness. This route
+    // cannot start the API or worker or run an arbitrary command.
+    await startVerifiedTunnel({ envPath: envFile });
+    process.stdout.write("Cloudflared richiesto dopo verifica API/worker; verificare Access, DNS e CORS da browser.\n");
     return;
   }
-  throw new Error("Usage: host-setup.mjs setup --origin=HTTPS_ORIGIN [--root=PATH] | start");
+  throw new Error("Usage: host-setup.mjs setup --origin=HTTPS_ORIGIN [--root=PATH] | tunnel --confirm-tunnel");
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { main(); } catch (error) {
-    process.stderr.write("Setup runner: " + (error instanceof Error ? error.message : "errore") + "\n");
+  main().catch(() => {
+    // No error objects, Docker output or credential-bearing .env in logs.
+    process.stderr.write("Setup runner: operazione rifiutata; ispezionare il server Linux dedicato.\n");
     process.exitCode = 1;
-  }
+  });
 }

@@ -141,6 +141,51 @@ test("check is read-only: verifies main/env/Compose/host without canary, Docker 
     ["compose","host"]);
 });
 
+test("release archive source reverified at each host-install gate, without Git metadata", async () => {
+  const f = fixture(), checks = [];
+  f.args.archive = "/srv/approved-installer.tar.gz";
+  f.args.archiveSha256 = "a".repeat(64);
+  f.args.verifyArchive = async input => {
+    checks.push(input);
+    return { source: "approved-release", commit: SHA, files: 182 };
+  };
+  const result = await runHostInstall(f.args);
+  assert.equal(result.state, "installed");
+  assert.equal(checks.length, 4);
+  assert.ok(checks.every(x => x.commit === SHA &&
+    x.archive === f.args.archive && x.archiveSha256 === f.args.archiveSha256));
+  assert.equal(f.calls.some(x => x[0] === "git"), false);
+  assert.equal(f.up, 1);
+});
+test("release source failure or changed digest blocks canary/start and never certifies installation", async () => {
+  for (const at of [1, 2, 3, 4]) {
+    const f = fixture(), checks = [];
+    f.args.archive = "/srv/approved-installer.tar.gz";
+    f.args.archiveSha256 = "b".repeat(64);
+    f.args.verifyArchive = async () => {
+      checks.push(true);
+      if (checks.length === at) throw Error("MANIFEST_PRIVATE_TOKEN_NEVER_ECHO");
+      return { source: "approved-release", commit: SHA, files: 182 };
+    };
+    await assert.rejects(runHostInstall(f.args),
+      error => error.message === "Runner host install refused; inspect the dedicated Linux host manually");
+    assert.equal(checks.length, at);
+    assert.equal(f.held, false);
+    assert.equal(f.up, at === 4 ? 1 : 0);
+  }
+  for (const overrides of [
+    { archive: "relative.tgz" }, { archiveSha256: "notsha" },
+    { archiveSha256: null }, { archive: null },
+  ]) {
+    const f = fixture();
+    f.args.archive = "/srv/approved-installer.tar.gz";
+    f.args.archiveSha256 = "b".repeat(64);
+    Object.assign(f.args, overrides);
+    await assert.rejects(runHostInstall(f.args), /Runner host install refused/);
+    assert.deepEqual(f.calls, []);
+  }
+});
+
 test("apply requires a verified rootless canary, empty stack and authenticated readiness", async () => {
   const f = fixture();
   const result = await runHostInstall(f.args);

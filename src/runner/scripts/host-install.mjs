@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { main as preflight, readPrivateEnv, validateHostEnvironment,
   selectEndpointBearer } from "../preflight.mjs";
 import { runVmAcceptance } from "./vm-acceptance.mjs";
+import { verifyInstallerReleaseSource } from "./installer-source.mjs";
 import { probeRootlessDocker } from "../docker-probe.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -138,10 +139,12 @@ export async function probeInstalledRunner({
  * Node, never exposed as HTTP or accepted as CLI input.
  */
 export async function runHostInstall({
-  envFile, commit, image, mode = "check", confirmed = false,
+  envFile, commit, image, archive = null, archiveSha256 = null,
+  mode = "check", confirmed = false,
   authMode = "inline", operatorRegistry = false,
   uid = process.getuid?.(), id = randomUUID(),
   readEnv = readPrivateEnv, git = undefined,
+  verifyArchive = verifyInstallerReleaseSource,
   preflightCheck = argv => preflight(argv, { write: () => {} }),
   vmAcceptance = runVmAcceptance,
   probeDocker = probeRootlessDocker,
@@ -156,9 +159,14 @@ export async function runHostInstall({
       !["check", "apply"].includes(mode) || typeof operatorRegistry !== "boolean" ||
       !["inline", "key-file", "tenants"].includes(authMode) ||
       authMode === "tenants" && operatorRegistry ||
-      confirmed !== (mode === "apply") || !UUID.test(id))
+      confirmed !== (mode === "apply") || !UUID.test(id) ||
+      ((archive === null) !== (archiveSha256 === null)) ||
+      (archive !== null && (!canonical(archive) ||
+        !/^[a-f0-9]{64}$/.test(archiveSha256))))
     reject();
-  const verifyGit = () => verifyCleanPinnedMain({ commit, ...(git ? { git } : {}) });
+  const verifySource = () => archive === null
+    ? verifyCleanPinnedMain({ commit, ...(git ? { git } : {}) })
+    : verifyArchive({ root, archive, archiveSha256, commit });
   const options = ["--env-file=" + envFile, ...profileFlags(authMode, operatorRegistry)];
   let locked = false, claimPath;
   try {
@@ -170,7 +178,7 @@ export async function runHostInstall({
     if (Object.keys(initial).some(key =>
       /^(?:COMPOSE_[A-Z0-9_]+|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|NODE_OPTIONS|NODE_PATH)$/.test(key)))
       reject();
-    await verifyGit();
+    await verifySource();
     for (const kind of ["compose", "host"]) {
       const proof = await preflightCheck([kind, ...options]);
       if (!proofIsSafe(proof, kind, authMode, operatorRegistry)) reject();
@@ -189,7 +197,7 @@ export async function runHostInstall({
     });
     if (!acceptanceIsSafe(accepted, id, authMode, operatorRegistry)) reject();
     if (!snapshotsEqual(initial, await readEnv(envFile))) reject();
-    await verifyGit();
+    await verifySource();
     // The host preflight certified this private data directory. An atomic
     // mkdir provides best-effort single-host fencing for two installers.
     claimPath = path.join(initial.RUNNER_DATA_DIR, ".sf-initial-install-claim");
@@ -203,7 +211,7 @@ export async function runHostInstall({
           Buffer.byteLength(output, "utf8") > 65536) reject();
       return output;
     };
-    await verifyGit();
+    await verifySource();
     if (!snapshotsEqual(initial, await readEnv(envFile))) reject();
     const existing = await rootless(["ps", "-a", "--filter",
       "label=com.docker.compose.project=" + PROJECT, "--format", "{{.ID}}"]);
@@ -219,7 +227,7 @@ export async function runHostInstall({
         ["-f", path.join(root, "docker/runner/compose.repair-operators.yml")] : [])];
     await rootless([...compose, "up", "--detach", "--build", "--no-deps",
       "runner-api", "runner-worker"], 180000);
-    await verifyGit();
+    await verifySource();
     if (!snapshotsEqual(initial, await readEnv(envFile))) reject();
     const ids = (await rootless(["ps", "-a", "--filter",
       "label=com.docker.compose.project=" + PROJECT, "--format", "{{.ID}}"]))
@@ -268,7 +276,8 @@ export async function runHostInstall({
 
 const usage = "Usage: node src/runner/scripts/host-install.mjs " +
   "--env-file=/absolute/private.env --commit=<40-hex> --image=node@sha256:<64-hex> " +
-  "(--check | --apply --confirm-install) [--runner-key-file|--tenants] [--operator-registry]";
+  "(--check | --apply --confirm-install) [--archive=/absolute/release.tar.gz --archive-sha256=<64hex>] " +
+  "[--runner-key-file|--tenants] [--operator-registry]";
 
 export async function main(argv = process.argv.slice(2), {
   execute = runHostInstall, uid = process.getuid?.(),
@@ -276,8 +285,8 @@ export async function main(argv = process.argv.slice(2), {
   writeRecovery = value => process.stderr.write(value),
 } = {}) {
   if (argv.length === 1 && argv[0] === "--help") { write(usage + "\n"); return null; }
-  const allowed = /^(--check|--apply|--confirm-install|--runner-key-file|--tenants|--operator-registry|--env-file=[^\r\n]+|--commit=[a-f0-9]{40}|--image=node@sha256:[a-f0-9]{64})$/;
-  if (!Array.isArray(argv) || argv.length < 4 || argv.length > 8 ||
+  const allowed = /^(--check|--apply|--confirm-install|--runner-key-file|--tenants|--operator-registry|--env-file=[^\r\n]+|--commit=[a-f0-9]{40}|--image=node@sha256:[a-f0-9]{64}|--archive=[^\r\n]+|--archive-sha256=[a-f0-9]{64})$/;
+  if (!Array.isArray(argv) || argv.length < 4 || argv.length > 10 ||
       argv.some(x => typeof x !== "string" || !allowed.test(x)) ||
       new Set(argv.map(x => x.split("=")[0])).size !== argv.length ||
       argv.includes("--check") === argv.includes("--apply") ||
@@ -288,14 +297,17 @@ export async function main(argv = process.argv.slice(2), {
   const envFile = argv.find(x => x.startsWith("--env-file="))?.slice(11);
   const commit = argv.find(x => x.startsWith("--commit="))?.slice(9);
   const image = argv.find(x => x.startsWith("--image="))?.slice(8);
+  const archive = argv.find(x => x.startsWith("--archive="))?.slice(10) || null;
+  const archiveSha256 = argv.find(x => x.startsWith("--archive-sha256="))?.slice(17) || null;
   if (!canonical(envFile) || !SHA.test(commit || "") || !IMAGE.test(image || "") ||
-      uid !== 1000) reject();
+      ((archive === null) !== (archiveSha256 === null)) ||
+      (archive !== null && !canonical(archive)) || uid !== 1000) reject();
   const authMode = argv.includes("--tenants") ? "tenants" :
     argv.includes("--runner-key-file") ? "key-file" : "inline";
   const operatorRegistry = argv.includes("--operator-registry");
   const mode = argv.includes("--check") ? "check" : "apply";
-  const result = await execute({ envFile, commit, image, mode,
-    confirmed: mode === "apply", uid, authMode, operatorRegistry, writeRecovery });
+  const result = await execute({ envFile, commit, image, archive, archiveSha256,
+    mode, confirmed: mode === "apply", uid, authMode, operatorRegistry, writeRecovery });
   const expected = mode === "check" ? "ready_to_install" : "installed";
   const expectedChecks = mode === "apply" ?
     ["git", "private-env", "compose", "host", "canary", "empty-stack",

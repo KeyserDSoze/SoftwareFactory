@@ -480,7 +480,7 @@ sono da sviluppare. Non inserire chiavi di produzione nella SPA.
 **Setup host su PC/server Linux:** dopo avere installato Docker Engine rootless,
 Compose e Node.js sull'account dedicato uid 1000, si possono eseguire
 `node src/runner/scripts/host-setup.mjs setup --origin=https://<origin-della-spa>`
-e quindi `node src/runner/scripts/host-setup.mjs start`.
+e quindi `node src/runner/scripts/host-install.mjs --env-file=/absolute/private.env --commit=<SHA40> --image=node@sha256:<DIGEST64> --apply --confirm-install`.
 Il primo genera localmente credenziali e file privati, il secondo verifica
 host/Compose e avvia API+worker. La configurazione del tunnel HTTPS/
 Cloudflare Access resta un'attività dell'operatore; GitHub Pages non trova
@@ -554,3 +554,9 @@ Apri **Settings → GitHub → Recupera conferma commit**. Dopo il primo consens
 Se e solo se tutto corrisponde, aggiorna **soltanto** il binding locale `githubSync`, senza riscrivere o importare il brief, le fasi o le patch. Disattiva l'autosync, che andrà autorizzato nuovamente. Il consenso a futuri push su repo pubbliche **non viene creato** dal recupero. L'operazione non crea repo, non invia patch, non fa merge né force push e non prova l'autore del commit: certifica solo la corrispondenza dei file locali con la **HEAD attuale**. Un branch avanzato da un altro dispositivo con altri commit, un solo file differente o un checkpoint storico devono essere gestiti con **Verifica HEAD remota** e import manuale con backup, non con l'ack. Web Locks proteggono la scheda locale; non sono un lease remoto multi-device.
 
 [ADR 0051](adr/0051-github-lost-ack-tree-reconciliation.md) · [Issue #91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91).
+
+## #95 — Download Release verificabile e avvio runner senza bypass del canary (18 novembre 2026)
+
+Il wizard `interactive-install.mjs` e il bootstrap `host-setup.mjs` non possono più avviare API/worker con il vecchio `host-setup start`: quel percorso eludeva la VM acceptance #88. Il wizard **prima di modificare l'host** verifica il sorgente approvato (checkout `main` pulito SHA40, oppure un archivio Release con SHA256 verificata e manifest bytewise dei file), richiede conferma esplicita della SHA40 e del digest immutabile `node@sha256:...`, e poi usa `host-install --apply --confirm-install` per canary rootless, lock, preflight, Docker Compose API+worker e readiness autenticata. Solo dopo chiede l'avvio del tunnel con una command separata `host-setup tunnel --confirm-tunnel` che rifiuta daemon non rootless o API non pronte e non avvia altri servizi.
+
+Il packaging Release adesso emette `.sf-installer-source.json` con commit SHA40 e checksum SHA-256 di ogni file estratto, e controlla offline l'archivio prima della pubblicazione. Il wizard chiede il percorso assoluto del `tar.gz` e la SHA256 approvata dall'operatore: questi valori non sono segreti e **non sostituiscono una firma indipendente** del publisher. La precedente Release **`v0.2.0-rc.1` non ha manifest ed è esclusa dai download consigliati dell'app**; usare `rc.2` o release compatibili. Non confondere una CI verde su Docker rootful effimero con un vero collaudo Linux rootless, reboot, Cloudflare Tunnel e Access. Guide [IT](INSTALLER.it.md), [EN](INSTALLER.en.md), ADR 0054, issue #95.

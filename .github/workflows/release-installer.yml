@@ -90,13 +90,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release
-          # Complete source bundle: installer, runner, Compose and IT/EN guide.
-          # git archive excludes ignored files and any local credentials.
-          git archive --format=tar --prefix=softwarefactory-runner-installer/ HEAD \
-            | gzip -n -9 > release/softwarefactory-runner-installer.tar.gz
+          mkdir -p release/staging/softwarefactory-runner-installer
+          # Only tracked code from the exact successfully tested source SHA.
+          # Git archives contain NO .git, so embed a bytewise source manifest
+          # to allow safe installer verification without inventing a Git HEAD.
+          git archive --format=tar HEAD \
+            | tar -xf - -C release/staging/softwarefactory-runner-installer
+          node src/runner/scripts/installer-source.mjs create \
+            --root="$PWD/release/staging/softwarefactory-runner-installer" \
+            --commit="${{ steps.version.outputs.sha }}"
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            -C release/staging -cf release/installer.tar softwarefactory-runner-installer
+          gzip -n -9 < release/installer.tar > release/softwarefactory-runner-installer.tar.gz
           cd release
           sha256sum softwarefactory-runner-installer.tar.gz > softwarefactory-runner-installer.tar.gz.sha256
+          # Verify archive digest and EVERY extracted source file against the
+          # source manifest before releasing; never trust the manifest alone.
+          node ../src/runner/scripts/installer-source.mjs verify \
+            --root="$PWD/staging/softwarefactory-runner-installer" \
+            --archive="$PWD/softwarefactory-runner-installer.tar.gz" \
+            --archive-sha256="$(cut -d ' ' -f1 softwarefactory-runner-installer.tar.gz.sha256)" \
+            --commit="${{ steps.version.outputs.sha }}"
+          rm -rf installer.tar staging
           test -s softwarefactory-runner-installer.tar.gz
           tar -tzf softwarefactory-runner-installer.tar.gz \
             | grep -Fx softwarefactory-runner-installer/src/runner/scripts/interactive-install.mjs

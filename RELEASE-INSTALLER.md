@@ -13,3 +13,9 @@ No secrets, PATs, Cloudflare credentials or private data are bundled.
 Instructions: [Italiano](https://github.com/KeyserDSoze/SoftwareFactory/blob/main/INSTALLER.it.md) · [English](https://github.com/KeyserDSoze/SoftwareFactory/blob/main/INSTALLER.en.md).
 
 **Important:** Requires Node.js 22, sudo and a dedicated Ubuntu/Debian uid 1000 account. Run `node src/runner/scripts/interactive-install.mjs` locally. This is not a GitHub Pages browser executable; review on-host security and manually test reboot, Cloudflare Tunnel and Access.
+
+## Verified-source manifest in RC.2+
+
+The installer package includes `.sf-installer-source.json`, generated from the **exact source commit** by the GitHub Release workflow. It contains the source commit SHA and the SHA-256 digest of every shipped source file. The operator must compare the archive's published SHA-256 against the downloaded bytes **before extraction**, retain the original archive, and approve the full source commit SHA and immutable `node@sha256:<digest64>` canary image when running `interactive-install.mjs`.
+
+**Security change:** the previous `v0.2.0-rc.1` wizard started Compose services without #88's full canary acceptance and cannot pass the new archive manifest contract. **Do not use rc.1 for new installations.** The wizard now uses `host-install --apply --confirm-install` for rootless Docker and authenticated service readiness, then allows Cloudflare tunnel startup as a *separate, gated* operation. Package hashes are integrity checks, not independently authenticated signatures. A real Ubuntu/Debian VM, reboot and external Tunnel/Access test are still required before production use.

@@ -16,6 +16,8 @@ import { createInterface } from "node:readline/promises";
 import https from "node:https";
 import { validateFactoryOrigin, validateCloudflareToken, validateOperatorApiKey,
   writePrivateHostConfig, envFile, repoRoot } from "./host-setup.mjs";
+import { verifyCleanPinnedMain } from "./host-install.mjs";
+import { verifyInstallerReleaseSource } from "./installer-source.mjs";
 
 const FINGERPRINT = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88";
 const DOCKER_REPO_KEY = "/etc/apt/keyrings/softwarefactory-docker.asc";
@@ -182,6 +184,49 @@ export function cloudflareInstructions({ runnerUrl, origin }) {
     "Il token Cloudflare rimane SOLO sull'host, non va inserito in SoftwareFactory o nel cloud.",
   ].join("\n");
 }
+
+/** Operator must approve the exact SHA and canary digest BEFORE provisioning.
+ * For a GitHub Release archive the source manifest is read independently
+ * from the approved tar.gz and every extracted file is hashed. An archive
+ * checksum hosted beside its asset is NOT an independent signature.
+ *
+ * All injected callbacks are Node unit-test seams, never CLI options.
+ */
+export async function approveInstallerSource({
+  root = repoRoot, ask, write = () => {},
+  gitPresent = existsSync(join(root, ".git")),
+  run = runChecked, verifyGit = verifyCleanPinnedMain,
+  verifyArchive = verifyInstallerReleaseSource,
+  readManifest = () => JSON.parse(readFileSync(join(root, ".sf-installer-source.json"), "utf8")),
+} = {}) {
+  if (typeof ask !== "function") throw Error("Serve conferma operatore.");
+  let commit, extra = [];
+  if (gitPresent) {
+    commit = String(run("git", ["rev-parse", "--verify", "HEAD"], { silent: true })).trim();
+    const branch = String(run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { silent: true })).trim();
+    if (branch !== "main" || !/^[a-f0-9]{40}$/.test(commit))
+      throw Error("Checkout Git principale non verificato.");
+    await verifyGit({ commit });
+  } else {
+    const archive = (await ask("Percorso ASSOLUTO dell'archivio .tar.gz scaricato dalla Release: ")).trim();
+    const archiveSha256 = (await ask("SHA-256 esatta verificata dalla Release: ")).trim();
+    const manifest = readManifest();
+    commit = manifest?.commit;
+    if (!/^[a-f0-9]{40}$/.test(commit))
+      throw Error("Manifest sorgente della Release assente o invalido.");
+    await verifyArchive({ root, archive, archiveSha256, commit });
+    extra = ["--archive=" + archive, "--archive-sha256=" + archiveSha256];
+  }
+  write("Sorgente da approvare, commit SHA-40: " + commit + "\n");
+  if ((await ask("Digita ESATTAMENTE la SHA-40 mostrata per approvare il sorgente: ")).trim() !== commit)
+    throw Error("SHA sorgente non approvata.");
+  const image = (await ask("Immagine canary Docker immutabile node@sha256:<digest64>: ")).trim();
+  if (!/^node@sha256:[a-f0-9]{64}$/.test(image))
+    throw Error("Digest canary non valido o non approvato.");
+  write("Canary rootless autorizzato su digest immutabile; non equivale a collaudo della VM.\n");
+  return { commit, image, sourceArgs: ["--commit=" + commit, ...extra] };
+}
+
 /**
  * Interactive run does not accept secrets from CLI args or config from untrusted web requests.
  * run/provision/prompt are test-only seams, not HTTP inputs.
@@ -204,6 +249,9 @@ export async function main(argv = process.argv.slice(2), {
     throw Error("Docker rootful già attivo: usare una VM/account dedicato, installer rifiutato.");
   const approved = (await ask("VM/PC dedicato e vuoto, pacchetti apt firmati e modifiche systemd? Digita INSTALLA per confermare: ")).trim();
   if (approved !== "INSTALLA") throw Error("Installazione annullata senza provisioning.");
+  // Authenticate the exact repository/archive bytes before apt, Docker or
+  // private secret writes; #88 will recheck the same source on every gate.
+  const reviewed = await approveInstallerSource({ ask, write, run });
   const origin = validateFactoryOrigin((await ask("Origin esatta GitHub Pages [https://keyserdsoze.github.io]: ")).trim() ||
     "https://keyserdsoze.github.io");
   const runnerUrl = validatePublicRunnerUrl((await ask("URL HTTPS pubblico configurabile su Cloudflare: ")).trim());
@@ -220,7 +268,15 @@ export async function main(argv = process.argv.slice(2), {
   for (const [binary, args] of rebootServicePlan()) run(binary, args);
   const root = join(homedir(), ".local/share/softwarefactory-runner");
   configure({ origin, root, cloudflareToken, secret });
-  run(process.execPath, ["src/runner/scripts/host-setup.mjs", "start", "--tunnel"]);
+  // Never call the old direct "host-setup start" shortcut: it bypassed the
+  // #88 digest-pinned canary, container checks and authenticated readiness.
+  run(process.execPath, ["src/runner/scripts/host-install.mjs",
+    "--env-file=" + envFile, ...reviewed.sourceArgs,
+    "--image=" + reviewed.image, "--apply", "--confirm-install"]);
+  // Cloudflare is only enabled AFTER both runner services are authenticated
+  // and verified on the rootless daemon. This does not attest public Access.
+  run(process.execPath, ["src/runner/scripts/host-setup.mjs",
+    "tunnel", "--confirm-tunnel"]);
   write("\n" + cloudflareInstructions({ origin, runnerUrl }) + "\n");
   if (mode === "g" && (await ask("Mostrare una sola volta la API key generata sul terminale? Scrivi MOSTRA (attenzione a video/condivisione): ")).trim() === "MOSTRA")
     write("API key (non viene ripetuta): " + secret + "\n");
