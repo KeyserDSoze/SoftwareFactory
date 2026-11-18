@@ -83,11 +83,50 @@ async function assertJobUnstarted(root, id, digest, tenantId) {
       verified.entries[0].kind !== "accepted" ||
       verified.report.evidence?.count !== 1) throw blocked();
 }
+/** A crash BEFORE publishing .pending-* has never exposed jobs to the
+ * worker. This maintenance-only action deletes uncommitted staging, but
+ * refuses if any staged job identifier is already present in live jobs/.
+ * No worker, API or other admission process may be running during recovery.
+ */
+async function discardUnpublishedStage(dataDir, id) {
+  const root = path.join(dataDir, "workflows");
+  await validDirectory(root);
+  for (const unsafe of [path.join(root, ".pending-" + id), path.join(root, id + ".json")]) {
+    try { await lstat(unsafe); throw blocked(); }
+    catch (e) { if (e.code !== "ENOENT") throw blocked(); }
+  }
+  const stage = path.join(dataDir,"workflow-staging",id);
+  await validDirectory(stage);
+  const entries = await readdir(stage, { withFileTypes:true });
+  if (entries.some(e => !["jobs","pending-marker"].includes(e.name) ||
+      !e.isDirectory())) throw blocked();
+  let count = 0;
+  for (const entry of entries) {
+    const subdir = path.join(stage,entry.name);
+    await validDirectory(subdir);
+    if (entry.name === "pending-marker") {
+      const children = await readdir(subdir);
+      if (children.some(name => !["intent.json"].includes(name))) throw blocked();
+      continue;
+    }
+    const children = await readdir(subdir, { withFileTypes:true });
+    for (const job of children) {
+      if (!job.isDirectory() || !UUID.test(job.name)) throw blocked();
+      await validDirectory(path.join(subdir,job.name));
+      if (await existingDirectory(jobDirectory(dataDir,job.name))) throw blocked();
+      count++;
+    }
+  }
+  await rm(stage, { recursive:true });
+  return { version:1, id, action:"discard-stage", jobCount:count };
+}
+
 export async function reconcilePendingBatch({ dataDir, id, action }) {
   if (!path.isAbsolute(dataDir) || dataDir === "/" ||
       typeof id !== "string" || !UUID.test(id) ||
-      !["abort", "finalize"].includes(action)) throw blocked();
+      !["abort", "finalize", "discard-stage"].includes(action)) throw blocked();
   return withAdmissionLock(dataDir, async () => {
+    if (action === "discard-stage") return discardUnpublishedStage(dataDir,id);
     const root = path.join(dataDir,"workflows");
     await validDirectory(root);
     const pending = path.join(root, ".pending-" + id);

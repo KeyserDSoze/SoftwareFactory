@@ -164,3 +164,45 @@ test("operator cannot abort jobs already started or claimed, even with a stale p
     assert.equal((await readReport(f.dataDir,board.tasks[0].jobId)).state,"passed");
   }finally{await f.close();}
 });
+
+
+test("operator discards only uncommitted staging from a crash BEFORE any publish marker", async () => {
+  const f=await fixture();
+  try{
+    const id=randomUUID(),staging=path.join(f.dataDir,"workflow-staging",id,"jobs");
+    const partial=randomUUID();
+    await mkdir(path.join(staging,partial),{recursive:true,mode:0o700});
+    await writeFile(path.join(staging,partial,"input.json"),"{incomplete",
+      {mode:0o600});
+    await mkdir(path.join(f.dataDir,"workflows"),{mode:0o700});
+    const response=await reconcilePendingBatch({
+      dataDir:f.dataDir,id,action:"discard-stage",
+    });
+    assert.deepEqual(response,{version:1,id,action:"discard-stage",jobCount:1});
+    await assert.rejects(readFile(path.join(staging,partial,"input.json")),
+      {code:"ENOENT"});
+  }finally{await f.close();}
+});
+
+test("discard-stage never erases a committed batch, pending guard, or a staged job also published live", async () => {
+  const f=await fixture();
+  try{
+    const board=await f.create(),id=board.id;
+    const stage=path.join(f.dataDir,"workflow-staging",id,"jobs");
+    await mkdir(stage,{recursive:true,mode:0o700});
+    await assert.rejects(
+      reconcilePendingBatch({dataDir:f.dataDir,id,action:"discard-stage"}),
+      {code:"BATCH_RECOVERY_BLOCKED"}); // manifest present
+    await rm(path.join(f.dataDir,"workflows",id+".json"));
+    await mkdir(path.join(stage,board.tasks[0].jobId),{mode:0o700});
+    await assert.rejects(
+      reconcilePendingBatch({dataDir:f.dataDir,id,action:"discard-stage"}),
+      {code:"BATCH_RECOVERY_BLOCKED"}); // live job with same ID
+    const marker=path.join(f.dataDir,"workflows",".pending-"+id);
+    await mkdir(marker,{mode:0o700});
+    await assert.rejects(
+      reconcilePendingBatch({dataDir:f.dataDir,id,action:"discard-stage"}),
+      {code:"BATCH_RECOVERY_BLOCKED"}); // pending guard
+    assert.equal((await readReport(f.dataDir,board.tasks[0].jobId)).state,"queued");
+  }finally{await f.close();}
+});

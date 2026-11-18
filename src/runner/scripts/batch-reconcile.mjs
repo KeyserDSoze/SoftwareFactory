@@ -4,10 +4,11 @@ import { reconcilePendingBatch } from "../batch-recovery.mjs";
 const args = process.argv.slice(2);
 const ix = args.indexOf("--data-dir"), bi = args.indexOf("--batch-id");
 const action = args.includes("--abort") ? "abort" :
-  args.includes("--finalize") ? "finalize" : null;
+  args.includes("--finalize") ? "finalize" :
+    args.includes("--discard-stage") ? "discard-stage" : null;
 if (args.length !== 5 || ix < 0 || bi < 0 || !action ||
-    (args.includes("--abort") && args.includes("--finalize"))) {
-  console.error("Usage: node scripts/batch-reconcile.mjs --data-dir /absolute/path --batch-id UUID --abort|--finalize");
+    ["--abort","--finalize","--discard-stage"].filter(x => args.includes(x)).length !== 1) {
+  console.error("Usage: node scripts/batch-reconcile.mjs --data-dir /absolute/path --batch-id UUID --abort|--finalize|--discard-stage");
   process.exitCode = 2;
 } else {
   try {
