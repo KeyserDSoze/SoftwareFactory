@@ -216,14 +216,20 @@ export async function admitWorkflowBatch({ dataDir, input, idempotencyKey,
       await refresh();
       capacity(currentTenant); // fence quota / credentials after writing stages
       const pending = path.join(root, ".pending-" + workflowId);
-      // This directory is an explicit worker-stop marker. On failure after
-      // this point, keep it and all staged/moved data for manual recovery.
-      await mkdir(pending, { mode: 0o700 });
-      guarded = true;
-      await atomicWrite(path.join(pending, "intent.json"), {
-        version: 1, id: workflowId, tenantId, jobIds: tasks.map(t => t.jobId),
-        digest: hash(manifest),
+      // Prepare a complete intent *before* publishing the marker. A crash
+      // must never leave an empty / unidentifiable guard that cannot be
+      // reconciled by a local operator.
+      const preparedMarker = path.join(stage, "pending-marker");
+      await mkdir(preparedMarker, { mode: 0o700 });
+      await atomicWrite(path.join(preparedMarker, "intent.json"), {
+        version: 1, id: workflowId, tenantId,
+        jobs: tasks.map(t => ({ id: t.jobId, digest: t.digest })),
+        manifestHash: hash(manifest),
       });
+      // Atomic rename is the publication barrier for the fail-closed guard.
+      // The worker refuses EVERY claim until this guard is removed.
+      await rename(preparedMarker, pending);
+      guarded = true;
       for (const task of tasks) {
         const target = jobDirectory(dataDir, task.jobId);
         try { await lstat(target); throw issue("ADMISSION_INTEGRITY"); }

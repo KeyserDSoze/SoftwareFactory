@@ -321,3 +321,6 @@ export async function mayStartGuardedJob(dataDir, jobId, index = undefined) {
   }
   return true;
 }
+
+/** Trusted local maintenance helper: still validates manifest inode and hash. */
+export { readManifest as readVerifiedWorkflowManifest };
