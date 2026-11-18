@@ -8,6 +8,7 @@ import { admitRunnerJob } from "./admission.mjs";
 import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
+import { registerAgentHandoff, getAgentHandoff, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
@@ -284,6 +285,80 @@ export function createRunnerServer({
       return;
     }
 
+
+    // Operator-authorized DECLARATION of an AI handoff DAG. No agent task
+    // claims, execution or auto approval can occur on these endpoints.
+    const handoffId = /^\/v1\/agent-handoffs\/([a-f0-9-]{36})$/.exec(req.url || "");
+    if (req.method === "GET" && handoffId) {
+      try {
+        const result = await getAgentHandoff(dataDir,handoffId[1],
+          activeTenant?.id ?? null,
+          tenantMode ? () => recheckTenant(req.headers.authorization,activeTenant.id)
+            : recheckRunnerKey ? () => recheckRunnerKey(req.headers.authorization) : undefined);
+        send(200,result);
+      } catch(error) {
+        if (error.code === "HANDOFF_NOT_FOUND" || error.code === "ENOENT")
+          send(404,{error:"not_found"});
+        else if (error.code === "HANDOFF_INTEGRITY")
+          tenantMode ? send(404,{error:"not_found"}) : send(409,{error:"handoff_integrity"});
+        else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if (error.code === "TENANT_AUTH_UNAVAILABLE" || error.code === "RUNNER_AUTH_UNAVAILABLE")
+          send(503,{error:"runner_auth_unavailable"});
+        else send(500,{error:"internal_error"});
+      }
+      return;
+    }
+    if (req.method === "POST" && req.url === "/v1/agent-handoffs") {
+      if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+        send(415,{error:"json_required"}); return;
+      }
+      if (Number(req.headers["content-length"] || 0) > MAX_HANDOFF_BODY_BYTES) {
+        send(413,{error:"too_large"}); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks=[]; let length=0;
+        for await (const chunk of req) {
+          length+=chunk.length;
+          if (length > MAX_HANDOFF_BODY_BYTES) {
+            send(413,{error:"too_large"}); return;
+          }
+          chunks.push(chunk);
+        }
+        input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400,{error:"invalid_json"}); return; }
+      try {
+        const result=await registerAgentHandoff({
+          dataDir,input,idempotencyKey:req.headers["idempotency-key"],
+          tenantId:activeTenant?.id ?? null,waitMs:admissionWaitMs,
+          reauthorize:tenantMode
+            ? () => recheckTenant(req.headers.authorization,activeTenant.id)
+            : recheckRunnerKey ? () => recheckRunnerKey(req.headers.authorization) : undefined,
+        });
+        send(result.created ? 201 : 200,result);
+      } catch(error) {
+        if (error.code === "HANDOFF_INVALID" || error.code === "INVALID_IDEMPOTENCY_KEY")
+          send(422,{error:"handoff_invalid"});
+        else if (error.code === "HANDOFF_BUDGET")
+          send(422,{error:"budget_exceeded"});
+        else if (error.code === "HANDOFF_CONFLICT")
+          send(409,{error:"handoff_conflict"});
+        else if (error.code === "HANDOFF_CAPACITY")
+          send(429,{error:"handoff_capacity"});
+        else if (error.code === "HANDOFF_INTEGRITY")
+          tenantMode ? send(404,{error:"not_found"}) : send(409,{error:"handoff_integrity"});
+        else if (error.code === "ADMISSION_BUSY") {
+          res.writeHead(503,{...headers,"Retry-After":"2"});
+          res.end(JSON.stringify({error:"admission_busy"}));
+        } else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if (error.code === "TENANT_AUTH_UNAVAILABLE" || error.code === "RUNNER_AUTH_UNAVAILABLE")
+          send(503,{error:"runner_auth_unavailable"});
+        else send(500,{error:"internal_error"});
+      }
+      return;
+    }
     // Operator-consented, immutable cross-job dependency manifest. No job
     // scheduling or source code execution is permitted through these routes.
     const workflowId = /^\/v1\/workflows\/([a-f0-9-]{36})$/.exec(req.url || "");
