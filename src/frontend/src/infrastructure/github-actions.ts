@@ -91,6 +91,19 @@ export function checkActionReceipt(value: unknown): GithubActionReceipt {
     "Receipt GitHub Actions non valido.");
   return r;
 }
+/** Verify the *same* dispatch on every read path, including resumed runId receipts. */
+function assertActionRunBinding(receipt: GithubActionReceipt, run: GitHubWorkflowRun): void {
+  required(run && typeof run === "object" &&
+    run.event === "workflow_dispatch" &&
+    run.display_title === "SoftwareFactory tests " + receipt.requestId &&
+    run.head_branch === receipt.branch && run.head_sha === receipt.commitSha &&
+    Number.isSafeInteger(run.id) && run.id > 0 &&
+    (receipt.runId === undefined || run.id === receipt.runId) &&
+    Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 &&
+    typeof run.created_at === "string" && Number.isFinite(Date.parse(run.created_at)) &&
+    Date.parse(run.created_at) >= Date.parse(receipt.createdAt) - 120000,
+    "Workflow run non correlato al dispatch: UUID, SHA, branch, ID o data differenti.");
+}
 export async function findGithubActionRun(
   git: GitConfig, token: string, receipt: GithubActionReceipt,
 ): Promise<GitHubWorkflowRun | null> {
@@ -110,15 +123,12 @@ export async function findGithubActionRun(
       typeof run.head_sha === "string" && SHA.test(run.head_sha) &&
       Number.isSafeInteger(run.id) && run.id > 0;
   }) as GitHubWorkflowRun[];
-  if (receipt.runId !== undefined) return matches.find(x => x.id === receipt.runId) ?? null;
-  if (!matches.length) return null;
-  required(matches.length === 1, "Dispatch ambiguo: più run con lo stesso UUID.");
-  const run = matches[0];
-  required(run.head_sha === receipt.commitSha,
-    "Il branch GitHub è cambiato tra il dispatch e l'avvio del test: risultato obsoleto.");
-  required(typeof run.created_at === "string" && Date.parse(run.created_at) >=
-    Date.parse(receipt.createdAt) - 120000,
-    "Risultato GitHub non associato al dispatch corrente.");
+  const candidates = receipt.runId === undefined ? matches :
+    matches.filter(x => x.id === receipt.runId);
+  if (!candidates.length) return null;
+  required(candidates.length === 1, "Dispatch ambiguo: più run con lo stesso UUID.");
+  const run = candidates[0];
+  assertActionRunBinding(receipt, run);
   return run;
 }
 const bounds = (v: unknown, min: number, max: number) =>
@@ -129,6 +139,7 @@ export function verifyGithubActionReport(
   raw: unknown, receipt: GithubActionReceipt, run: GitHubWorkflowRun,
 ): GithubActionReport {
   checkActionReceipt(receipt);
+  assertActionRunBinding(receipt, run);
   required(raw && typeof raw === "object" && !Array.isArray(raw), "Report GitHub Actions JSON non valido.");
   const d = raw as Record<string, unknown>;
   required(exactly(d, ["schemaVersion","requestId","repository","ref","commitSha","runId",
@@ -175,6 +186,9 @@ export async function loadGithubActionReport(
   git: GitConfig, token: string, receipt: GithubActionReceipt, run: GitHubWorkflowRun,
 ): Promise<GithubActionReport> {
   checkActionReceipt(receipt);
+  required(receipt.repository.toLowerCase() === (git.owner + "/" + git.repo).toLowerCase() &&
+    receipt.branch === git.branch, "Repository o branch diversi dal dispatch originale.");
+  assertActionRunBinding(receipt, run);
   required(run.status === "completed", "Il workflow non è ancora terminato.");
   const root = safeRoot(git);
   const list = await gh<{ artifacts: Array<{id:number;name:string;expired:boolean;size_in_bytes:number}> }>(
@@ -218,6 +232,7 @@ export function parseGithubActionReportZip(
 }
 export function githubActionRunUrl(receipt: GithubActionReceipt, run?: GitHubWorkflowRun | null): string {
   checkActionReceipt(receipt);
+  if (run) assertActionRunBinding(receipt, run);
   const prefix = "https://github.com/" + receipt.repository + "/actions/";
   return run && Number.isSafeInteger(run.id) && run.id > 0 ?
     prefix + "runs/" + run.id : prefix + "workflows/" + WORKFLOW;

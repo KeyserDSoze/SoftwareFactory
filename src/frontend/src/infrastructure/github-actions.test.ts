@@ -63,6 +63,48 @@ describe("PAT-only GitHub Actions test backend", () => {
     expect(githubActionRunUrl(receipt, run)).toBe("https://github.com/octocat/myapp/actions/runs/456");
     await expect(findGithubActionRun(git, token, { ...receipt, commitSha: "b".repeat(40) })).rejects.toThrow(/SHA|branch/);
   });
+  it("re-checks SHA, timestamp and attempt when resuming a bound runId", async () => {
+    const resumed = { ...receipt, runId: 456 };
+    const fetchRun = (candidate: GitHubWorkflowRun) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200,
+        json: async () => ({ workflow_runs: [candidate] }) }));
+    };
+    fetchRun(run);
+    expect(await findGithubActionRun(git, token, resumed)).toMatchObject({ id: 456 });
+    for (const invalid of [
+      { ...run, head_sha: "b".repeat(40) },
+      { ...run, created_at: "2000-01-01T00:00:00.000Z" },
+      { ...run, created_at: "invalid" },
+      { ...run, run_attempt: 0 },
+    ]) {
+      fetchRun(invalid);
+      await expect(findGithubActionRun(git, token, resumed)).rejects.toThrow(/non correlato/);
+    }
+    fetchRun({ ...run, display_title: "Unrelated run" });
+    expect(await findGithubActionRun(git, token, resumed)).toBeNull();
+    fetchRun({ ...run, id: 999 });
+    expect(await findGithubActionRun(git, token, resumed)).toBeNull();
+  });
+  it("rejects uncorrelated runs before reading artifacts, parsing reports or linking them", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const unrelated = [
+      { ...run, event: "push" },
+      { ...run, display_title: "Unrelated run" },
+      { ...run, head_sha: "b".repeat(40) },
+      { ...run, created_at: "invalid" },
+      { ...run, run_attempt: 0 },
+      { ...run, id: 123 },
+    ];
+    for (const wrong of unrelated) {
+      expect(() => verifyGithubActionReport(report(), { ...receipt, runId: 456 }, wrong)).toThrow(/non correlato/);
+      await expect(loadGithubActionReport(git, token, { ...receipt, runId: 456 }, wrong)).rejects.toThrow(/non correlato/);
+      expect(() => githubActionRunUrl(receipt, wrong)).toThrow(/non correlato/);
+    }
+    await expect(loadGithubActionReport({ ...git, repo: "other" }, token, receipt, run))
+      .rejects.toThrow(/Repository o branch diversi/);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("verifies schema, step set, counters, run attempt, SHA and GitHub conclusion", () => {
     expect(verifyGithubActionReport(report(), receipt, run)).toMatchObject({ state: "passed" });
     for (const invalid of [
