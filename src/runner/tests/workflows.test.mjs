@@ -254,3 +254,31 @@ test("tenant workflow ownership, registry key rotation, and legacy rollback rema
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test("crash-recovered and rejected-before-start jobs remain incomplete, never passed", async () => {
+  const f = await fixture();
+  try {
+    const a = await f.submit(), b = await f.submit();
+    const created = await post(f, 0, manifest(a,b));
+    assert.equal(created.status, 201);
+    const queued = await readReport(f.dataDir, a.id);
+    await recordJobEvidence(f.dataDir, a.id, { ...queued, state: "incomplete",
+      finishedAt: new Date().toISOString(),
+      summary: "Worker rejected queue entry without running code" }, "rejected");
+    const afterReject = await get(f, 1, created.body.id);
+    assert.equal(afterReject.status, 200);
+    assert.deepEqual(afterReject.body.tasks.map(t=>t.status), ["incomplete","blocked"]);
+    const next = await readReport(f.dataDir,b.id);
+    await recordJobEvidence(f.dataDir,b.id,{ ...next,state:"running",
+      startedAt:new Date().toISOString() },"started");
+    const running=await readReport(f.dataDir,b.id);
+    await recordJobEvidence(f.dataDir,b.id,{ ...running,state:"incomplete",
+      finishedAt:new Date().toISOString(),
+      summary:"Worker interrupted; no passing test" },"recovered");
+    const recovered = await get(f, 0, created.body.id);
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(recovered.body.tasks.map(t=>t.status), ["incomplete","out_of_order"]);
+    assert.equal(recovered.body.status, "out_of_order");
+  } finally { await f.close(); }
+});

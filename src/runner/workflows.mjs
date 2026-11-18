@@ -130,10 +130,20 @@ async function verifiedTaskPlans(dataDir, manifest, tenantId) {
       const dates = [verified.report.startedAt, verified.report.finishedAt];
       const validDate = date => date === null || (typeof date === "string" &&
         Number.isFinite(Date.parse(date)) && new Date(date).toISOString() === date);
+      const terminal = ["passed", "failed", "incomplete"].includes(verified.report.state);
+      const terminalEvent = verified.entries.some(e =>
+        ["finished", "rejected", "recovered"].includes(e.kind));
+      // A job rejected while still queued never has a worker start. A job
+      // recovered after a crash is terminal "incomplete", not passed/failed.
+      const unstartedRejection = verified.report.state === "incomplete" &&
+        verified.entries.some(e => e.kind === "rejected") && dates[0] === null;
       if (!dates.every(validDate) ||
-          (verified.report.state !== "queued" && dates[0] === null) ||
-          (["passed", "failed", "incomplete"].includes(verified.report.state) &&
-            (dates[1] === null || !verified.entries.some(e => e.kind === "finished"))))
+          (verified.report.state === "queued" && (dates[0] !== null || dates[1] !== null)) ||
+          (verified.report.state !== "queued" && dates[0] === null && !unstartedRejection) ||
+          (terminal && (dates[1] === null || !terminalEvent)) ||
+          (!terminal && dates[1] !== null) ||
+          (verified.report.state === "passed" &&
+            !verified.entries.some(e => e.kind === "finished")))
         throw fault("WORKFLOW_EVIDENCE");
       plans.push({ ...plan, startedAt: dates[0], finishedAt: dates[1] });
     } catch { throw fault("WORKFLOW_EVIDENCE"); }
