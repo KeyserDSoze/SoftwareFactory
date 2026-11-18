@@ -792,3 +792,13 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - La SPA associa il piano a `id`, digest e `evidence.head/count` del report corrente o lo nasconde.
 - Nessun Docker socket nell'API; niente log/sorgenti/segreti nel piano. Non confondere con un orchestratore PM/server-side generale.
 - Conservare test runner `pm-job-plan.test.mjs`, client Vitest e ADR 0057; #89/#2 ancora aperte.
+
+
+
+## Registro durevole multi-job (#100)
+
+- Il registro `src/runner/workflows.mjs` ammette solo manifest con consenso, idempotenza UUID e job già presenti/sha verificati. Non invia e non fa partire job automaticamente.
+- L'handoff `dependsOn` è **osservativo**, non esegue gating dei job worker. Se un dipendente è partito prima dell'upstream, mostra `out_of_order`; mai auto-approvazione.
+- Per GET/POST richiedere Bearer come job, ownership tenant e ricontrollo della revoca; in legacy mode rifiutare job tenant e viceversa. Manifest O_NOFOLLOW, singolo link, uid 0600, hash locale e lock POSIX.
+- Non affermare prova off-host o scheduling durevole di ruoli AI; i manifest sono conservati a parte dalla retention dei report e diventano unverifiable se manca un job.
+- Test `src/runner/tests/workflows.test.mjs`, ADR 0058; #89/#2 rimangono aperte.

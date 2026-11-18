@@ -501,3 +501,9 @@ degli step di un job persistito. Il GET /v1/jobs/:id/plan usa lo stesso
 controllo auth/tenant del GET report; il nuovo piano non crea una coda.
 La SPA richiede corrispondenza digest/head per evitare mixing di snapshots.
 Il gate del Code Agent resta separato e immutato. ADR 0057.
+
+
+
+### Registro operatore multi-job osservativo (#100)
+
+`src/runner/workflows.mjs` associa fino a sei job esistenti con DAG topologicamente valido, tenant owner e SHA di request verificato. Un file manifest privato viene creato atomico sotto lock condiviso, validato con hash locale e letto con O_NOFOLLOW + inode ownership. Ogni GET rilegge il journal già verificato dai job e usa `projectVerifiedJobPlan` della #99: nessuna receipt sostituisce prova di step e una violazione d'ordine produce `out_of_order`. Il flusso non crea/esegue job né implementa scheduler; per vincolare veramente l'ordine serve una successiva API di dispatch con approvazione e leasing. ADR0058.

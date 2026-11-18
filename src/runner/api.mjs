@@ -6,6 +6,7 @@ import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs
 import { readWorkerHeartbeatForHttp, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
+import { registerWorkflow, getWorkflow } from "./workflows.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
@@ -278,6 +279,77 @@ export function createRunnerServer({
           res.writeHead(503, { ...headers, "Retry-After": "2" });
           res.end(JSON.stringify({ error: "admission_busy" }));
         } else send(500, { error: "internal_error" });
+      }
+      return;
+    }
+
+    // Operator-consented, immutable cross-job dependency manifest. No job
+    // scheduling or source code execution is permitted through these routes.
+    const workflowId = /^\/v1\/workflows\/([a-f0-9-]{36})$/.exec(req.url || "");
+    if (req.method === "GET" && workflowId) {
+      try {
+        const result = await getWorkflow(dataDir, workflowId[1],
+          activeTenant?.id ?? null, tenantMode
+            ? () => recheckTenant(req.headers.authorization, activeTenant.id)
+            : recheckRunnerKey ? () => recheckRunnerKey(req.headers.authorization) : undefined);
+        send(200, result);
+      } catch (error) {
+        if (error.code === "WORKFLOW_NOT_FOUND" || error.code === "ENOENT")
+          send(404, { error: "not_found" });
+        else if (error.code === "WORKFLOW_EVIDENCE" || error.code === "WORKFLOW_INTEGRITY")
+          tenantMode ? send(404, { error: "not_found" }) : send(409, { error: "workflow_integrity" });
+        else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
+          send(401, { error: "unauthorized" });
+        else if (error.code === "TENANT_AUTH_UNAVAILABLE" || error.code === "RUNNER_AUTH_UNAVAILABLE")
+          send(503, { error: "runner_auth_unavailable" });
+        else send(500, { error: "internal_error" });
+      }
+      return;
+    }
+    if (req.method === "POST" && req.url === "/v1/workflows") {
+      if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+        send(415, { error: "json_required" }); return;
+      }
+      if (Number(req.headers["content-length"] || 0) > 4096) {
+        send(413, { error: "too_large" }); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks = []; let bytes = 0;
+        for await (const chunk of req) {
+          bytes += chunk.length;
+          if (bytes > 4096) { send(413, { error: "too_large" }); return; }
+          chunks.push(chunk);
+        }
+        input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400, { error: "invalid_json" }); return; }
+      try {
+        const result = await registerWorkflow({ dataDir, input,
+          tenantId: activeTenant?.id ?? null,
+          idempotencyKey: req.headers["idempotency-key"],
+          reauthorize: tenantMode
+            ? () => recheckTenant(req.headers.authorization, activeTenant.id)
+            : recheckRunnerKey ? () => recheckRunnerKey(req.headers.authorization) : undefined });
+        send(result.created ? 201 : 200, result);
+      } catch (error) {
+        if (error.code === "WORKFLOW_INVALID" || error.code === "INVALID_IDEMPOTENCY_KEY")
+          send(422, { error: "workflow_invalid" });
+        else if (error.code === "WORKFLOW_CONFLICT")
+          send(409, { error: "workflow_conflict" });
+        else if (error.code === "WORKFLOW_NOT_FOUND")
+          send(404, { error: "not_found" });
+        else if (error.code === "WORKFLOW_EVIDENCE" || error.code === "WORKFLOW_INTEGRITY")
+          tenantMode ? send(404, { error: "not_found" }) : send(409, { error: "workflow_integrity" });
+        else if (error.code === "WORKFLOW_CAPACITY")
+          send(429, { error: "workflow_capacity" });
+        else if (error.code === "ADMISSION_BUSY") {
+          res.writeHead(503, { ...headers, "Retry-After": "2" });
+          res.end(JSON.stringify({ error: "admission_busy" }));
+        } else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
+          send(401, { error: "unauthorized" });
+        else if (error.code === "TENANT_AUTH_UNAVAILABLE" || error.code === "RUNNER_AUTH_UNAVAILABLE")
+          send(503, { error: "runner_auth_unavailable" });
+        else send(500, { error: "internal_error" });
       }
       return;
     }

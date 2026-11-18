@@ -1057,3 +1057,13 @@ enqueue, dispatch, shell o AI è associata a questa lettura.
 
 Il journal è locale e soggetto a retention, non è prova off-host né WORM;
 orchestrazione PM duratura multi-job in #89, rootless VM e isolamento in #2/#87.
+
+
+
+## Workflow multi-job supervisionato — protocollo v1 (#100)
+
+`POST /v1/workflows` (Bearer runner, Content-Type JSON, Idempotency-Key UUIDv4, limite body 4096 byte) accetta `{consent:true,label,tasks}`; `tasks` contiene 2–6 nodi: `{id,role,jobId,digest,dependsOn}`. Ogni dipendenza dev'essere già elencata nella sequenza, no duplicazioni, no cicli, ruoli allowlisted (solo descrittivi). Ogni job deve esistere già nel journal, essere leggibile dalla stessa identità tenant e avere digest esatto; i test sono gestiti dalla coda preesistente, non dal workflow.
+
+Il manifest immutabile è su filesystem condiviso in `/data/workflows/<uuid>.json`, creato mode0600 via rename atomico sotto shared admission lock POSIX. È riletto da file descriptor O_NOFOLLOW con controllo UID/perms/inode/single-link/size e digest locale SHA256, **non firmato né immutabile davanti a un attaccante che controlla l'host**. Capacità massima 64 workflow. Replay idempotente con stesso UUID e payload produce lo stesso ID; payload divergente 409. GET con la stessa Bearer ricalcola lo stato dal journal di ogni job, restituisce solo ruolo, job ID, stato, dipendenze e evidence head/count: niente stdout, path, codice e secret. Esecuzione anticipata di un dipendente = `out_of_order` (diagnosi, non enforcement). Evidenza cancellata/alterata => 409 (o 404 in tenant mode). Accesso cross tenant => 404, dopo cambio di auth legacy i job dei tenant non diventano pubblici. Revoca su registry per POST e GET è ricontrollata prima di rispondere/scrivere.
+
+La sola registrazione non avvia nulla, non schedula job, non esegue prompt LLM. Le dipendenze sono dichiarate **ex post** e non costituiscono un gate di invio dei job; runtime multi-job su server e budget/approval/fencing da completare nella #89. ADR0058.

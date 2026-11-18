@@ -822,3 +822,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
   UI Code Agent lega il piano a digest e evidence head del report corrente.
 - [ ] Coordinatore persistente multi-job/feature/ruoli, autorizzazioni e budget,
   replay/fencing distribuito e test VM reali rimangono #89/#2/#87.
+
+
+
+## Registro multi-job persistente osservativo (#100)
+
+- [x] REST POST/GET con consenso esplicito, idempotenza UUID, DAG 2–6 job, ruoli dichiarati e digest verificati.
+- [x] Manifest privati su volume condiviso, lock multi-API, owner tenant, recheck revoca, journal SHA per ogni job e `out_of_order`.
+- [x] Test Node per doppie API, replay/conflitto, file manomessi, evidenza non valida e isolamento tra tenant; ADR0058.
+- [ ] Scheduler vero per eseguire task in ordine con budget/approval/lease, azioni AI, retry e recovery su worker; VM rootless/cloudflare live e firma delle evidenze. Rimangono in #89/#2/#87.

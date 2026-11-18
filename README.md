@@ -598,3 +598,11 @@ La API non esegue task aggiuntivi e non possiede un PM autonomo. Il risultato è
 osservabile fino alla retention del job, non è un'attestazione indipendente o una
 schedulazione multi-agent. Vedi [ADR 0057](adr/0057-runner-verified-pm-execution-view.md),
 [issue #99](https://github.com/KeyserDSoze/SoftwareFactory/issues/99).
+
+
+
+## Registro multi-job PM persistente (#100)
+
+Il runner supporta `POST /v1/workflows` e `GET /v1/workflows/<uuid>` per registrare con consenso un **DAG immutabile di 2–6 job già ammessi**. L'API richiede la stessa credenziale runner dei job e un header `Idempotency-Key` UUIDv4. La registrazione richiede `consent: true`, una `label` e task con `id`, `role`, `jobId`, `digest`, `dependsOn`. Ruoli sono annotazioni, non worker autonomi.
+
+Esempio: `{"consent":true,"label":"Build e test","tasks":[{"id":"build","role":"devops_engineer","jobId":"<uuid-già-restituito>","digest":"<sha256>","dependsOn":[]},{"id":"test","role":"tester","jobId":"<secondo-uuid>","digest":"<secondo-sha256>","dependsOn":["build"]}]}`. Le due chiamate a `POST /v1/jobs` avvengono **prima**, con consenso autonomo dell'operatore; registrare un piano **non avvia job**. GET ricostruisce gli stati da journal verificati (head/count) e segnala `out_of_order` se un job dipendente è partito troppo presto. I manifest sono privati/limitati, associati al tenant, recuperabili dopo restart, non firmati e conservati sino alla manutenzione manuale. Se i job sono stati rimossi dalla retention, GET fallisce senza inventare esiti. Non esiste ancora scheduler multi-job che imponga l'ordine, né un PM AI non supervisionato. [ADR 0058](adr/0058-multi-job-observational-workflow-ledger.md) e [#100](https://github.com/KeyserDSoze/SoftwareFactory/issues/100).
