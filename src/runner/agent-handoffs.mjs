@@ -19,6 +19,8 @@ const ROLES = new Set(["project_manager", "tester", "test_architect",
   "fix_developer", "release_manager", "security_engineer"]);
 const MAX_MANIFESTS = 64;
 const MAX_RECORD_BYTES = 8192;
+// Even a human-supplied label must not become a secret-bearing manifest.
+const CREDENTIAL_MARKER = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_[a-zA-Z0-9_]{15,}|gh[pousr]_[a-zA-Z0-9]{20,}|Bearer\s+\S+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+/i;
 export const MAX_HANDOFF_BODY_BYTES = 6144;
 const issue = code => Object.assign(new Error(code), { code });
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -31,6 +33,7 @@ function normalize(input) {
       input.consent !== true || typeof input.label !== "string" ||
       input.label.trim().length < 2 || input.label.trim().length > 120 ||
       /[\u0000-\u001f\u007f]/.test(input.label) ||
+      CREDENTIAL_MARKER.test(input.label) ||
       !Number.isInteger(input.budgetUnits) ||
       input.budgetUnits < 1 || input.budgetUnits > 1000 ||
       !Array.isArray(input.tasks) || input.tasks.length < 2 ||
