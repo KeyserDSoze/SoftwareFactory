@@ -1,7 +1,7 @@
-import { fetchRunnerExecutionPlan, validateRunnerExecutionPlan, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
-  RunnerRequestError, runnerPollDecision, probeRunnerConnector } from "./runner";
+import { fetchRunnerExecutionPlan, validateRunnerExecutionPlan, runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
+  RunnerRequestError, runnerPollDecision, probeRunnerConnector, type RunnerReport } from "./runner";
 
 describe("remote runner browser client", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -192,9 +192,9 @@ describe("verified runner PM job plan binding (#99)", () => {
   const endpoint = "https://runner.example.com";
   const id = "123e4567-e89b-42d3-a456-426614174000";
   const evidence = { version: 1, count: 3, head: "a".repeat(64) };
-  const report = { id, digest: "b".repeat(64), label: "test", state: "running" as const,
+  const report: RunnerReport = { id, digest: "b".repeat(64), label: "test", state: "running",
     summary: "Worker started", acceptedAt: "", startedAt: "", finishedAt: null,
-    steps: ["dotnet-build"] as const, results: [], evidence };
+    steps: ["dotnet-build"], results: [], evidence };
   const payload = { version: 1, jobId: id, digest: report.digest,
     state: report.state, evidence: { count: 3, head: "a".repeat(64) },
     tasks: [{ id: "dotnet-build", owner: "Runner test worker",
