@@ -23,7 +23,7 @@ export function parseIdempotencyKey(header) {
  * holding its own .claim, not the API admission lock. Bounded retries tolerate
  * that short transition; persistent integrity failures never free capacity.
  */
-async function verifiedAdmissionReport(dataDir, id) {
+export async function verifiedAdmissionReport(dataDir, id) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try { return (await verifyJobEvidence(dataDir, id)).report; }
     catch (error) {

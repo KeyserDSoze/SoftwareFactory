@@ -5,6 +5,7 @@ import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from 
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
 import { readWorkerHeartbeatForHttp, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
+import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
@@ -301,6 +302,61 @@ export function createRunnerServer({
         else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
           send(401, { error: "unauthorized" });
         else if (error.code === "TENANT_AUTH_UNAVAILABLE" || error.code === "RUNNER_AUTH_UNAVAILABLE")
+          send(503, { error: "runner_auth_unavailable" });
+        else send(500, { error: "internal_error" });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/v1/workflows/batch") {
+      if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+        send(415, { error: "json_required" }); return;
+      }
+      if (Number(req.headers["content-length"] || 0) > MAX_BATCH_BODY_BYTES) {
+        send(413, { error: "too_large" }); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > MAX_BATCH_BODY_BYTES) { send(413, { error: "too_large" }); return; }
+          chunks.push(chunk);
+        }
+        input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400, { error: "invalid_json" }); return; }
+      try {
+        const result = await admitWorkflowBatch({
+          dataDir, input, idempotencyKey: req.headers["idempotency-key"],
+          maxQueued, maxRetained, maxAcceptedPerMinute, waitMs: admissionWaitMs,
+          tenant: activeTenant,
+          reauthorize: tenantMode
+            ? () => recheckTenant(req.headers.authorization, activeTenant.id)
+            : recheckRunnerKey
+              ? () => recheckRunnerKey(req.headers.authorization) : undefined,
+        });
+        send(result.created ? 201 : 200, result);
+      } catch (e) {
+        if (e.code === "WORKFLOW_INVALID" || e.code === "INVALID_IDEMPOTENCY_KEY")
+          send(422, { error: "workflow_invalid" });
+        else if (e.code === "WORKFLOW_CONFLICT")
+          send(409, { error: "workflow_conflict" });
+        else if (e.code === "QUEUE_FULL")
+          send(429, { error: "queue_full" });
+        else if (e.code === "RATE_LIMIT") {
+          res.writeHead(429, { ...headers, "Retry-After": String(e.retryAfter) });
+          res.end(JSON.stringify({ error: "rate_limited" }));
+        } else if (e.code === "WORKFLOW_CAPACITY")
+          send(429, { error: "workflow_capacity" });
+        else if (e.code === "WORKFLOW_INTEGRITY" || e.code === "WORKFLOW_EVIDENCE")
+          tenantMode ? send(404, { error: "not_found" })
+            : send(409, { error: "workflow_integrity" });
+        else if (e.code === "ADMISSION_BUSY" || e.code === "ADMISSION_INTEGRITY") {
+          res.writeHead(503, { ...headers, "Retry-After": "2" });
+          res.end(JSON.stringify({ error: "admission_unavailable" }));
+        } else if (e.code === "TENANT_AUTH_REVOKED" || e.code === "RUNNER_AUTH_REVOKED")
+          send(401, { error: "unauthorized" });
+        else if (e.code === "TENANT_AUTH_UNAVAILABLE" || e.code === "RUNNER_AUTH_UNAVAILABLE")
           send(503, { error: "runner_auth_unavailable" });
         else send(500, { error: "internal_error" });
       }
