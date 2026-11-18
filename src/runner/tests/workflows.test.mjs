@@ -282,3 +282,21 @@ test("crash-recovered and rejected-before-start jobs remain incomplete, never pa
     assert.equal(recovered.body.status, "out_of_order");
   } finally { await f.close(); }
 });
+
+
+test("a dependent job rejected before worker start is incomplete, not falsely out-of-order", async () => {
+  const f = await fixture();
+  try {
+    const a=await f.submit(),b=await f.submit();
+    const created=await post(f,0,manifest(a,b));
+    assert.equal(created.status,201);
+    const queued=await readReport(f.dataDir,b.id);
+    await recordJobEvidence(f.dataDir,b.id,{ ...queued,state:"incomplete",
+      finishedAt:new Date().toISOString(),
+      summary:"Rejected before tests due to invalid worker setup" },"rejected");
+    const board=await get(f,1,created.body.id);
+    assert.equal(board.status,200);
+    assert.deepEqual(board.body.tasks.map(t=>t.status), ["queued","incomplete"]);
+    assert.equal(board.body.status,"incomplete");
+  } finally { await f.close(); }
+});

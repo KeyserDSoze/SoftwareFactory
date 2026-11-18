@@ -156,7 +156,9 @@ function projectManifest(manifest, plans) {
     const plan = plans[i];
     const resultState = plan.state;
     const dependenciesPassed = task.dependsOn.every(d => statuses.get(d) === "passed");
-    const started = resultState !== "queued";
+    // A rejected queued job is terminal but never started code execution.
+    // Do not report an order violation on a job that never entered the worker.
+    const started = plan.startedAt !== null;
     // Even if all predecessors eventually pass, a downstream job STARTED
     // before their finish timestamps violates the declared ordering.
     // Millisecond ties are not sufficient proof of dependency completion.
@@ -167,7 +169,8 @@ function projectManifest(manifest, plans) {
         Date.parse(plan.startedAt) <= Date.parse(finishedAt);
     });
     const status = startedBeforeDependency ? "out_of_order" :
-      dependenciesPassed ? resultState : started ? "out_of_order" : "blocked";
+      dependenciesPassed ? resultState : started ? "out_of_order" :
+      resultState === "incomplete" ? "incomplete" : "blocked";
     statuses.set(task.id, status);
     return {
       id: task.id, role: task.role, jobId: task.jobId,
