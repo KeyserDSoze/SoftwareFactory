@@ -809,3 +809,13 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Il workflow \`.github/workflows/pages.yml\` ha due job: build/upload e deploy; deploy dipende dall'output pages_enabled del build.
 - Retry di deploy **non deve ricaricare** un secondo artifact github-pages nello stesso run: deploy-pages@v4 fallisce con metadata duplicati.
 - Mantenere \`src/runner/tests/pages-workflow.test.mjs\`. Solo il workflow Actions reale su main conferma la pubblicazione.
+
+
+## Workflow enforced e worker claim (#102)
+
+- `enforced:true` è l'unico opt-in per il manifest v2; i manifest v1 NON devono introdurre gating retroattivo.
+- Il manifest enforced richiede TUTTI i job `queued` e senza `.claim`, sotto lo stesso lock POSIX di `executeJob`. Un job già partito o una claim esistente = conflitto 409, nessun automatismo.
+- Prima del polling e immediatamente prima di acquisire la claim, il worker verifica tutti i manifest (O_NOFOLLOW, permessi, hash, ownership) e i predecessori via report+journal. Corruzione o lock occupato => no esecuzione e no finto `failed` / `rejected`.
+- Il worker deve saltare un job bloccato senza farlo diventare head-of-line blocker; il tenant fairness per gli altri job rimane invariato.
+- Per status `passed` occorrono sempre step reali verificati. Niente token/sorgenti nel manifest o nuova esecuzione per effetto di una GET.
+- Test `src/runner/tests/guarded-workflows.test.mjs`, ADR 0059. L'isolamento rootless su VM e PM AI autonomo restano #87/#2/#89.

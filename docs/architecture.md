@@ -507,3 +507,8 @@ Il gate del Code Agent resta separato e immutato. ADR 0057.
 ### Registro operatore multi-job osservativo (#100)
 
 `src/runner/workflows.mjs` associa fino a sei job esistenti con DAG topologicamente valido, tenant owner e SHA di request verificato. Un file manifest privato viene creato atomico sotto lock condiviso, validato con hash locale e letto con O_NOFOLLOW + inode ownership. Ogni GET rilegge il journal già verificato dai job e usa `projectVerifiedJobPlan` della #99: nessuna receipt sostituisce prova di step e una violazione d'ordine produce `out_of_order`. Il flusso non crea/esegue job né implementa scheduler; per vincolare veramente l'ordine serve una successiva API di dispatch con approvazione e leasing. ADR0058.
+
+
+### Guarded DAG worker enforcement opt-in (#102)
+
+Il registro workflow supporta ora manifest v2 con `enforced:true`. La semantica v1 resta immutata. La registrazione richiede tutti i job queued, senza claim, verifica i digest/tenant e occupa il lock POSIX globale delle ammissioni. Il worker usa `loadGuardedIndex` per la selezione e `mayStartGuardedJob` **di nuovo dentro `withAdmissionLock`** prima della claim. Il DAG e il journal sono autoritativi per il gate; una receipt non abilita la dipendenza. Se la policy è corrotta, la coda viene sospesa invece di eseguire un task potenzialmente vietato. ADR0059.

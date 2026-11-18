@@ -611,3 +611,12 @@ Esempio: `{"consent":true,"label":"Build e test","tasks":[{"id":"build","role":"
 ## Retry GitHub Pages senza artefatti duplicati (#101)
 
 Il workflow statico distingue ora build-and-upload e deploy. Se fallisce soltanto il deploy Pages, usare **Re-run failed jobs** in GitHub Actions: il build già completato non ricarica un secondo artifact github-pages nello stesso run. I permessi Pages e il controllo sulla disponibilità rimangono invariati. Solo un workflow completato con successo prova la pubblicazione.
+
+
+## Enforced workflow gate (opt-in, #102)
+
+`POST /v1/workflows` con `{"consent":true,"enforced":true,"label":"…","tasks":[…]}` registra un **manifest v2** con i job già ammessi, ma obbligatoriamente `queued` e privi di claim nel momento della registrazione. È richiesto `Idempotency-Key` UUID come in #100. V2 non permette di assegnare un job già governato da un altro workflow enforced. I vecchi manifest v1, senza `enforced`, restano **soltanto osservativi**.
+
+Il worker legge il registro sul volume condiviso, salta i job con predecessori non ancora verificati come `passed` e li rivaluta dopo il completamento. Il controllo definitivo e la creazione della claim del job avvengono insieme sotto il lock POSIX dell'admission per impedire race tra API e worker multipli. Il gate non trasforma un'attesa in un errore dei test e non deve bloccare i job indipendenti della coda. Se il manifest o le prove dei predecessori sono illeggibili, il worker non deve eseguire il job.
+
+**Non è un nuovo servizio AI autonomo:** i job vanno comunque sottomessi esplicitamente dall'operatore *prima* dell'iscrizione; il gate governa solo l'avvio di quelli accodati, non genera codice, non promette budget/lease multi-host e non approva patch. Per progetti in cui un worker potrebbe iniziare subito, sospendere l'worker prima di inviare i job, registrarli in enforced e quindi riavviarlo. [ADR 0059](adr/0059-enforced-queued-job-worker-gates.md), [issue #102](https://github.com/KeyserDSoze/SoftwareFactory/issues/102).

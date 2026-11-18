@@ -838,3 +838,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Separazione dei job GitHub Actions build-and-upload e deploy, con needs esplicito e output pages_enabled.
 - [x] Test Node statico sul contratto e diagnosi: artefatto mancante nel primo deploy, due artefatti omonimi dopo retry dell'intero job.
 - [ ] Confermare deploy Pages sull'ultimo commit e chiudere la #101 solo con evidenza verde.
+
+
+## Enforced DAG worker gate (#102)
+
+- [x] Opt-in manifest v2 `enforced:true`, v1 invariato, registrazione queued/unclaimed atomica con claim worker.
+- [x] Selezione di queue che evita starvation da job bloccati; verifica definitiva delle dipendenze sotto shared lock e journal SHA del predecessor, senza auto-run o falsi failed.
+- [x] Test di integrazione 2 API/worker, race, duplicate claim, crash/tamper e legacy; ADR0059.
+- [ ] Accodamento workflow atomico direttamente via API (oggi l'operatore crea i job in anticipo), controller PM AI con autonomia autorizzata, budget/quote/leases e collaudo su VM rootless Cloudflare.
