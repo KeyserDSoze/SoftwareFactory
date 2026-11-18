@@ -9,6 +9,7 @@ import { startWorkerHeartbeat } from "./heartbeat.mjs";
 import { startWorkerMetrics } from "./host-metrics.mjs";
 import { readRunnerInput } from "./input.mjs";
 import { rememberStartedJob, selectNextQueuedJob } from "./scheduler.mjs";
+import { loadGuardedIndex, mayStartGuardedJob } from "./workflows.mjs";
 
 /** Redact results before either report.json or the evidence journal sees them. */
 function safeStepResult(value) {
@@ -76,11 +77,20 @@ async function rejectQueuedJob(dataDir, id) {
 export async function executeJob(id, options = {}) {
   const dataDir = options.dataDir ?? process.env.RUNNER_DATA_DIR ?? "/data";
   const claim = path.join(jobDirectory(dataDir, id), ".claim");
-  try { await mkdir(claim, { mode: 0o700 }); }
-  catch (error) {
-    if (error.code === "EEXIST") return (await verifyJobEvidence(dataDir, id)).report;
-    throw error;
-  }
+  // The LAST gate and claim occur inside the same POSIX admission lock
+  // as enforced workflow creation. An API cannot enrol a job between
+  // this check and a worker's exclusive claim (including a second worker).
+  const claimed = await withAdmissionLock(dataDir, async () => {
+    if (!(await mayStartGuardedJob(dataDir, id))) return false;
+    const { report } = await verifyJobEvidence(dataDir, id);
+    if (report.state !== "queued") return false;
+    try { await mkdir(claim, { mode: 0o700 }); return true; }
+    catch (error) {
+      if (error.code === "EEXIST") return false;
+      throw error;
+    }
+  }, 1500);
+  if (!claimed) return (await verifyJobEvidence(dataDir, id)).report;
   try { return await executeClaimedJob(id, options); }
   finally { await rm(claim, { recursive: true, force: true }); }
 }
@@ -189,6 +199,14 @@ export async function runWorker({
     catch(e) { if(e.code !== "ENOENT") console.error("Queue read error:", e.message); }
     const queued = [];
     const lastStartedByTenant = new Map();
+    let guarded;
+    try { guarded = await loadGuardedIndex(dataDir); }
+    catch {
+      // A corrupt / swapped manifest must NOT silently turn policy off.
+      console.error("Guarded workflow metadata unavailable; queued jobs paused");
+      await new Promise(resolve => setTimeout(resolve, pollMs));
+      continue;
+    }
     const retentionHours = Math.min(168, Math.max(1, Number(process.env.RUNNER_RETENTION_HOURS || "24") || 24));
     const expireBefore = Date.now() - retentionHours * 60 * 60 * 1000;
     for (const id of entries) {
@@ -231,7 +249,8 @@ export async function runWorker({
         // Claimed/running jobs already have startedAt and count as service.
         rememberStartedJob(lastStartedByTenant, report);
         // Claimed queued jobs must not starve ready jobs.
-        if (report.state === "queued" && !claimed)
+        if (report.state === "queued" && !claimed &&
+            await mayStartGuardedJob(dataDir, id, guarded))
           queued.push({ id, acceptedAt: report.acceptedAt, tenantId: report.tenantId });
         if (report.state === "running" && !claimed) {
           // The report may have completed between the first read and lock check.
@@ -244,6 +263,14 @@ export async function runWorker({
     if (next) {
       try { await executeQueuedJob(next.id, { dataDir, workspaceRoot }); }
       catch(e) {
+        // Lock contention or a bad policy can never become a fake code
+        // failure/rejection. Retry the scan after an operator fixes it.
+        if (["ADMISSION_BUSY", "WORKFLOW_INTEGRITY", "WORKFLOW_EVIDENCE",
+          "WORKFLOW_NOT_FOUND"].includes(e.code)) {
+          console.error("Guarded workflow check or queue lock unavailable");
+          await new Promise(resolve => setTimeout(resolve, pollMs));
+          continue;
+        }
         console.error("Failed to handle job " + next.id + ": " + scrub(e.message));
         try { await rejectQueuedJob(dataDir, next.id); }
         catch { /* corrupt or incomplete ledger is never repaired silently */ }

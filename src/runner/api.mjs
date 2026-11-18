@@ -336,6 +336,8 @@ export function createRunnerServer({
           send(422, { error: "workflow_invalid" });
         else if (error.code === "WORKFLOW_CONFLICT")
           send(409, { error: "workflow_conflict" });
+        else if (error.code === "WORKFLOW_NOT_QUEUED")
+          send(409, { error: "workflow_not_queued" });
         else if (error.code === "WORKFLOW_NOT_FOUND")
           send(404, { error: "not_found" });
         else if (error.code === "WORKFLOW_EVIDENCE" || error.code === "WORKFLOW_INTEGRITY")

@@ -5,7 +5,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readdir } from "node:fs/promises";
+import { lstat, mkdir, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { atomicWrite } from "./common.mjs";
 import { withAdmissionLock, parseIdempotencyKey } from "./admission.mjs";
@@ -44,7 +44,10 @@ function validateTasks(tasks) {
   }
 }
 function normalizedInput(input) {
-  if (!exact(input, ["consent", "label", "tasks"]) ||
+  // v1 manifests remain observational. Explicit opt-in uses immutable v2.
+  const guarded = exact(input, ["consent", "label", "tasks", "enforced"]) &&
+    input.enforced === true;
+  if (!(exact(input, ["consent", "label", "tasks"]) || guarded) ||
       input.consent !== true || typeof input.label !== "string" ||
       input.label.trim().length < 2 || input.label.trim().length > 120)
     throw fault("WORKFLOW_INVALID");
@@ -52,7 +55,7 @@ function normalizedInput(input) {
   return { label: input.label.trim(), tasks: input.tasks.map(t => ({
     id: t.id, role: t.role, jobId: t.jobId, digest: t.digest,
     dependsOn: [...t.dependsOn],
-  })) };
+  })), ...(guarded ? { enforced: true } : {}) };
 }
 function rootDir(dataDir) { return path.join(dataDir, "workflows"); }
 function manifestPath(dataDir, id) {
@@ -60,9 +63,12 @@ function manifestPath(dataDir, id) {
   return path.join(rootDir(dataDir), id + ".json");
 }
 function verifyRecord(record, id) {
-  if (!exact(record, ["version", "id", "createdAt", "tenantId",
-    "label", "tasks", "idempotencyHash", "hash"]) ||
-      record.version !== 1 || record.id !== id || !UUID.test(id) ||
+  const guarded = record?.version === 2 && record.enforced === true;
+  const expected = ["version", "id", "createdAt", "tenantId",
+    "label", "tasks", "idempotencyHash", "hash"];
+  if (!(guarded ? exact(record, [...expected, "enforced"]) :
+    exact(record, expected) && record.version === 1) ||
+      record.id !== id || !UUID.test(id) ||
       (record.tenantId !== null && (typeof record.tenantId !== "string" ||
         !TENANT.test(record.tenantId))) ||
       !SHA.test(record.idempotencyHash) || !SHA.test(record.hash) ||
@@ -70,7 +76,8 @@ function verifyRecord(record, id) {
       !Number.isFinite(Date.parse(record.createdAt)) ||
       new Date(record.createdAt).toISOString() !== record.createdAt)
     throw fault("WORKFLOW_INTEGRITY");
-  try { normalizedInput({ consent: true, label: record.label, tasks: record.tasks }); }
+  try { normalizedInput({ consent: true, label: record.label, tasks: record.tasks,
+    ...(guarded ? { enforced: true } : {}) }); }
   catch { throw fault("WORKFLOW_INTEGRITY"); }
   const { hash, ...payload } = record;
   if (sha(payload) !== hash || Buffer.byteLength(JSON.stringify(record)) > MAX_BYTES)
@@ -183,8 +190,9 @@ function projectManifest(manifest, plans) {
     tasks.some(t => t.status === "failed") ? "failed" :
     tasks.some(t => t.status === "incomplete") ? "incomplete" :
     "active";
-  return { version: 1, id: manifest.id, label: manifest.label,
-    createdAt: manifest.createdAt, status, tasks };
+  return { version: manifest.version, id: manifest.id, label: manifest.label,
+    createdAt: manifest.createdAt, ...(manifest.enforced ? { enforced: true } : {}),
+    status, tasks };
 }
 
 /** POST registration: require UUID idempotency, explicit consent, and all
@@ -204,23 +212,46 @@ export async function registerWorkflow({ dataDir, input, tenantId = null,
     const files = await readdir(rootDir(dataDir), { withFileTypes: true });
     if (files.length > CAPACITY) throw fault("WORKFLOW_CAPACITY");
     let replay = null;
+    const records = [];
     for (const file of files) {
       if (!file.isFile() || !/^[a-f0-9-]{36}\.json$/.test(file.name))
         throw fault("WORKFLOW_INTEGRITY");
       const record = await readManifest(dataDir, file.name.slice(0, -5));
+      records.push(record);
       if (record.tenantId === tenantId && record.idempotencyHash === fingerprint) {
         if (replay) throw fault("WORKFLOW_INTEGRITY");
         replay = record;
       }
     }
-    if (replay && sha({ label: replay.label, tasks: replay.tasks }) !== signature)
+    if (replay && sha({ label: replay.label, tasks: replay.tasks,
+      ...(replay.enforced ? { enforced: true } : {}) }) !== signature)
       throw fault("WORKFLOW_CONFLICT");
-    const manifest = replay ?? { version: 1, id: randomUUID(),
+    if (!replay && payload.enforced) {
+      // Prevent two enforced DAGs from claiming the same job. Read EVERY
+      // retained sibling before accepting a new immutable policy.
+      if (records.some(record => record.enforced &&
+        record.tasks.some(task => payload.tasks.some(t => t.jobId === task.jobId))))
+        throw fault("WORKFLOW_CONFLICT");
+    }
+    const manifest = replay ?? { version: payload.enforced ? 2 : 1, id: randomUUID(),
       createdAt: new Date().toISOString(), tenantId,
       ...payload, idempotencyHash: fingerprint };
     // Fail closed if a retained job disappeared/corrupted or changed digest,
     // including on idempotent replay. No unverified workflow acknowledgment.
     const plans = await verifiedTaskPlans(dataDir, manifest, tenantId);
+    if (!replay && payload.enforced) {
+      for (const [i, task] of manifest.tasks.entries()) {
+        if (plans[i].state !== "queued") throw fault("WORKFLOW_NOT_QUEUED");
+        // Claim and manifest registration share the admission lock. A worker
+        // already holding a claim cannot become silently enrolled.
+        try {
+          await lstat(path.join(dataDir, "jobs", task.jobId, ".claim"));
+          throw fault("WORKFLOW_NOT_QUEUED");
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      }
+    }
     if (reauthorize) await reauthorize();
     if (!replay) {
       if (files.length >= CAPACITY) throw fault("WORKFLOW_CAPACITY");
@@ -236,4 +267,58 @@ export async function getWorkflow(dataDir, id, tenantId = null, reauthorize) {
   const plans = await verifiedTaskPlans(dataDir, record, tenantId);
   if (reauthorize) await reauthorize();
   return projectManifest(record, plans);
+}
+
+
+/** Read all manifests before choosing a worker turn. Fail closed if ANY
+ * manifest is unsafe, including a partially written or corrupt sibling.
+ * This map is a performance hint; executeJob checks again under the lock.
+ */
+export async function loadGuardedIndex(dataDir) {
+  const index = new Map(), dir = rootDir(dataDir);
+  let files;
+  try {
+    const info = await lstat(dir);
+    if (!info.isDirectory() || info.uid !== process.geteuid?.() ||
+        (info.mode & 0o077) !== 0) throw fault("WORKFLOW_INTEGRITY");
+    files = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return index;
+    throw fault("WORKFLOW_INTEGRITY");
+  }
+  if (files.length > CAPACITY) throw fault("WORKFLOW_INTEGRITY");
+  for (const file of files) {
+    if (!file.isFile() || !/^[a-f0-9-]{36}\.json$/.test(file.name))
+      throw fault("WORKFLOW_INTEGRITY");
+    const record = await readManifest(dataDir, file.name.slice(0, -5));
+    if (record.enforced) {
+      for (const [position, task] of record.tasks.entries()) {
+        if (index.has(task.jobId)) throw fault("WORKFLOW_INTEGRITY");
+        index.set(task.jobId, { record, position });
+      }
+    }
+  }
+  return index;
+}
+
+/** True only if this queued job has no guarded policy, or its verified
+ * predecessors have passed, without any out-of-order execution.
+ * A successful receipt or terminal flag alone NEVER unlocks the worker.
+ */
+export async function mayStartGuardedJob(dataDir, jobId, index = undefined) {
+  const guarded = index ?? await loadGuardedIndex(dataDir);
+  const item = guarded.get(jobId);
+  if (!item) return true; // Older, observational v1 jobs unchanged.
+  const { record, position } = item;
+  const plans = await verifiedTaskPlans(dataDir, record, record.tenantId);
+  const board = projectManifest(record, plans);
+  if (board.tasks[position]?.status !== "queued") return false;
+  const task = record.tasks[position];
+  for (const dependency of task.dependsOn) {
+    const index = record.tasks.findIndex(t => t.id === dependency);
+    const finishedAt = plans[index].finishedAt;
+    // Same-millisecond starts are ambiguous and must not look ordered.
+    if (!finishedAt || Date.now() <= Date.parse(finishedAt)) return false;
+  }
+  return true;
 }
