@@ -127,6 +127,61 @@ export type RunnerWorkflowResult = {
     status: "queued" | "running" | "blocked" | "passed" | "failed" | "incomplete" | "out_of_order";
     evidence: { count: number; head: string } }[];
 };
+const RUNNER_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const RUNNER_SHA = /^[a-f0-9]{64}$/;
+const RUNNER_BATCH_ROLES = new Set<RunnerBatchRole>([
+  "project_manager", "tester", "test_architect", "devops_engineer",
+  "code_reviewer", "fullstack_developer", "fix_developer",
+  "release_manager", "security_engineer",
+]);
+const RUNNER_TASK_STATES = new Set([
+  "queued", "running", "blocked", "passed", "failed", "incomplete", "out_of_order",
+]);
+/** Fail closed if the authenticated server reports a malformed/uncorrelated
+ * workflow. No stage is passed merely because a batch was submitted.
+ */
+export function validateRunnerWorkflowResult(value: unknown, expectedId?: string): RunnerWorkflowResult {
+  const fail = () => { throw new Error("Piano batch non verificabile: journal o dati incoerenti."); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+  const p = value as RunnerWorkflowResult;
+  const keys = Object.keys(p).sort().join(",");
+  const mandatory = ["version","enforced","id","createdAt","label","status","tasks"];
+  if (keys !== mandatory.sort().join(",") &&
+      keys !== [...mandatory, "created"].sort().join(",")) return fail();
+  if (p.version !== 2 || p.enforced !== true || typeof p.id !== "string" ||
+      !RUNNER_UUID.test(p.id) || (expectedId && expectedId !== p.id) ||
+      typeof p.label !== "string" || p.label.length < 2 ||
+      typeof p.createdAt !== "string" || !Number.isFinite(Date.parse(p.createdAt)) ||
+      (p.created !== undefined && typeof p.created !== "boolean") ||
+      !Array.isArray(p.tasks) || p.tasks.length < 2 || p.tasks.length > 6) return fail();
+  const seen = new Set<string>(), ids = new Set<string>();
+  for (const task of p.tasks) {
+    if (!task || typeof task !== "object" || Array.isArray(task) ||
+        Object.keys(task).sort().join(",") !==
+          ["id","role","jobId","dependsOn","status","evidence"].sort().join(",") ||
+        typeof task.id !== "string" || !/^[a-z][a-z0-9-]{1,31}$/.test(task.id) ||
+        seen.has(task.id) || typeof task.jobId !== "string" ||
+        !RUNNER_UUID.test(task.jobId) || ids.has(task.jobId) ||
+        !RUNNER_BATCH_ROLES.has(task.role) || !RUNNER_TASK_STATES.has(task.status) ||
+        !Array.isArray(task.dependsOn) || task.dependsOn.length > 3 ||
+        task.dependsOn.some(id => typeof id !== "string" || !seen.has(id)) ||
+        new Set(task.dependsOn).size !== task.dependsOn.length ||
+        !task.evidence || typeof task.evidence !== "object" ||
+        Object.keys(task.evidence).sort().join(",") !== "count,head" ||
+        !Number.isInteger(task.evidence.count) || task.evidence.count < 1 ||
+        typeof task.evidence.head !== "string" || !RUNNER_SHA.test(task.evidence.head))
+      return fail();
+    seen.add(task.id); ids.add(task.jobId);
+  }
+  const statuses = p.tasks.map(t => t.status);
+  const expectedStatus = statuses.includes("out_of_order") ? "out_of_order" :
+    statuses.every(s => s === "passed") ? "passed" :
+      statuses.includes("failed") ? "failed" :
+        statuses.includes("incomplete") ? "incomplete" : "active";
+  if (p.status !== expectedStatus) return fail();
+  return p;
+}
+
 export async function submitRunnerWorkflowBatch(
   endpoint: string, key: string, request: RunnerBatchRequest,
   signal?: AbortSignal, idempotencyKey: string = crypto.randomUUID(),
@@ -136,17 +191,25 @@ export async function submitRunnerWorkflowBatch(
       request.tasks.length > 6 ||
       !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(idempotencyKey))
     throw new Error("Il batch richiede consenso, 2-6 task e UUID di retry.");
-  return runnerRequest<RunnerWorkflowResult>(endpoint, key, "/v1/workflows/batch", {
+  const response = await runnerRequest<unknown>(endpoint, key, "/v1/workflows/batch", {
     method: "POST", signal, headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(request),
   });
+  const plan = validateRunnerWorkflowResult(response);
+  if (plan.tasks.length !== request.tasks.length ||
+      plan.tasks.some((task, i) => task.id !== request.tasks[i].id ||
+        task.role !== request.tasks[i].role ||
+        JSON.stringify(task.dependsOn) !== JSON.stringify(request.tasks[i].dependsOn)))
+    throw new Error("Il runner ha restituito un DAG diverso da quello autorizzato.");
+  return plan;
 }
 export async function fetchRunnerWorkflow(
   endpoint: string, key: string, id: string, signal?: AbortSignal,
 ): Promise<RunnerWorkflowResult> {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id))
     throw new Error("ID workflow runner non valido.");
-  return runnerRequest<RunnerWorkflowResult>(endpoint, key, "/v1/workflows/" + id, { signal });
+  const response = await runnerRequest<unknown>(endpoint, key, "/v1/workflows/" + id, { signal });
+  return validateRunnerWorkflowResult(response, id);
 }
 
 /** Retained job PM plan: report + journal are verified by the server.

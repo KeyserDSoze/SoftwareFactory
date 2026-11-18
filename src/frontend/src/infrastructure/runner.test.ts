@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { submitRunnerWorkflowBatch, fetchRunnerWorkflow, fetchRunnerExecutionPlan, validateRunnerExecutionPlan, runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
+import { validateRunnerWorkflowResult, submitRunnerWorkflowBatch, fetchRunnerWorkflow, fetchRunnerExecutionPlan, validateRunnerExecutionPlan, runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
   RunnerRequestError, runnerPollDecision, probeRunnerConnector, type RunnerReport } from "./runner";
 
 describe("remote runner browser client", () => {
@@ -271,5 +271,35 @@ describe("opt-in atomic runner workflow batch client (#103)", () => {
     expect(spy.mock.calls[0][1].body).toBeUndefined();
     await expect(fetchRunnerWorkflow(endpoint,secret,"../wrong")).rejects.toThrow();
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("journal-bound batch response contract (#104)", () => {
+  const id="123e4567-e89b-42d3-a456-426614174000";
+  const taskId="123e4567-e89b-42d3-a456-426614174001";
+  const evidence={count:1,head:"a".repeat(64)};
+  const tasks=[
+    {id:"dotnet-build",jobId:taskId,role:"devops_engineer",
+      dependsOn:[],status:"queued",evidence},
+    {id:"dotnet-test",jobId:"123e4567-e89b-42d3-a456-426614174002",
+      role:"tester",dependsOn:["dotnet-build"],status:"blocked",evidence},
+  ];
+  const plan={version:2,enforced:true,id,label:"Approved DAG",
+    createdAt:"2026-11-18T00:00:00.000Z",status:"active",tasks};
+  it("accepts verified per-job head/count and correlates GET id",()=>{
+    expect(validateRunnerWorkflowResult(plan,id).tasks).toHaveLength(2);
+    expect(() => validateRunnerWorkflowResult(plan,"not-"+id)).toThrow();
+  });
+  it("never paints malformed receipt as a successful workflow",()=>{
+    for(const changed of [
+      {...plan,status:"passed"},
+      {...plan,tasks:[tasks[0],{...tasks[1],status:"passed"}]},
+      {...plan,tasks:[tasks[0],{...tasks[1],dependsOn:["later"]}]},
+      {...plan,tasks:[tasks[0],{...tasks[1],jobId:taskId}]},
+      {...plan,tasks:[tasks[0],{...tasks[1],evidence:{count:0,head:"a".repeat(64)}}]},
+      {...plan,tasks:[tasks[0],{...tasks[1],evidence:{count:1,head:"0"}}]},
+      {...plan,secret:"never"},
+    ])expect(()=>validateRunnerWorkflowResult(changed)).toThrow();
   });
 });
