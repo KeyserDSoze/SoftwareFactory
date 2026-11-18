@@ -125,8 +125,18 @@ async function verifiedTaskPlans(dataDir, manifest, tenantId) {
     if (verified.report.id !== task.jobId ||
         verified.report.digest !== task.digest)
       throw fault("WORKFLOW_EVIDENCE");
-    try { plans.push(projectVerifiedJobPlan(verified)); }
-    catch { throw fault("WORKFLOW_EVIDENCE"); }
+    try {
+      const plan = projectVerifiedJobPlan(verified);
+      const dates = [verified.report.startedAt, verified.report.finishedAt];
+      const validDate = date => date === null || (typeof date === "string" &&
+        Number.isFinite(Date.parse(date)) && new Date(date).toISOString() === date);
+      if (!dates.every(validDate) ||
+          (verified.report.state !== "queued" && dates[0] === null) ||
+          (["passed", "failed", "incomplete"].includes(verified.report.state) &&
+            (dates[1] === null || !verified.entries.some(e => e.kind === "finished"))))
+        throw fault("WORKFLOW_EVIDENCE");
+      plans.push({ ...plan, startedAt: dates[0], finishedAt: dates[1] });
+    } catch { throw fault("WORKFLOW_EVIDENCE"); }
   }
   return plans;
 }
@@ -137,10 +147,17 @@ function projectManifest(manifest, plans) {
     const resultState = plan.state;
     const dependenciesPassed = task.dependsOn.every(d => statuses.get(d) === "passed");
     const started = resultState !== "queued";
-    // A downstream job may have run independently of this plan.
-    // Report the violation instead of retroactively claiming a valid DAG.
-    const status = dependenciesPassed ?
-      resultState : started ? "out_of_order" : "blocked";
+    // Even if all predecessors eventually pass, a downstream job STARTED
+    // before their finish timestamps violates the declared ordering.
+    // Millisecond ties are not sufficient proof of dependency completion.
+    const startedBeforeDependency = started && task.dependsOn.some(depId => {
+      const depIndex = manifest.tasks.findIndex(t => t.id === depId);
+      const finishedAt = plans[depIndex].finishedAt;
+      return !finishedAt || !plan.startedAt ||
+        Date.parse(plan.startedAt) <= Date.parse(finishedAt);
+    });
+    const status = startedBeforeDependency ? "out_of_order" :
+      dependenciesPassed ? resultState : started ? "out_of_order" : "blocked";
     statuses.set(task.id, status);
     return {
       id: task.id, role: task.role, jobId: task.jobId,

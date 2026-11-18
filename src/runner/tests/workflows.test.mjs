@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { chmod, link, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
+import { withAdmissionLock } from "../admission.mjs";
 import { readReport } from "../common.mjs";
 import { recordJobEvidence } from "../evidence.mjs";
 
@@ -174,4 +175,82 @@ test("registration rejects contradictory step journals even if report claims pas
     assert.equal(bad.status,409);
     assert.equal(bad.body.error,"workflow_integrity");
   } finally { await f.close(); }
+});
+
+
+test("dependency started early stays out-of-order even after both jobs ultimately pass", async () => {
+  const f = await fixture();
+  try {
+    const a = await f.submit(), b = await f.submit();
+    const created = await post(f, 0, manifest(a,b));
+    assert.equal(created.status, 201);
+    await f.pass(b); // started before build, and even finished before build
+    await f.pass(a);
+    const after = await get(f, 1, created.body.id);
+    assert.equal(after.status, 200);
+    assert.equal(after.body.status, "out_of_order");
+    assert.deepEqual(after.body.tasks.map(t => t.status), ["passed","out_of_order"]);
+  } finally { await f.close(); }
+});
+
+test("tenant workflow ownership, registry key rotation, and legacy rollback remain isolated", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "sf-workflow-tenant-"));
+  const tenantFile = path.join(dir, "tenants.json");
+  const alpha = "alpha." + "a".repeat(40);
+  const changed = "alpha." + "c".repeat(40);
+  const bravo = "bravo." + "b".repeat(40);
+  const registry = a => ({ version: 1, tenants: [
+    { id:"alpha",key:a,maxQueued:4,maxRetained:8,maxAcceptedPerMinute:0 },
+    { id:"bravo",key:bravo,maxQueued:4,maxRetained:8,maxAcceptedPerMinute:0 },
+  ] });
+  await writeFile(tenantFile, JSON.stringify(registry(alpha)), { mode: 0o600 });
+  const servers = Array.from({length:2},()=>createRunnerServer({
+    apiKey:"",tenantsFile:tenantFile,allowedOrigins:[origin],dataDir:dir,maxQueued:8,
+  }));
+  for (const srv of servers) { srv.listen(0,"127.0.0.1"); await once(srv,"listening"); }
+  const urls = servers.map(x=>"http://127.0.0.1:"+x.address().port);
+  const call = async (i,key,method,pathname,body,extra={}) => {
+    const res = await fetch(urls[i]+pathname,{method,
+      headers:{Origin:origin,Authorization:"Bearer "+key,
+        ...(body===undefined?{}:{"Content-Type":"application/json"}),
+        ...extra},...(body===undefined?{}:{body:JSON.stringify(body)})});
+    return { status:res.status,body:await res.json() };
+  };
+  const submit = async (i,key) => {
+    const r=await call(i,key,"POST","/v1/jobs",
+      {label:"Tenant PM",files,steps:["dotnet-build"]});
+    assert.equal(r.status,202); return r.body;
+  };
+  try {
+    const a=await submit(0,alpha), b=await submit(1,alpha);
+    const other=await submit(1,bravo);
+    const payload=manifest(a,b);
+    const created=await call(0,alpha,"POST","/v1/workflows",payload,
+      {"Idempotency-Key":randomUUID()});
+    assert.equal(created.status,201);
+    const route="/v1/workflows/"+created.body.id;
+    assert.equal((await call(1,alpha,"GET",route)).status,200);
+    assert.equal((await call(1,bravo,"GET",route)).status,404);
+    const cross=manifest(a,other);
+    assert.equal((await call(1,alpha,"POST","/v1/workflows",cross,
+      {"Idempotency-Key":randomUUID()})).status,404);
+    // Another auth mode must never expose any tenant-owned manifests.
+    const legacy=createRunnerServer({apiKey:key,tenantsFile:"",allowedOrigins:[origin],dataDir:dir});
+    legacy.listen(0,"127.0.0.1"); await once(legacy,"listening");
+    try {
+      const response=await fetch("http://127.0.0.1:"+legacy.address().port+route,
+        {headers:{Origin:origin,Authorization:"Bearer "+key}});
+      assert.equal(response.status,404);
+    } finally { await new Promise(resolve=>legacy.close(resolve)); }
+    const temp=tenantFile+".next";
+    await writeFile(temp, JSON.stringify(registry(changed)), {mode:0o600,flag:"wx"});
+    await rename(temp,tenantFile);
+    assert.equal((await call(0,alpha,"GET",route)).status,401);
+    assert.equal((await call(1,changed,"GET",route)).status,200);
+    assert.equal((await call(1,changed,"POST","/v1/workflows",payload,
+      {"Idempotency-Key":randomUUID()})).status,201);
+  } finally {
+    await Promise.all(servers.map(s=>new Promise(resolve=>s.close(resolve))));
+    await rm(dir,{recursive:true,force:true});
+  }
 });
