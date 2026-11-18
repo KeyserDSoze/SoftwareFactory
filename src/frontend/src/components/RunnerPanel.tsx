@@ -4,6 +4,7 @@ import type { FactoryProject, FactorySettings } from "../domain/types";
 import type { RunnerJobEvidence } from "../domain/development";
 import type { RunnerTaskActivity } from "./BackgroundTaskToast";
 import RunnerTelemetry from "./RunnerTelemetry";
+import RunnerBatchPanel from "./RunnerBatchPanel";
 import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repair-loop";
 import { getRepairCheckpoint, prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
@@ -284,6 +285,8 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
           (isRepair ? !retestPlan : !steps.length)}
         onClick={() => void submit()}>{requesting ? <RefreshCw size={16} className="spinning"/> : <Play size={16}/>}
         {requesting ? "Invio..." : retestPlan ? "Conferma e riesegui test repair" : "Avvia test sul runner"}</button></div>
+    <RunnerBatchPanel project={project} settings={settings} selectedSteps={steps}
+      busy={busy || requesting || repairing} onNotice={onNotice} onError={onError}/>
     {jobId && <div className="runner-report">
       <div className="runner-report-title"><strong><Activity size={16}/> Job {jobId.slice(0, 8)}</strong>
         {displayedReport && <span className={"runner-state " + kind}>{kind === "awaiting" ? displayedReport.state.toUpperCase() : kind.toUpperCase()}</span>}</div>
