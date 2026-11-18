@@ -131,7 +131,9 @@ test("invalid DAG, missing consent, dangerous paths and sources fail before any 
       const result=await f.register(body);
       assert.equal(result.status,422, JSON.stringify(result.body));
     }
-    assert.equal((await readdir(path.join(f.dataDir,"jobs"))).length,0);
+    const directory = await readdir(path.join(f.dataDir, "jobs"))
+      .catch(error => error.code === "ENOENT" ? [] : Promise.reject(error));
+    assert.equal(directory.length, 0, "invalid admission must not allocate a job");
     const missing=await f.request(0,"POST","/v1/workflows/batch",safe);
     assert.equal(missing.status,422);
     const denied=await f.request(0,"POST","/v1/workflows/batch",safe,
