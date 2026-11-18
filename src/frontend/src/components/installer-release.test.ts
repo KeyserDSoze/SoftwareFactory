@@ -26,7 +26,6 @@ describe("public Release downloads on static Pages", () => {
   it("accepts exact CI-approved rc.N prereleases but never disguised stable tags", () => {
     const rc = { ...release, tag_name: "v0.2.0-rc.2", prerelease: true,
       html_url: "https://github.com/KeyserDSoze/SoftwareFactory/releases/tag/v0.2.0-rc.2",
-      html_url: "https://github.com/KeyserDSoze/SoftwareFactory/releases/tag/v0.2.0-rc.1",
       assets: [
         asset("softwarefactory-runner-installer.tar.gz",
           root.replace("v0.2.0/", "v0.2.0-rc.2/") + "softwarefactory-runner-installer.tar.gz"),
