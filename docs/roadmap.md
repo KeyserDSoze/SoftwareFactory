@@ -794,3 +794,8 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - Bloccato `host-setup start` legacy; il wizard chiede prima SHA40 e canary image digest e usa il percorso rootless `host-install --apply --confirm-install` della #88. Tunnel only dopo API/worker readiness autenticata.
 - Package tar.gz RC.2+: manifest SHA40+hash sorgenti, verifica SHA256 archivio esatta + bytes dei file estratti via tar read-only, check di symlink/extra file, tests in CI. RC.1 riconosciuta legacy unsafe e non consigliata dall'app.
 - Test Node per Git/Release, archivio malformato/tampered, fonte cambiata fra gate, token/cloudflared rifiutati senza readiness, CI Factory + Release candidate. Resta verifica **reale** su PC/VM Ubuntu/Debian uid1000 con Docker rootless, reboot systemd, Cloudflare Access e approvazione delle chiavi; #87/#89/#90/#2 restano aperte. ADR 0054.
+
+## v0.2 — Witness locale post-reboot del connector (#96)
+
+- CLI Linux UID1000 before/after: baseline private mode0600 O_EXCL, un nuovo boot UUID Linux entro 7 giorni, profilo e servizi invariati; nessuna Docker mutation. Requisiti: Docker user service active + linger, preflight host/Compose, daemon rootless JIT, container esatti non privileged, API loopback, socket solo worker, readiness Bearer.
+- --require-tunnel richiede Cloudflared running senza Docker socket, non Access/DNS/HTTPS raggiungibili. Test Node regressione per stesso boot, witness manomessa, symlink/hardlink, rootful, systemd down, socket/port/network/label spoof, auth ed env drift. CI Github rootful NON costituisce collaudo VM rootless fisica. Rimangono #87 M2, pairing/rotazione, reboot fisico e prova HTTPS/Access da Pages. ADR0055.

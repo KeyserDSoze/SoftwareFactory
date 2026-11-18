@@ -1017,3 +1017,21 @@ Le funzionalità qui descritte sono **implementazioni incrementali non validate 
 **Rimosso il bypass:** `node src/runner/scripts/host-setup.mjs start` rifiuta; non usarlo anche se presente in vecchie guide. Era capace di lanciare API/worker/Tunnel senza canary e receipt. La CLI `host-install` è ora l'unico avvio iniziale approvato: il wizard `interactive-install` richiede approvazione esplicita del commit sorgente e dell'immagine canary digest-pinned, poi esegue `host-install --apply --confirm-install` con VM acceptance, lock, Docker rootless, stato container e readiness autenticate. Il tunnel parte solo dopo, con `host-setup tunnel --confirm-tunnel`. Non è una prova che Cloudflare Access o il DNS esterno funzionino.
 
 **Pacchetto scaricabile senza .git:** Release `v0.2.0-rc.2` (o successiva) contiene `.sf-installer-source.json` deterministico (commit e SHA256 di ciascun file). Prima di eseguire il wizard, l'operatore deve verificare `sha256sum -c` sull'archivio scaricato e trattenere il file `tar.gz` fuori dalla directory estratta. Il wizard richiede percorso assoluto del `tar.gz`, SHA256 attesa, corrispondenza col manifest interno e conferma manuale della SHA40 e `node@sha256:...`. L'archive verifier controlla tutti i file estratti e non accetta .git, symlink, file extra o modifiche in corsa; `docker/runner/.env` è esclusa soltanto perché viene creata dal wizard ed è soggetta ai controlli di private env. L'RC.1 precede questo contratto e non va usata per una nuova installazione. Le checksum pubblicate sulla stessa Release non sono firme indipendenti: verificare release/tag/source e usare una VM sacrificabile. Senza Docker rootless reale la CLI deve fallire; nessun fallback rootful. Per aggiornare/revocare/disinstallare rimane necessario workflow operatore distinto: non ripetere un install su stack esistente.
+
+## Prova operatore post-reboot sul server rootless (#96)
+
+Dopo installazione riuscita tramite host-install o wizard RC.2+ su una VM Ubuntu/Debian **dedicata** con Linux UID 1000, eseguire una baseline **PRIMA del riavvio**, soltanto da terminale host:
+
+~~~bash
+node src/runner/scripts/host-reboot-audit.mjs before --env-file=/percorso/assoluto/docker/runner/.env --require-tunnel
+# Ommetti --require-tunnel se Cloudflare non è configurato.
+# Per credenziali file/tenant aggiungi --runner-key-file oppure --tenants.
+# Configura RUNNER_PROBE_BEARER nella private env per questi profili.
+sudo reboot
+# Dopo l'accesso sullo stesso utente Linux:
+node src/runner/scripts/host-reboot-audit.mjs after --env-file=/percorso/assoluto/docker/runner/.env --require-tunnel
+~~~
+
+La prima fase rifiuta Docker rootful, systemd user Docker non attivo, linger disabilitato, env non privata, container privilegiati/extra, rete host, socket nella API/Tunnel, API bind pubblica, bearer errato o readiness incompleta. Solo dopo i check crea RUNNER_DATA_DIR/.sf-reboot-baseline.v1.json con owner UID1000, permessi 0600, senza credenziali; O_EXCL non sovrascrive una baseline. La seconda fase richiede un boot ID kernel diverso dal valore precedente (massimo 7 giorni), controlla la stessa policy e ripete tutte le osservazioni, ma non avvia Docker e non cancella container. Per un nuovo ciclo, archivia e rimuovi manualmente la witness solo dopo controllo dell'operatore. Una receipt RUNNER_REBOOT_LOCAL_PASS non è firmata, non prova da sola che sia avvenuto un reboot genuino off-host e NON certifica DNS/TLS/Cloudflare Access.
+
+Dopo AFTER serve comunque provare realmente da un secondo browser/dispositivo l'URL HTTPS, Cloudflare Access e le preflight OPTIONS CORS del sito Pages, poi lanciare un job approvato e controllare il report. La CI esegue test di stato simulato, non può riavviare la VM dell'operatore. ADR0055, issue #96.
