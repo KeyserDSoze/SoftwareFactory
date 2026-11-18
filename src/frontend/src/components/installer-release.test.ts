@@ -32,7 +32,7 @@ describe("public Release downloads on static Pages", () => {
         asset("softwarefactory-runner-installer.tar.gz.sha256",
           root.replace("v0.2.0/", "v0.2.0-rc.2/") + "softwarefactory-runner-installer.tar.gz.sha256"),
       ] };
-    expect(installerReleaseAssetLink(rc,"softwarefactory-runner-installer.tar.gz")).toContain("-rc.1/");
+    expect(installerReleaseAssetLink(rc,"softwarefactory-runner-installer.tar.gz")).toContain("-rc.2/");
     expect(selectInstallerRelease([rc])).toEqual(rc);
     expect(selectInstallerRelease([rc,release])).toEqual(release);
     expect(selectInstallerRelease([{...rc, prerelease:false}])).toBeNull();
