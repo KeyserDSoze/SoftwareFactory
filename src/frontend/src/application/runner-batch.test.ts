@@ -5,6 +5,7 @@ import { planRunnerBatch, runnerBatchSignature } from "./runner-batch";
 describe("approved workspace to runner DAG planning (#104)", () => {
   it("keeps the canonical test order, independent roles, and no pending patch", () => {
     const project=createProject();
+    project.config.description = "A sample project with a verified backend and frontend";
     const plan=planRunnerBatch(project,["web-test","dotnet-build","dotnet-test"]);
     expect(plan.consent).toBe(true);
     expect(plan.enforced).toBe(true);
@@ -30,6 +31,7 @@ describe("approved workspace to runner DAG planning (#104)", () => {
   });
   it("hash signature binds endpoint/project/revision/test plan and source snapshot", async () => {
     const project=createProject();
+    project.config.description = "A sample project with a verified backend and frontend";
     const plan=planRunnerBatch(project,["dotnet-build","dotnet-test"]);
     const a=await runnerBatchSignature("https://runner.example.com",project,plan);
     expect(a).toBe(await runnerBatchSignature("https://runner.example.com",project,plan));

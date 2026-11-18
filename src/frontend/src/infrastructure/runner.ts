@@ -155,6 +155,7 @@ export function validateRunnerWorkflowResult(value: unknown, expectedId?: string
       (p.created !== undefined && typeof p.created !== "boolean") ||
       !Array.isArray(p.tasks) || p.tasks.length < 2 || p.tasks.length > 6) return fail();
   const seen = new Set<string>(), ids = new Set<string>();
+  const verifiedStatuses = new Map<string, string>();
   for (const task of p.tasks) {
     if (!task || typeof task !== "object" || Array.isArray(task) ||
         Object.keys(task).sort().join(",") !==
@@ -171,7 +172,15 @@ export function validateRunnerWorkflowResult(value: unknown, expectedId?: string
         !Number.isInteger(task.evidence.count) || task.evidence.count < 1 ||
         typeof task.evidence.head !== "string" || !RUNNER_SHA.test(task.evidence.head))
       return fail();
+    // A downstream step that has started without successful prerequisites
+    // must be out_of_order on the server. Never display it as a valid pass.
+    const dependenciesPassed = task.dependsOn.every(dep => verifiedStatuses.get(dep) === "passed");
+    if (task.dependsOn.length > 0 &&
+        ((!dependenciesPassed && ["queued","running","passed","failed"].includes(task.status)) ||
+         (dependenciesPassed && task.status === "blocked")))
+      return fail();
     seen.add(task.id); ids.add(task.jobId);
+    verifiedStatuses.set(task.id, task.status);
   }
   const statuses = p.tasks.map(t => t.status);
   const expectedStatus = statuses.includes("out_of_order") ? "out_of_order" :

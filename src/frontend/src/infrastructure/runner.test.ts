@@ -235,8 +235,15 @@ describe("opt-in atomic runner workflow batch client (#103)", () => {
       label: "Verify", files: { "src/backend/domain/Foo.cs": "namespace A; public class Foo {}" },
       steps: ["dotnet-test" as const] } },
   ] };
-  const reply = { id: key, createdAt: new Date().toISOString(), created: true,
-    version: 2, enforced: true, status: "active", tasks: [] };
+  const reply = { id: key, label: input.label, createdAt: new Date().toISOString(), created: true,
+    version: 2, enforced: true, status: "active",
+    tasks: input.tasks.map((t, i) => ({
+      id: t.id, role: t.role, dependsOn: t.dependsOn,
+      jobId: i === 0 ? "123e4567-e89b-42d3-a456-426614174001" :
+        "123e4567-e89b-42d3-a456-426614174002",
+      status: i === 0 ? "queued" : "blocked",
+      evidence: { count: 1, head: "a".repeat(64) },
+    })) };
   it("sends explicit consent, batch DAG, stable retry UUID and no implicit job POSTs", async () => {
     const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => reply });
     vi.stubGlobal("fetch", spy);
