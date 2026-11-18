@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject, DEFAULT_SETTINGS } from "../domain/defaults";
 import { proposePmTestPlan } from "./pm-test-planner";
 
@@ -8,6 +8,7 @@ const response = JSON.stringify({summary:"Build, then run backend tests",
     {id:"dotnet-test",dependsOn:["dotnet-build"],reason:"Test the backend after its build"},
   ]});
 describe("role-routed PM model planning (#106)",()=>{
+  beforeEach(()=>vi.stubGlobal("sessionStorage", {getItem:()=>null}));
   afterEach(()=>vi.unstubAllGlobals());
   it("routes role model and thinking, without sending source snapshots or runner credentials",async()=>{
     const settings=structuredClone(DEFAULT_SETTINGS);
