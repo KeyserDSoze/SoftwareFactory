@@ -819,3 +819,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Il worker deve saltare un job bloccato senza farlo diventare head-of-line blocker; il tenant fairness per gli altri job rimane invariato.
 - Per status `passed` occorrono sempre step reali verificati. Niente token/sorgenti nel manifest o nuova esecuzione per effetto di una GET.
 - Test `src/runner/tests/guarded-workflows.test.mjs`, ADR 0059. L'isolamento rootless su VM e PM AI autonomo restano #87/#2/#89.
+
+
+## Workflow batch fenced e recovery offline (#103)
+
+- `POST /v1/workflows/batch` richiede consenso `consent:true,enforced:true` e `Idempotency-Key` UUID; 2–6 job ciascuno `validateRequest`, DAG/role allowlisted. Il rate limit e le quote di job sono contati per **N**, non per una receipt.
+- Staging in `workflow-staging/UUID/jobs`; report e hash chain `accepted` completi prima che i job siano rinominati in `jobs/`. Prima del primo rename il marker `workflows/.pending-UUID/intent.json` è creato completamente e pubblicato con rename atomico; il worker si blocca fail-closed fino a commit manifest v2 e rimozione marker.
+- Il recovery è SOLO host locale con API/worker fermati, `npm run batch-reconcile -- --data-dir ABS --batch-id UUID --abort|--finalize`; `abort` rifiuta manifest presente o job avviato/claim, `finalize` richiede manifest valido e tutti i job queued.
+- Su errore di recovery conservare marker e prove per analisi; non trasformare errori infrastrutturali in test failed né eliminare automaticamente directory o journal. Lock POSIX `.admission` non va liberato per età.
+- Mantenere test `batch-workflows.test.mjs`, `batch-recovery.test.mjs`, Vitest SDK e ADR 0060. L'API non espone reconcile e non esegue LLM/apply. Rootless VM reale e PM AI autonomo restano nelle #87/#2/#89.

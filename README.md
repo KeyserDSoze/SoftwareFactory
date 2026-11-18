@@ -620,3 +620,29 @@ Il workflow statico distingue ora build-and-upload e deploy. Se fallisce soltant
 Il worker legge il registro sul volume condiviso, salta i job con predecessori non ancora verificati come `passed` e li rivaluta dopo il completamento. Il controllo definitivo e la creazione della claim del job avvengono insieme sotto il lock POSIX dell'admission per impedire race tra API e worker multipli. Il gate non trasforma un'attesa in un errore dei test e non deve bloccare i job indipendenti della coda. Se il manifest o le prove dei predecessori sono illeggibili, il worker non deve eseguire il job.
 
 **Non è un nuovo servizio AI autonomo:** i job vanno comunque sottomessi esplicitamente dall'operatore *prima* dell'iscrizione; il gate governa solo l'avvio di quelli accodati, non genera codice, non promette budget/lease multi-host e non approva patch. Per progetti in cui un worker potrebbe iniziare subito, sospendere l'worker prima di inviare i job, registrarli in enforced e quindi riavviarlo. [ADR 0059](adr/0059-enforced-queued-job-worker-gates.md), [issue #102](https://github.com/KeyserDSoze/SoftwareFactory/issues/102).
+
+
+## Workflow batch atomico con recupero controllato (#103, 18 novembre 2026)
+
+Con `POST /v1/workflows/batch` si possono registrare **2–6 job e il loro DAG enforced** in un'unica chiamata con consenso esplicito, senza fermare preventivamente il worker. Richiede la stessa Bearer dell'API runner, header `Idempotency-Key` UUIDv4 persistente tra retry e questo corpo JSON:
+
+```json
+{"consent":true,"enforced":true,"label":"Build e test","tasks":[
+  {"id":"build","role":"devops_engineer","dependsOn":[],"request":{"label":"Build","files":{"src/backend/domain/Test.cs":"namespace Example; public class Test {}"},"steps":["dotnet-build"]}},
+  {"id":"test","role":"tester","dependsOn":["build"],"request":{"label":"Test","files":{"src/backend/domain/Test.cs":"namespace Example; public class Test {}"},"steps":["dotnet-test"]}}
+]}
+```
+
+Ogni `request` usa la stessa validazione, allowlist, controllo credenziali, digest e limite file di `/v1/jobs`. Il batch consuma **N** posti delle quote globali e tenant e del rate limiter, non un solo posto. Il server prepara i report/journal `accepted` fuori dalla coda, crea un marker di commit privato e pubblica directory e manifest enforced con lo stesso lock POSIX della claim worker. Solo dopo la verifica rimuove il marker; il worker passa un job dipendente solo con journal `passed` dei predecessori. Non viene eseguito un agente AI né approvata una patch. GET `/v1/workflows/:id` resta una proiezione verificata, e una risposta `queued` non equivale a un test riuscito.
+
+Il client TypeScript `submitRunnerWorkflowBatch` è disponibile nell'SDK frontend, ma non avvia l'esecuzione senza una chiamata esplicita dell'operatore. Sul retry usare il medesimo `Idempotency-Key`: un ack perso non crea duplicati, un contenuto diverso dà conflitto 409.
+
+**Crash tra commit e pulizia:** un marker `workflows/.pending-UUID` blocca nuove claim fino a decisione operatore. Con API/worker **fermati** e volume locale POSIX verificato, eseguire dal package runner:
+
+```bash
+npm run batch-reconcile -- --data-dir /absolute/runner/data --batch-id UUID --finalize
+# oppure, solo se il manifest non esiste e TUTTI i job risultano mai avviati:
+npm run batch-reconcile -- --data-dir /absolute/runner/data --batch-id UUID --abort
+```
+
+Il comando ricontrolla UID, permessi, marker, digest, claim e journal; rifiuta di eliminare job avviati, di finalizzare un manifest mancante o di abortire uno già committed. Se un crash ha lasciato `.admission`, un amministratore deve prima arrestare i processi e verificare manualmente il lock; **mai** cancellarlo durante lavoro attivo. Staging abbandonato *prima* del marker non è eseguibile e richiede pulizia amministrativa separata. Non c'è auto-recovery silenziosa e non è attestazione off-host. Vedi [ADR 0060](adr/0060-atomic-runner-workflow-batch.md) e [#103](https://github.com/KeyserDSoze/SoftwareFactory/issues/103).

@@ -512,3 +512,10 @@ Il gate del Code Agent resta separato e immutato. ADR 0057.
 ### Guarded DAG worker enforcement opt-in (#102)
 
 Il registro workflow supporta ora manifest v2 con `enforced:true`. La semantica v1 resta immutata. La registrazione richiede tutti i job queued, senza claim, verifica i digest/tenant e occupa il lock POSIX globale delle ammissioni. Il worker usa `loadGuardedIndex` per la selezione e `mayStartGuardedJob` **di nuovo dentro `withAdmissionLock`** prima della claim. Il DAG e il journal sono autoritativi per il gate; una receipt non abilita la dipendenza. Se la policy è corrotta, la coda viene sospesa invece di eseguire un task potenzialmente vietato. ADR0059.
+
+
+### Atomic DAG batch admission e marker recovery (#103)
+
+`src/runner/batch-workflows.mjs` riceve snapshots già approvati dall'operatore e li valida con la policy singolo job; verifica tutte le quote per N, non una, sotto admission lock condiviso con `executeJob`. Input/report/journal staged fuori da `jobs/` non sono eseguibili. Prima di spostare il primo job viene pubblicata una directory `.pending-UUID` con intento completo; la scansione del worker rifiuta nuovi claim alla vista del marker. Ultimo file pubblicato è il manifest enforced v2 verificato; il marker viene rimosso solo a pubblicazione confermata. Replay è namespace UUID distinto da admissions singole e restituisce lo stato journal corrente.
+
+`src/runner/batch-recovery.mjs` e `scripts/batch-reconcile.mjs` forniscono un tool solo host, esplicito, verificato con FD owner-only, che distingue un batch committed da un batch abortibile e nega la cancellazione di job già avviati. Nessun API web per recovery. Conserva qualsiasi evidenza dubbia anziché produrre un falso risultato. Lock non espira automaticamente; non è un commit distribuito su NFS né prova off-host. ADR0060.

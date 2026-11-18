@@ -846,3 +846,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Selezione di queue che evita starvation da job bloccati; verifica definitiva delle dipendenze sotto shared lock e journal SHA del predecessor, senza auto-run o falsi failed.
 - [x] Test di integrazione 2 API/worker, race, duplicate claim, crash/tamper e legacy; ADR0059.
 - [ ] Accodamento workflow atomico direttamente via API (oggi l'operatore crea i job in anticipo), controller PM AI con autonomia autorizzata, budget/quote/leases e collaudo su VM rootless Cloudflare.
+
+
+## Batch admission DAG enforced e recovery locale (#103, 18/11/2026)
+
+- [x] API `POST /v1/workflows/batch` con consenso esplicito, 2–6 snapshots `validateRequest`, DAG/ruoli, UUID idempotente e GET journal-bound.
+- [x] Quote globali/tenant e rate limit sul numero complessivo dei job, recheck della revoca, stage di report/journal fuori dalla coda.
+- [x] Marker intent pubblicato con rename atomico **prima** dei job, lock POSIX in comune con claim worker; fail-closed su crash o manifest corrotto.
+- [x] CLI offline `batch-reconcile` per abortire un batch non committed con job mai avviati oppure finalizzare un manifest già committed, senza perdere prove; test su interruzione tra publish, marker alterato, cleanup parziale e claim attiva.
+- [x] SDK browser `submitRunnerWorkflowBatch` con consenso e retry UUID; ADR 0060, README/AGENTS e test Node/Vitest.
+- [ ] PM AI autonoma con quote di token/costo, gestione multi-host/lease/consenso avanzato, deploy VM Linux rootless+Cloudflare e acceptance off-host rimangono nelle #89/#87/#2.
