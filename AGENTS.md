@@ -849,3 +849,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - `RunnerBatchPanel` richiede consenso separato prima di inviare metadata al modello e un'altra checkbox + dialog prima del POST batch; invalidare la proposta su test, progetto, revisione o routing modello cambiati, scartare risposte tardive/abortite.
 - Il batch execution server continua con workflow enforced e journal verificato #103/#104, senza toccare i gate di review/repair o le prove `lastRunnerEvidence`. Nessun PM autonomo persistente dichiarato; #89 resta aperta.
 - Conservare test `pm-test-plan.test.ts`, `pm-test-planner.test.ts`, `runner-batch.test.ts`, `RunnerBatchPanel.test.ts`, ADR 0062.
+
+
+
+## Registro immutabile di handoff AI (#107)
+
+- API `POST/GET /v1/agent-handoffs` dichiarativa: 2–8 task, owner label e role allowlisted, dipendenze topologiche, budgetUnits preventivi bounded con somma dei task entro il limite, richiesta `consent:true`. Nessun `running`/`passed` inventato; nessun processo AI o worker Docker partito da questa API.
+- `src/runner/agent-handoffs.mjs` è separato da `src/runner/workflows.mjs` (job Docker). Condivisione `withAdmissionLock` tra API per registrazione, hash idempotenza namespace-bound/tenant-bound, readback con inode/link/perms e hash verificati; rifiuto di file estranei nel registro.
+- `owner` non è identità autenticata né autorizzazione a fare claim. Non esporre POST claim/renew/complete senza actor credentials scoped, lease monotone fencing e journal append-only verificato. BudgetUnits non è contabilità costo AI reale.
+- Preservare i test `src/runner/tests/agent-handoffs.test.mjs`: due API, replay, duplicazioni, conflitti, tamper, tenants cross-owner, revoca file-backed e DAG invalidi. ADR0063, epiche #105/#89 aperte.

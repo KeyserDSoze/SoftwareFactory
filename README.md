@@ -668,3 +668,25 @@ Nella scheda **Code Agent → Server Docker → Piano test multi-job** puoi ora 
 Il PM restituisce solo una proposta JSON con motivazione, task e dipendenze. Il validatore rifiuta ogni step extra, omissione, duplicato, ordine circolare/non topologico, ruolo/comando imposto dall'AI, prerequisito build→test saltato o Playwright senza i predecessori scelti. Per l'esecuzione i ruoli devops/tester sono determinati dal programma, non dal testo AI. L'operatore può visualizzare motivi e ordine, tornare al piano manuale oppure approvare una **seconda conferma separata** prima dell'effettivo POST batch. Nessuna patch pending viene inclusa né autorizzata automaticamente; il risultato dei test resta solo quello del journal verificato dal runner. Cambiando workspace, revisione, test o modello, la proposta AI non è più utilizzabile.
 
 La proposta PM non è ancora uno scheduler indipendente con budget per token, persistenza cross-device, task leases multi-host o attestation off-host: questi requisiti rimangono nell'epica #89. [ADR 0062](adr/0062-human-supervised-ai-pm-test-dag.md), [issue #106](https://github.com/KeyserDSoze/SoftwareFactory/issues/106).
+
+
+
+## Registro handoff AI durevole, senza esecuzione automatica (#107)
+
+Il runner offre un **registro indipendente dai test Docker** per dichiarare un piano di responsabilità multi-ruolo, con consenso e limiti preventivi. La richiesta `POST /v1/agent-handoffs` usa la consueta autenticazione Bearer, CORS consentito, `Content-Type: application/json` e **`Idempotency-Key` UUIDv4**:
+
+```json
+{
+  "consent": true,
+  "label": "Piano supervisionato del team",
+  "budgetUnits": 10,
+  "tasks": [
+    {"id":"plan","role":"project_manager","owner":"pm-worker","dependsOn":[],"estimatedUnits":3,"maxAttempts":2},
+    {"id":"review","role":"code_reviewer","owner":"reviewer-1","dependsOn":["plan"],"estimatedUnits":4,"maxAttempts":1}
+  ]
+}
+```
+
+`GET /v1/agent-handoffs/:uuid` restituisce la dichiarazione e lo stato **`declared`** con task `ready` (nessun predecessore) o `blocked` (dipendenze dichiarate). **Non esiste ancora un agente in esecuzione, un lease o un task riuscito**: `owner` è solo un identificatore dichiarato, NON una credenziale. Il `budgetUnits` è una stima di pianificazione con somma dei task controllata, **non** un contatore verificato di token/crediti reali. Il backend non consente di usare il registro per avviare AI, Docker, patch o approvazioni.
+
+Il file privato salvato su volume POSIX contiene soltanto identità, ruoli, dipendenze, limiti, digest e consenso, senza prompt/sorgenti/token; è verificato tramite hash locale, owner/permessi e invarianti di inode/hardlink/symlink. Due API condividono il lock di admission; risposte perse possono essere recuperate con lo stesso UUID e identico contenuto. Un file sospetto blocca nuovi handoff, senza creare falsi successi. Consulta [ADR 0063](adr/0063-read-only-ai-role-handoff-registry.md) e la [#107](https://github.com/KeyserDSoze/SoftwareFactory/issues/107). **Le lease/fencing, identità per actor, budget reali e scheduler agenti restano #105 e #89.**

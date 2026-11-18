@@ -1091,3 +1091,13 @@ Le transazioni non sono garantite contro power loss arbitrario/fault del filesys
 
 ### Discard offline dello staging ante-commit
 `npm run batch-reconcile -- --data-dir ABS --batch-id UUID --discard-stage` recupera soltanto lo staging orfano di un processo interrotto prima del marker. Richiede nessun manifest e nessun `.pending-*` sullo stesso UUID, controlla UID/permessi di tutti i sottodirectory e rifiuta qualsiasi job staged il cui UUID sia già presente nella vera coda. Un manifest committed oppure un marker richiede invece i modi `--finalize` o `--abort`. Anche discard è offline e sotto lock POSIX condiviso, non un endpoint pubblico.
+
+
+
+## API sperimentale: dichiarazione handoff AI (#107)
+
+`POST /v1/agent-handoffs` registra **solo una dichiarazione** di lavoro umano/AI multi-ruolo (non esegue nulla). Usa l'autenticazione Bearer e CORS già configurati del runner, header `Idempotency-Key` UUIDv4 e JSON `{consent:true,label,budgetUnits,tasks}`. Da 2 a 8 task ordinati per dipendenza; ogni task `{id,role,owner,dependsOn,estimatedUnits,maxAttempts}` con `id` univoco, owner etichetta allowlisted, ruolo limitato, dipendenze riferite a task precedenti, max 3 dipendenze, maxAttempts 1–3, estimatedUnits 1–250; somma di estimatedUnits <= budgetUnits (1–1000). Questo limite è **solo previsto**, non una metrica di billing. Body max 6144 byte.
+
+`GET /v1/agent-handoffs/:uuid` mostra `status:"declared"`, `executions:0`, e task con `state:"ready"|"blocked"`, `evidence:"not_started"`. Mai `passed`, `running`, lease o attestazione lavoro. Il manifest è privato in `/data/agent-handoffs/:uuid.json` e non include prompt, sorgenti o credenziali. Idempotenza per tenant e contenuto; replay 200, creato 201, validazione/budget 422, conflitto 409, capacità max 64 (429), admission lock 503, credenziali ruotate 401/503. Tenant non autorizzato riceve 404 senza identificazione dell'owner.
+
+Il registro dipende da volume **POSIX locale**, permessi owner-only, hash JSON e lock condiviso tra API/worker. SHA locale non costituisce firma/off-host attestation. Se un JSON inatteso, hardlink, symlink, permesso largo o checksum non valido appare nel registro, la creazione è bloccata finché l'operatore non esamina il volume a servizi fermati. NON manipolare JSON per aggiungere task come `passed` né considerare `owner` un'identità verificata. La futura transizione verso claim/lease richiederà autentiche actor-scoped e lease fencing (#105); nessuna route mutante per questi stati è disponibile oggi.

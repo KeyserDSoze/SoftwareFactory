@@ -877,3 +877,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] UI IT/EN: prompt provider separatamente consentito, anteprima ragioni, possibilità di reset manuale, conferma runner distinta, invalidazione su mutazioni di snapshot/test/modello.
 - [x] Test Vitest di model routing/automatic thinking, parser e planner, invalidazione proposta, rendering IT/EN, runner journal invariato; ADR0062.
 - [ ] PM/Tester autonomi con task duraturi e budget token, quote per ruolo, leases multi-host, manual authorizations e audit, VM rootless Cloudflare reale: epiche #89/#2/#87.
+
+
+
+## PM handoff AI registro persistente read-only (#107, 18/11/2026)
+
+- [x] Endpoint autenticati POST/GET `/v1/agent-handoffs` con consenso esplicito, ruoli/owner dichiarati, DAG topologico, idempotenza UUID e isolamento per tenant.
+- [x] Budget preventivo `budgetUnits` con stima massima 8 task/64 manifest, valori bounded e validazione fail-closed; **non** rappresenta token utilizzati o quote agent eseguibili.
+- [x] Archiviazione JSON privata hash-bound, same-volume admission lock, autorizzazione file-backed verificata al commit, FD/permessi/symlink/hardlink checks, proiezione rigorosamente `declared` (mai passed).
+- [x] Test Node di 2 API, replay e collisione, revoca tenant, privacy, corruzione/integrità e DAG injection; ADR 0063 e documentazione.
+- [ ] #105: actor credentials/permessi per ruolo, lease rinnovabili con monotonic fencing, journal di claim/complete, budget reale e prove; scheduler autonomo escluso. #89/#87: multi-agent supervisionata e VM rootless/Cloudflare live.

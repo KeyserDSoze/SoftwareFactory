@@ -532,3 +532,9 @@ Il terzo percorso locale `discard-stage` elimina staging **non pubblicato** solt
 ### Proposta AI Project Manager test DAG (#106)
 
 Prima del POST batch esiste ora uno step facoltativo di proposta: `application/pm-test-planner.ts` risolve solo il ruolo `project_manager` tramite il router BookWriter-style, interroga il provider OpenAI-compatible usando metadata e test scelti, senza allegare workspace/source snapshot e senza avviare il worker. `domain/pm-test-plan.ts` fa la verifica pure fail-closed del JSON con insieme di test invariato, dipendenze topologiche e prerequisiti. `planRunnerBatch` riapplica questa verifica per comporre il manifest, assegnando deterministicamente i ruoli e gli step. L'interfaccia invalida il piano se cambiano progetto, revisioni, step o endpoint/modello PM, richiede consenso AI e consenso runner indipendenti. Nessuna informazione prodotta dall'LLM può diventare un test passato; il journal del runner è l'unica fonte per i risultati. ADR 0062.
+
+
+
+### Registro PM handoff AI durevole read-only (#107)
+
+`src/runner/agent-handoffs.mjs` isola il *control-plane dichiarativo* della software house dai job reali del runner. POST richiede consenso, ruolo/owner per task, DAG aciclico ordinato, quote stimate per task e workflow, UUID idempotente; nessun prompt, token o source file nel record. All'interno del lock POSIX condiviso con admission/claim la API verifica **tutti** i manifest già archiviati prima di inserirne altri, scrive atomico un JSON versione 1 con SHA-256; FD `O_NOFOLLOW`, owner, mode, nlink e inode checks proteggono letture e replay. GET verifica il file e l'ownership tenant, proietta esclusivamente `declared` e `ready/blocked` derivati dalla topologia. Nessun lease, actor bearer, journal d'esecuzione o budget token effettivo è implementato da questa tranche. Vedi ADR0063; #105 mantiene lo sviluppo del coordinatore autorizzato.
