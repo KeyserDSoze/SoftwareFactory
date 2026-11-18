@@ -130,7 +130,7 @@ function assertLimits({ maxQueued, maxRetained, maxAcceptedPerMinute, waitMs }) 
  */
 export async function admitWorkflowBatch({ dataDir, input, idempotencyKey,
   maxQueued = 4, maxRetained = 100, maxAcceptedPerMinute = 0,
-  waitMs = 1500, tenant = null, reauthorize }) {
+  waitMs = 1500, tenant = null, reauthorize, onCommitPhase = undefined }) {
   assertLimits({ maxQueued, maxRetained, maxAcceptedPerMinute, waitMs });
   const parsed = parseBatch(input);
   const keyHash = parseIdempotencyKey(idempotencyKey);
@@ -192,6 +192,11 @@ export async function admitWorkflowBatch({ dataDir, input, idempotencyKey,
     const stage = path.join(stageRoot, workflowId);
     await mkdir(path.join(stage, "jobs"), { recursive: true, mode: 0o700 });
     let guarded = false, committed = false;
+    // Test-only in-process observation seam: never forwarded from HTTP input.
+    // Enables child-process SIGKILL tests at precise durable boundaries.
+    const checkpoint = async phase => {
+      if (onCommitPhase) await onCommitPhase({ phase, workflowId });
+    };
     try {
       // Stage completed, privately owned job reports and evidence OUTSIDE
       // jobs/. The worker cannot enumerate or claim them.
@@ -215,6 +220,7 @@ export async function admitWorkflowBatch({ dataDir, input, idempotencyKey,
       }
       await refresh();
       capacity(currentTenant); // fence quota / credentials after writing stages
+      await checkpoint("staged");
       const pending = path.join(root, ".pending-" + workflowId);
       // Prepare a complete intent *before* publishing the marker. A crash
       // must never leave an empty / unidentifiable guard that cannot be
@@ -230,15 +236,18 @@ export async function admitWorkflowBatch({ dataDir, input, idempotencyKey,
       // The worker refuses EVERY claim until this guard is removed.
       await rename(preparedMarker, pending);
       guarded = true;
-      for (const task of tasks) {
+      await checkpoint("guarded");
+      for (const [position, task] of tasks.entries()) {
         const target = jobDirectory(dataDir, task.jobId);
         try { await lstat(target); throw issue("ADMISSION_INTEGRITY"); }
         catch (error) { if (error.code !== "ENOENT") throw error; }
         await rename(jobDirectory(stage, task.jobId), target);
+        await checkpoint("moved-" + (position + 1));
       }
       await atomicWrite(path.join(root, workflowId + ".json"), {
         ...manifest, hash: hash(manifest),
       });
+      await checkpoint("manifest");
       const projected = await getWorkflow(dataDir, workflowId, tenantId, refresh);
       await rm(pending, { recursive: true });
       committed = true;
