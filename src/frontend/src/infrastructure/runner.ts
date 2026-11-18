@@ -107,6 +107,48 @@ export async function submitRunnerJob(baseUrl: string, key: string, label: strin
     headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ label, files, steps }) });
 }
+/** The batch is operator-controlled and does not auto-approve patches or
+ * invoke AI agents. Reuse one UUID after uncertain HTTP acknowledgments.
+ */
+export type RunnerBatchRole =
+  | "project_manager" | "tester" | "test_architect" | "devops_engineer"
+  | "code_reviewer" | "fullstack_developer" | "fix_developer"
+  | "release_manager" | "security_engineer";
+export type RunnerBatchRequest = {
+  consent: true; enforced: true; label: string;
+  tasks: { id: string; role: RunnerBatchRole; dependsOn: string[];
+    request: { label: string; files: Record<string, string>; steps: RunnerStep[] } }[];
+};
+export type RunnerWorkflowResult = {
+  version: 2; enforced: true; id: string; createdAt: string; label: string;
+  status: "active" | "passed" | "failed" | "incomplete" | "out_of_order";
+  created?: boolean;
+  tasks: { id: string; role: RunnerBatchRole; jobId: string; dependsOn: string[];
+    status: "queued" | "running" | "blocked" | "passed" | "failed" | "incomplete" | "out_of_order";
+    evidence: { count: number; head: string } }[];
+};
+export async function submitRunnerWorkflowBatch(
+  endpoint: string, key: string, request: RunnerBatchRequest,
+  signal?: AbortSignal, idempotencyKey: string = crypto.randomUUID(),
+): Promise<RunnerWorkflowResult> {
+  if (!request || request.consent !== true || request.enforced !== true ||
+      !Array.isArray(request.tasks) || request.tasks.length < 2 ||
+      request.tasks.length > 6 ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(idempotencyKey))
+    throw new Error("Il batch richiede consenso, 2-6 task e UUID di retry.");
+  return runnerRequest<RunnerWorkflowResult>(endpoint, key, "/v1/workflows/batch", {
+    method: "POST", signal, headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(request),
+  });
+}
+export async function fetchRunnerWorkflow(
+  endpoint: string, key: string, id: string, signal?: AbortSignal,
+): Promise<RunnerWorkflowResult> {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id))
+    throw new Error("ID workflow runner non valido.");
+  return runnerRequest<RunnerWorkflowResult>(endpoint, key, "/v1/workflows/" + id, { signal });
+}
+
 /** Retained job PM plan: report + journal are verified by the server.
  * Validate its binding to the SAME report the UI is currently displaying.
  */

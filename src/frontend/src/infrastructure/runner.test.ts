@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { fetchRunnerExecutionPlan, validateRunnerExecutionPlan, runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
+import { submitRunnerWorkflowBatch, fetchRunnerWorkflow, fetchRunnerExecutionPlan, validateRunnerExecutionPlan, runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
   RunnerRequestError, runnerPollDecision, probeRunnerConnector, type RunnerReport } from "./runner";
 
 describe("remote runner browser client", () => {
@@ -218,5 +218,58 @@ describe("verified runner PM job plan binding (#99)", () => {
       { ...payload, tasks: [{ ...payload.tasks[0], id: "shell" }] },
       { ...payload, tasks: [] },
     ]) expect(() => validateRunnerExecutionPlan(candidate, report)).toThrow();
+  });
+});
+
+
+describe("opt-in atomic runner workflow batch client (#103)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const endpoint = "https://runner.example.com";
+  const secret = "s".repeat(40);
+  const key = "123e4567-e89b-42d3-a456-426614174000";
+  const input = { consent: true as const, enforced: true as const, label: "Operator approved batch", tasks: [
+    { id: "build", role: "devops_engineer" as const, dependsOn: [], request: {
+      label: "Build", files: { "src/backend/domain/Foo.cs": "namespace A; public class Foo {}" },
+      steps: ["dotnet-build" as const] } },
+    { id: "verify", role: "tester" as const, dependsOn: ["build"], request: {
+      label: "Verify", files: { "src/backend/domain/Foo.cs": "namespace A; public class Foo {}" },
+      steps: ["dotnet-test" as const] } },
+  ] };
+  const reply = { id: key, createdAt: new Date().toISOString(), created: true,
+    version: 2, enforced: true, status: "active", tasks: [] };
+  it("sends explicit consent, batch DAG, stable retry UUID and no implicit job POSTs", async () => {
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => reply });
+    vi.stubGlobal("fetch", spy);
+    const response = await submitRunnerWorkflowBatch(endpoint, secret, input, undefined, key);
+    expect(response.id).toBe(key);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe(endpoint + "/v1/workflows/batch");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Idempotency-Key"]).toBe(key);
+    expect(init.headers.Authorization).toBe("Bearer " + secret);
+    expect(JSON.parse(init.body)).toEqual(input);
+    expect(init.redirect).toBe("error");
+  });
+  it("rejects calls without explicit opt-in before any HTTP traffic", async () => {
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    await expect(submitRunnerWorkflowBatch(endpoint, secret,
+      { ...input, consent: false as never }, undefined, key)).rejects.toThrow();
+    await expect(submitRunnerWorkflowBatch(endpoint, secret,
+      { ...input, tasks: [input.tasks[0]] }, undefined, key)).rejects.toThrow();
+    await expect(submitRunnerWorkflowBatch(endpoint, secret, input, undefined,
+      "not-a-uuid")).rejects.toThrow();
+    expect(spy).not.toHaveBeenCalled();
+  });
+  it("read-only GET accepts only workflow UUID and does not transmit source or retry key", async () => {
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => reply });
+    vi.stubGlobal("fetch", spy);
+    await expect(fetchRunnerWorkflow(endpoint,secret,key)).resolves.toMatchObject({ id: key });
+    expect(spy.mock.calls[0][0]).toBe(endpoint + "/v1/workflows/" + key);
+    expect(spy.mock.calls[0][1].method).toBeUndefined();
+    expect(spy.mock.calls[0][1].body).toBeUndefined();
+    await expect(fetchRunnerWorkflow(endpoint,secret,"../wrong")).rejects.toThrow();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
