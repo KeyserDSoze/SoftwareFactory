@@ -104,6 +104,9 @@ test("strict DAG/owner/cost/role checks fail before a record can be created",asy
   try {
     const good=input(),bad=[
       {...good,consent:false}, {...good,unknown:true},
+      {...good,label:"Bearer "+ "S".repeat(45)},
+      {...good,label:"github_pat_"+"a".repeat(35)},
+      {...good,label:"secret = "+"a".repeat(40)},
       {...good,budgetUnits:6}, {...good,budgetUnits:2.5},
       {...good,tasks:good.tasks.slice(0,1)},
       {...good,tasks:[good.tasks[0],{...good.tasks[1],id:"plan"}]},
