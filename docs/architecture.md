@@ -522,3 +522,8 @@ Il registro workflow supporta ora manifest v2 con `enforced:true`. La semantica 
 
 
 Il terzo percorso locale `discard-stage` elimina staging **non pubblicato** soltanto quando non esistono marker/manifest/job live con gli stessi ID. Non modifica job eseguibili e non elude il percorso guarded; è una manutenzione esplicita, non un task automatico sul worker.
+
+
+### Operator batch UI and verified journal binding (#104)
+
+`src/frontend/src/application/runner-batch.ts` prepara un DAG deterministico dal workspace approvato e produce una firma SHA-256 per consentire retry UUID senza invio duplicato. `RunnerBatchPanel.tsx` richiede checkbox + dialogo di consenso, invia il batch solo su azione esplicita e legge il piano via GET, con polling limitato. `validateRunnerWorkflowResult` richiede v2/enforced, ordine DAG, evidence journal head/count coerente e aggregate status: un dependency violation non diventa un passed. I metadata session-only si legano a project ID, endpoint, revision e snapshot; nessun segreto o sorgente viene persistito per il replay. Il risultato non altera i gate di approvazione Code Agent e diventa storico quando cambia progetto. ADR0061.

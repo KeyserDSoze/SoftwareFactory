@@ -859,3 +859,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 
 
 - [x] Recovery del pre-marker tramite `batch-reconcile --discard-stage`, che rifiuta in modo verificato manifest, marker o job già published con lo stesso ID. Test Node di cleanup e fail-closed.
+
+
+## Pannello batch DAG protetto nella Factory (#104)
+
+- [x] Anteprima 2–5 step in ordine canonico, dipendenze/ruoli e sorgenti approvati, senza patch pendenti.
+- [x] Consenso checkbox + conferma prima di una sola POST batch con UUID di replay, monitoraggio autenticato del piano server e risultati journal-bound.
+- [x] Fail closed client su identità, dipendenze, head/count, stale source e accesso revocato; retry solo per transport transient, conservazione session-only di UUID/digest non segreti.
+- [x] UI IT/EN centralizzata in i18n, CSS responsive e test Vitest planner/client. ADR0061.
+- [ ] UI multi-progetto/cloud oltre la singola sessione, orchestratore PM AI autorizzato, budget/tenant multi-host e VM rootless/Cloudflare reale restano nelle epic #89/#87/#2.

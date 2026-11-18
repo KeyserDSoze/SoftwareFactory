@@ -650,3 +650,12 @@ Il comando ricontrolla UID, permessi, marker, digest, claim e journal; rifiuta d
 
 ### Recupero di staging non pubblicato
 Se un crash avviene **prima** della pubblicazione del marker, nessun job del batch è mai diventato eseguibile. Il comando offline `npm run batch-reconcile -- --data-dir /absolute/runner/data --batch-id UUID --discard-stage` elimina solo lo staging incompleto; rifiuta l'operazione se trova un manifest, un marker o un job con lo stesso UUID già pubblicato in `jobs/`. Ferma comunque API e worker prima della manutenzione; non usare `--discard-stage` per bypassare un marker pendente.
+
+
+## UI per DAG di test protetto (#104)
+
+Nella scheda **AI Factory → Code Agent → Server Docker**, espandi **Piano test multi-job verificato**. Seleziona da due a cinque controlli, verifica l'ordine delle dipendenze e il numero di file inclusi, quindi seleziona la checkbox di consenso e conferma il runner destinatario. Un solo click esplicito invia il batch `enforced:true` creato dalla #103. La vista segue il risultato server journal-bound dei job (queued, blocked, running, passed, failed, incomplete, out_of_order) e non attribuisce alcuna approvazione automatica di patch.
+
+Il pannello **non invia patch pendenti**: per un repair sono obbligatori il percorso separato di review indipendente e i suoi re-test. Se il progetto cambia dopo l'invio, il DAG diventa **storico**, non verificato per il codice corrente. Una risposta HTTP persa consente un retry con lo stesso UUID/idempotency, senza duplicazione intenzionale dei job. Solo endpoint, UUID, revisione e digest del payload sono registrati in `sessionStorage` locale; nessuna chiave runner o sorgente del progetto entra in questa persistenza. `fetchRunnerWorkflow` rifiuta un DAG con identità/ruoli/head/evidence o dipendenze non coerenti: un report malformato non viene presentato come passed.
+
+Le stringhe sono aggiunte alle traduzioni IT/EN centrali in `src/frontend/src/i18n.ts`, come previsto dalla #90. Vedi [ADR 0061](adr/0061-operator-consented-batch-ui.md) e [#104](https://github.com/KeyserDSoze/SoftwareFactory/issues/104).

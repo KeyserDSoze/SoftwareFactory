@@ -831,3 +831,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 
 
 - Per un crash **prima** del marker, il tool locale supporta `--discard-stage`: rifiuta manifest, marker e job live coincidenti; lo staging non è mai visto dal worker. Aggiungere/tenere test di non-deletion in `batch-recovery.test.mjs`.
+
+
+## UI batch runner con consenso e correlazione (#104)
+
+- `RunnerBatchPanel` è un controllo operatore aggiuntivo in Code Agent, non un percorso per bypassare `onRunnerBound`, approval/review o `repair-coordinator` del job singolo.
+- `planRunnerBatch` deve costruire soltanto 2–5 step selezionati dall'utente come DAG con dipendenze, a partire dal **workspace approvato**. Una `development.pending` blocca il batch: non allegare patch non approvate.
+- Doppio consenso visibile (checkbox + confirm), nessun auto-submit da effects o polling. `submitRunnerWorkflowBatch` usa UUID stabile derivato dalla stessa firma dei digest per retry; memorizzare in `sessionStorage` soltanto UUID, signature hash, endpoint e revision tag, mai source/API key.
+- `validateRunnerWorkflowResult` è fail-closed su ID, v2/enforced, evidence head/count, owner e dipendenze topologiche. Se backend auth/integrity fallisce, cancellare il precedente report visualizzato e fermare polling; ritentare soltanto transient 408/429/5xx e network nei limiti di `runnerPollDecision`.
+- I report sono storici dopo una modifica del progetto; nessun `passed` batch approva patch o scrive nella `lastRunnerEvidence` del singolo job. Stringhe IT/EN in i18n.ts; test planner/validator/UI statici + ADR0061.
