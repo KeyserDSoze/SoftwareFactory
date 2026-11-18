@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchRunnerExecutionPlan, validateRunnerExecutionPlan, afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { runnerEndpoint, runnerSourceFiles, submitRunnerJob, fetchRunnerJob,
   RunnerRequestError, runnerPollDecision, probeRunnerConnector } from "./runner";
@@ -182,5 +182,41 @@ describe("runner connector read-only onboarding probe (#87)", () => {
   it("does not classify network errors as a ready runner", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     expect((await probeRunnerConnector(url, key)).state).toBe("api-unavailable");
+  });
+});
+
+
+describe("verified runner PM job plan binding (#99)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const key = "a".repeat(40);
+  const endpoint = "https://runner.example.com";
+  const id = "123e4567-e89b-42d3-a456-426614174000";
+  const evidence = { version: 1, count: 3, head: "a".repeat(64) };
+  const report = { id, digest: "b".repeat(64), label: "test", state: "running" as const,
+    summary: "Worker started", acceptedAt: "", startedAt: "", finishedAt: null,
+    steps: ["dotnet-build"] as const, results: [], evidence };
+  const payload = { version: 1, jobId: id, digest: report.digest,
+    state: report.state, evidence: { count: 3, head: "a".repeat(64) },
+    tasks: [{ id: "dotnet-build", owner: "Runner test worker",
+      dependsOn: [], status: "waiting", exitCode: null }] };
+  it("reads only GET with Bearer and binds plan to digest/evidence head", async () => {
+    const spy = vi.fn().mockResolvedValue({ ok: true, json: async () => payload });
+    vi.stubGlobal("fetch", spy);
+    const got = await fetchRunnerExecutionPlan(endpoint, key, report);
+    expect(got.tasks[0].status).toBe("waiting");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe(endpoint + "/v1/jobs/" + id + "/plan");
+    expect(spy.mock.calls[0][1].headers.Authorization).toBe("Bearer " + key);
+    expect(spy.mock.calls[0][1].body).toBeUndefined();
+  });
+  it("rejects mismatched digest/head, untrusted step ids and false metadata", () => {
+    for (const candidate of [
+      { ...payload, digest: "0".repeat(64) },
+      { ...payload, jobId: "wrong" },
+      { ...payload, evidence: { count: 3, head: "c".repeat(64) } },
+      { ...payload, evidence: { count: 4, head: "a".repeat(64) } },
+      { ...payload, tasks: [{ ...payload.tasks[0], id: "shell" }] },
+      { ...payload, tasks: [] },
+    ]) expect(() => validateRunnerExecutionPlan(candidate, report)).toThrow();
   });
 });

@@ -783,3 +783,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - La receipt \`lastRunnerEvidence\` non è un report: mostrare solo "verifica necessaria", **mai "test passed"**. Un repair mantiene obbligatorio il test live dal Code Agent.
 - La UI non avvia Tester/PM o azioni remote. Nessuna ulteriore persistenza, secret, auto-apply o bypass dei gate.
 - Mantenere test regressivi \`domain/handoff.test.ts\` e ADR 0056. Orchestrazione persistente: #89 aperta.
+
+
+## Piano di esecuzione verificato lato runner (#99)
+
+- Il piano GET `/v1/jobs/<uuid>/plan` è derivato da report + journal già verificati, con gli stessi gate di auth/tenant e nessuna mutazione.
+- Non dedurre passed da receipt, da `report.state` soltanto o da step non registrati come `kind:step` nell'evidence hash-chain.
+- La SPA associa il piano a `id`, digest e `evidence.head/count` del report corrente o lo nasconde.
+- Nessun Docker socket nell'API; niente log/sorgenti/segreti nel piano. Non confondere con un orchestratore PM/server-side generale.
+- Conservare test runner `pm-job-plan.test.mjs`, client Vitest e ADR 0057; #89/#2 ancora aperte.

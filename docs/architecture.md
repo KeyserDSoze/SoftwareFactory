@@ -491,3 +491,13 @@ Un runner job inviato non fornisce un verdetto; il test è sempre da verificare
 in \`CodeAgentPanel\`, che conserva i gate di digest/review/riparazione. I task
 non sono eseguiti da questa vista. Per un coordinatore durevole con queue/lease
 serve una API/worker separata con nuova policy (epica #89, ADR 0056).
+
+
+### Runner PM plan evidence-bound (#99)
+
+`pm-job-plan.mjs` usa soltanto il risultato di `verifyJobEvidenceForRead`
+(report inode-bound e SHA-chain già convalidati) per ricavare la successione
+degli step di un job persistito. Il GET /v1/jobs/:id/plan usa lo stesso
+controllo auth/tenant del GET report; il nuovo piano non crea una coda.
+La SPA richiede corrispondenza digest/head per evitare mixing di snapshots.
+Il gate del Code Agent resta separato e immutato. ADR 0057.

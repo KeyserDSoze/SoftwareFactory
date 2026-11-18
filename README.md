@@ -583,3 +583,18 @@ sul codice corrente prima dell'approvazione. I gate Code Agent sono invariati.
 Task DAG persistenti sul server e coordinamento PM automatico restano in #89.
 [ADR 0056](adr/0056-checkpoint-derived-pm-handoff-board.md) ·
 [Issue #98](https://github.com/KeyserDSoze/SoftwareFactory/issues/98).
+
+
+## PM execution plan server-side (#99 — 18 novembre 2026)
+
+La API del runner dispone ora di `GET /v1/jobs/<uuid>/plan`, autenticata come il report.
+Il piano evidenzia gli step di test nell'ordine richiesto, la loro dipendenza,
+e solo le prove realmente registrate nel journal SHA-256. In Code Agent
+la vista è mostrata soltanto quando `id`, digest e head dell'evidence
+corrispondono al report appena recuperato; se mancano, il piano non viene
+presentato come verificato. Le fasi in coda non vengono spacciate per test avviati.
+
+La API non esegue task aggiuntivi e non possiede un PM autonomo. Il risultato è
+osservabile fino alla retention del job, non è un'attestazione indipendente o una
+schedulazione multi-agent. Vedi [ADR 0057](adr/0057-runner-verified-pm-execution-view.md),
+[issue #99](https://github.com/KeyserDSoze/SoftwareFactory/issues/99).

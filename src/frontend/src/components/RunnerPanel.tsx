@@ -8,8 +8,8 @@ import { planRepairRetest, verifyRepairRetestReceipt } from "../application/repa
 import { getRepairCheckpoint, prepareRepairRetest, repairPaths, syncRepairRetest, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
 import {
-  fetchRunnerJob, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
-  runnerPollDecision, verifyCurrentRunnerReport, type RunnerReport, type RunnerStep, type RunnerVerification,
+  fetchRunnerJob, fetchRunnerExecutionPlan, runnerSourceFiles, submitRunnerJob, runnerRequestDigest, runnerEndpoint,
+  runnerPollDecision, verifyCurrentRunnerReport, type RunnerExecutionPlan, type RunnerReport, type RunnerStep, type RunnerVerification,
 } from "../infrastructure/runner";
 
 type Props = {
@@ -33,6 +33,7 @@ const terminal = (state: string) => ["passed", "failed", "incomplete"].includes(
 export default function RunnerPanel({ project, settings, busy, onRunnerBound, onRepair, onNotice, onError, onRunnerActivity }: Props) {
   const [steps, setSteps] = useState<RunnerStep[]>(["dotnet-build", "web-build"]);
   const [report, setReport] = useState<RunnerReport | null>(null);
+  const [executionPlan, setExecutionPlan] = useState<RunnerExecutionPlan | null>(null);
   const [verification, setVerification] = useState<RunnerVerification | null>(null);
   const [pollNotice, setPollNotice] = useState<{
     kind: "retrying" | "paused" | "blocked"; detail: string;
@@ -64,6 +65,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
 
   useEffect(() => {
     setReport(null);
+    setExecutionPlan(null);
     setVerification(null);
     setPollNotice(null);
     if (!jobId || !endpoint || !secret) return;
@@ -77,6 +79,16 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         consecutiveFailures = 0;
         setPollNotice(null);
         setReport(next);
+        // A PM plan may be unavailable on older runners or during journal rename.
+        // It must never be shown unless bound to the same digest and evidence head.
+        try {
+          const linked = await fetchRunnerExecutionPlan(endpoint, secret, next, controller.signal);
+          if (disposed || controller.signal.aborted) return;
+          setExecutionPlan(linked);
+        } catch {
+          if (disposed || controller.signal.aborted) return;
+          setExecutionPlan(null);
+        }
         if (!terminal(next.state)) timer = setTimeout(() => void tick(), 2500);
       } catch (error) {
         if (disposed || controller.signal.aborted) return;
@@ -201,7 +213,7 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
         steps: [...selectedSteps], submittedAt: new Date().toISOString(),
         proposalId: pending?.id || null, revision: project.development?.revision ?? 0,
       };
-      setReport(null); setVerification(null);
+      setReport(null); setExecutionPlan(null); setVerification(null);
       onRunnerBound(binding);
       pendingSubmission.current = null;
       onNotice(retestPlan
@@ -291,6 +303,17 @@ export default function RunnerPanel({ project, settings, busy, onRunnerBound, on
           <span>{verification?.detail || "Verifica fingerprint e risultati in corso..."}</span>
         </div>
         <small>Digest snapshot: <code>{displayedReport.digest.slice(0, 20)}…</code> · Avviato: {displayedReport.startedAt || "in coda"}</small>
+        {executionPlan && executionPlan.jobId === displayedReport.id &&
+          executionPlan.evidence.head === displayedReport.evidence?.head &&
+          <details className="runner-step">
+            <summary><Activity size={15}/><strong>Piano PM del job (journal verificato)</strong>
+              <span>{executionPlan.evidence.count} checkpoint</span></summary>
+            <p>Dipendenze e risultati derivati dal journal del runner. Nessun PM o tester AI viene avviato automaticamente.</p>
+            <ol className="runner-plan-list">{executionPlan.tasks.map(task =>
+              <li key={task.id}><strong>{task.id}</strong><span>{task.status}</span>
+                <small>{task.dependsOn.length ? "Dopo: " + task.dependsOn.join(", ") : "Primo step"}</small></li>)}</ol>
+          </details>}
+        {!executionPlan && <p className="helper">Piano PM server non disponibile o non correlato: consulta il report verificato, senza dedurre un successo dal solo job.</p>}
         {displayedReport.preparation && <details className="runner-step">
           <summary>{displayedReport.preparation.state === "passed" ?
             <CheckCircle2 size={15} className="ok"/> : <ShieldAlert size={15} className="danger"/>}

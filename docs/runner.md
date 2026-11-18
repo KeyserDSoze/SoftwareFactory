@@ -1035,3 +1035,25 @@ node src/runner/scripts/host-reboot-audit.mjs after --env-file=/percorso/assolut
 La prima fase rifiuta Docker rootful, systemd user Docker non attivo, linger disabilitato, env non privata, container privilegiati/extra, rete host, socket nella API/Tunnel, API bind pubblica, bearer errato o readiness incompleta. Solo dopo i check crea RUNNER_DATA_DIR/.sf-reboot-baseline.v1.json con owner UID1000, permessi 0600, senza credenziali; O_EXCL non sovrascrive una baseline. La seconda fase richiede un boot ID kernel diverso dal valore precedente (massimo 7 giorni), controlla la stessa policy e ripete tutte le osservazioni, ma non avvia Docker e non cancella container. Per un nuovo ciclo, archivia e rimuovi manualmente la witness solo dopo controllo dell'operatore. Una receipt RUNNER_REBOOT_LOCAL_PASS non è firmata, non prova da sola che sia avvenuto un reboot genuino off-host e NON certifica DNS/TLS/Cloudflare Access.
 
 Dopo AFTER serve comunque provare realmente da un secondo browser/dispositivo l'URL HTTPS, Cloudflare Access e le preflight OPTIONS CORS del sito Pages, poi lanciare un job approvato e controllare il report. La CI esegue test di stato simulato, non può riavviare la VM dell'operatore. ADR0055, issue #96.
+
+
+## GET piano PM osservativo del singolo job (#99)
+
+L'endpoint autenticato `GET /v1/jobs/<uuid>/plan` richiede esattamente la stessa
+API key/tenant del GET report ed esegue la verifica della catena evidenze prima
+di produrre la risposta. Restituisce il `jobId`, digest SHA-256, `evidence.head`
+e `count`, stato complessivo e una lista di step allowlisted con dipendenza,
+owner (`Runner test worker` / preparazione npm), stato e solo exitCode.
+Non include stdout/stderr, command, file, payload o secret. 
+
+Un `passed` per step richiede il record journal `kind:step` corrispondente,
+exitCode 0, durata valida e assenza timeout; `running` nel job NON dimostra
+che lo step successivo sia iniziato. Step non eseguiti restano `waiting` o
+`not_executed`. Incoerenze con l'evidence restituiscono 409 (tenant mode 404
+per non esporre l'esistenza di job altrui), senza generare report alternativi.
+La UI mostra il piano solo quando la risposta coincide con il report fetch
+su `jobId`, digest e head/count dell'evidence corrente. Nessuna scrittura,
+enqueue, dispatch, shell o AI è associata a questa lettura.
+
+Il journal è locale e soggetto a retention, non è prova off-host né WORM;
+orchestrazione PM duratura multi-job in #89, rootless VM e isolamento in #2/#87.

@@ -5,6 +5,7 @@ import { ALLOWED_STEPS, MAX_REQUEST_BYTES, authenticate, validateRequest } from 
 import { portableEvidenceBundle, verifyJobEvidenceForRead } from "./evidence.mjs";
 import { readWorkerHeartbeatForHttp, readDockerExecutionReadinessForHttp } from "./heartbeat.mjs";
 import { admitRunnerJob } from "./admission.mjs";
+import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
@@ -168,7 +169,7 @@ export function createRunnerServer({
     if (req.method === "GET" && req.url === "/v1/capabilities") {
       send(200, { protocol: 1, steps: ALLOWED_STEPS, execution: "remote-docker", networkDefault: "none" }); return;
     }
-    if (req.method === "GET" && /^\/v1\/jobs\/[a-f0-9-]{36}(?:\/evidence)?$/.test(req.url || "")) {
+    if (req.method === "GET" && /^\/v1\/jobs\/[a-f0-9-]{36}(?:\/(?:evidence|plan))?$/.test(req.url || "")) {
       try {
         const id = req.url.split("/")[3];
         const verified = await verifyJobEvidenceForRead(dataDir, id);
@@ -184,13 +185,17 @@ export function createRunnerServer({
         }
         send(200, req.url.endsWith("/evidence")
           ? portableEvidenceBundle(verified)
-          : verified.report);
+          : req.url.endsWith("/plan")
+            ? projectVerifiedJobPlan(verified) : verified.report);
       } catch(e) {
         // In tenant mode, a corrupt foreign job must not become an existence
         // oracle. Report and evidence corruption still blocks all admissions.
         if (e.code === "EVIDENCE_INVALID")
           tenantMode ? send(404, { error: "not_found" })
             : send(409, { error: "evidence_invalid" });
+        else if (e.code === "PM_PLAN_INTEGRITY")
+          tenantMode ? send(404, { error: "not_found" })
+            : send(409, { error: "plan_integrity" });
         else if (e.code === "ENOENT") send(404, { error: "not_found" });
         else if (e.code === "TENANT_AUTH_REVOKED")
           send(401, { error: "unauthorized" });

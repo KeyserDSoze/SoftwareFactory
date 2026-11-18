@@ -21,6 +21,7 @@ export type RunnerReport = {
   summary: string; acceptedAt: string; startedAt: string | null; finishedAt: string | null;
   steps: RunnerStep[]; results: RunnerStepResult[];
   preparation?: RunnerStepResult | null;
+  evidence?: { version: number; count: number; head: string };
 };
 // A retry may return the existing job's current verified state. A receipt
 // alone never certifies that any build/test succeeded: fetch the full report.
@@ -106,6 +107,46 @@ export async function submitRunnerJob(baseUrl: string, key: string, label: strin
     headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({ label, files, steps }) });
 }
+/** Retained job PM plan: report + journal are verified by the server.
+ * Validate its binding to the SAME report the UI is currently displaying.
+ */
+export type RunnerExecutionPlan = {
+  version: 1; jobId: string; digest: string; state: RunnerReport["state"];
+  evidence: { count: number; head: string };
+  tasks: { id: RunnerStep | "npm-prepare"; owner: string;
+    dependsOn: string[]; status: "waiting" | "not_executed" | "passed" | "failed" | "incomplete";
+    exitCode: number | null }[];
+};
+export function validateRunnerExecutionPlan(value: unknown, report: RunnerReport): RunnerExecutionPlan {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Piano runner non verificabile.");
+  const p = value as RunnerExecutionPlan;
+  const validStep = (id: string) => ["dotnet-build","dotnet-test","web-build","web-test","playwright","npm-prepare"].includes(id);
+  if (p.version !== 1 || p.jobId !== report.id || p.digest !== report.digest ||
+      p.state !== report.state || !report.evidence || p.evidence?.head !== report.evidence.head ||
+      p.evidence?.count !== report.evidence.count || !/^[a-f0-9]{64}$/.test(p.evidence.head) ||
+      !Array.isArray(p.tasks) || p.tasks.length < report.steps.length ||
+      p.tasks.length > report.steps.length + 1 ||
+      p.tasks.some(t => !t || !validStep(t.id) ||
+        !["waiting","not_executed","passed","failed","incomplete"].includes(t.status) ||
+        typeof t.owner !== "string" || t.owner.length > 64 ||
+        !Array.isArray(t.dependsOn) || t.dependsOn.length > 1 ||
+        t.dependsOn.some(d => typeof d !== "string" || !validStep(d)) ||
+        (t.exitCode !== null && (!Number.isInteger(t.exitCode) || t.exitCode < 0 || t.exitCode > 255))) ||
+      new Set(p.tasks.map(t => t.id)).size !== p.tasks.length ||
+      JSON.stringify(p.tasks.filter(t => t.id !== "npm-prepare").map(t => t.id)) !==
+        JSON.stringify(report.steps))
+    throw new Error("Piano PM non correlato al report e al journal corrente.");
+  return p;
+}
+export async function fetchRunnerExecutionPlan(
+  endpoint: string, key: string, report: RunnerReport, signal?: AbortSignal,
+): Promise<RunnerExecutionPlan> {
+  if (!/^[a-f0-9-]{36}$/.test(report.id)) throw new Error("Runner job ID non valido.");
+  const value = await runnerRequest<unknown>(endpoint, key, "/v1/jobs/" + report.id + "/plan", { signal });
+  return validateRunnerExecutionPlan(value, report);
+}
+
 export async function fetchRunnerJob(baseUrl: string, key: string, id: string, signal?: AbortSignal) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Runner job ID non valido.");
   return runnerRequest<RunnerReport>(baseUrl, key, "/v1/jobs/" + id, { signal });

@@ -812,3 +812,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] PM scheduler persistente, DAG task per feature, allocazione ruoli, SLA/budget,
   esecuzione tester automatizzata con policy, recovery crash e evidenza runner live:
   rimangono nell'epica #89; non sono implementati nel browser.
+
+
+## Provenienza dei task di test del runner (#99)
+
+- [x] GET `/v1/jobs/:id/plan` autenticato: vista DAG per-step da journal
+  verificato, con dipendenze e stato eseguito/non eseguito.
+- [x] Niente passed senza record `step`, exitCode 0, durata valida e assenza timeout.
+  UI Code Agent lega il piano a digest e evidence head del report corrente.
+- [ ] Coordinatore persistente multi-job/feature/ruoli, autorizzazioni e budget,
+  replay/fencing distribuito e test VM reali rimangono #89/#2/#87.
