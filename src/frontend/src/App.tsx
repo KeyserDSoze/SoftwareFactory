@@ -8,6 +8,7 @@ import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
+import AgentHandoffBoard from "./components/AgentHandoffBoard";
 import BackgroundTaskToast, { type RunnerTaskActivity } from "./components/BackgroundTaskToast";
 import { fetchRunnerJob } from "./infrastructure/runner";
 import RunnerTelemetry from "./components/RunnerTelemetry";
@@ -868,6 +869,7 @@ export default function App() {
           <div className="toolbar"><div className="toolbar-info"><span className="status-dot" /> {busy ? "Elaborazione in corso: " + operation : completed + " su " + STAGES.length + " step terminati"}</div>
             <div className="button-group">{busy ? <button className="danger-button" onClick={pause}><Pause size={16} /> Interrompi</button> :
               <button className="primary" disabled={!next} onClick={() => { if (next) void execute(next.id, true); }}><Play size={16} /> {completed ? "Continua" : "Avvia workflow"}</button>}</div></div>
+          <AgentHandoffBoard project={project} />
           <div className="stage-layout"><div className="stage-list">{STAGES.map((s, i) => <button key={s.id} className={"stage-item " + (selectedStage === s.id ? "selected" : "")} onClick={() => { setSelectedStage(s.id); setEditingOutput(false); }}>
             <span className="stage-num">{String(i + 1).padStart(2, "0")}</span><div><strong>{s.label}</strong><small>{s.detail}</small></div><IconStatus status={project.stages[i].status} /></button>)}</div>
             <section className="panel stage-detail"><div className="panel-title"><div><span className="eyebrow">AGENT OUTPUT / {selectedStage.toUpperCase()}</span><h3>{STAGES.find(s => s.id === selectedStage)?.label}</h3></div><IconStatus status={current.status} /></div>

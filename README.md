@@ -564,3 +564,22 @@ Il packaging Release adesso emette `.sf-installer-source.json` con commit SHA40 
 ## #96 — Audit rootless prima e dopo il riavvio Linux (18 novembre 2026)
 
 La CLI operator-only src/runner/scripts/host-reboot-audit.mjs prova localmente il restart del connector con due passaggi. BEFORE richiede UID/EUID 1000, private env O_NOFOLLOW, preflight host/Compose, Docker user service active con linger, daemon rootless just-in-time, due container esatti API+worker running non privilegiati (API solo loopback senza socket, worker con il socket rootless) e readiness HTTP Bearer. Solo allora salva una witness locale 0600 senza token. AFTER richiede un **boot ID Linux differente** dal precedente e ripete tutti i gate; non avvia né arresta Docker e non cancella dati. L'opzione --require-tunnel aggiunge un terzo container Cloudflared running senza Docker socket; NON prova DNS/HTTPS/Cloudflare Access esterni. Modalità key-file/tenants richiedono private RUNNER_PROBE_BEARER; la witness è locale non firmata, non attestazione off-host. Test Node su stubs deterministici, non reboot VM reale. Guida docs/runner.md e ADR0055; issue #96, #87 resta aperta.
+
+
+## Handoff dei task della software house (#98 — 18 novembre 2026)
+
+Nella scheda **AI Factory** è visibile il nuovo **piano di handoff PM**: le sei
+fasi AI, la proposta di codice, la review indipendente, la verifica dei test e
+l'approvazione umana hanno responsabile, prerequisiti e stato derivato dai
+checkpoint esistenti. I blocchi, una patch obsoleta o una review respinta non
+vengono spacciati per attività completate. La vista non salva uno stato
+parallelo e segue il progetto selezionato dopo il reload.
+
+**Non è un orchestratore autonomo**: il browser non esegue nuovi ruoli,
+né il ruolo Tester attiva automaticamente il runner. Un job inviato vale solo
+come ricevuta e non come test passato; è necessario leggere e validare il report
+in Code Agent. Dopo un repair è sempre obbligatoria la verifica runtime
+sul codice corrente prima dell'approvazione. I gate Code Agent sono invariati.
+Task DAG persistenti sul server e coordinamento PM automatico restano in #89.
+[ADR 0056](adr/0056-checkpoint-derived-pm-handoff-board.md) ·
+[Issue #98](https://github.com/KeyserDSoze/SoftwareFactory/issues/98).

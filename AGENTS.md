@@ -774,3 +774,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Eseguire host-reboot-audit.mjs before|after solo in una VM Linux dedicata con UID/EUID1000, private env O_NOFOLLOW, rootless Docker e consent esplicito per il reboot dell'operatore. Il comando non avvia, arresta, cancella o ricrea container; solo before scrive una witness O_EXCL mode0600 nel data dir privato.
 - Gate obbligatori prima di qualsiasi receipt: preflight Compose e host, systemd user docker.service active, linger=yes, probe rootless JIT prima di ogni Docker ps/inspect, esattamente due container API+worker running non-privileged con label/network/progetto corretti, loopback API 127.0.0.1:8787, socket rootless soltanto nel worker, readiness HTTP Bearer con 401 anonimo e worker/execution status rootless. Con --require-tunnel richiedere un terzo container Cloudflared senza socket e senza host ports, MA NON dichiarare Access/DNS/HTTPS verificati.
 - AFTER legge witness con O_NOFOLLOW, controlla owner, nlink=1, permessi 0600, schema, profilo/servizi identici, freshness 7 giorni e boot UUID differente. Ricontrollare env drift e boot ID durante run; niente rollback distruttivo, niente log di segreti, firma, token o report di VM reale dalla CI rootful. I test Node mock non provano un reboot. ADR0055, #96.
+
+
+## Handoff PM derivato dai checkpoint (#98)
+
+- \`domain/handoff.ts\` proietta senza side effect sei stage più patch, review, test e consenso umano.
+- Una fase \`complete\` senza output o con predecessore non completato non apre le dipendenze.
+- La receipt \`lastRunnerEvidence\` non è un report: mostrare solo "verifica necessaria", **mai "test passed"**. Un repair mantiene obbligatorio il test live dal Code Agent.
+- La UI non avvia Tester/PM o azioni remote. Nessuna ulteriore persistenza, secret, auto-apply o bypass dei gate.
+- Mantenere test regressivi \`domain/handoff.test.ts\` e ADR 0056. Orchestrazione persistente: #89 aperta.

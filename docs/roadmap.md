@@ -799,3 +799,16 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 
 - CLI Linux UID1000 before/after: baseline private mode0600 O_EXCL, un nuovo boot UUID Linux entro 7 giorni, profilo e servizi invariati; nessuna Docker mutation. Requisiti: Docker user service active + linger, preflight host/Compose, daemon rootless JIT, container esatti non privileged, API loopback, socket solo worker, readiness Bearer.
 - --require-tunnel richiede Cloudflared running senza Docker socket, non Access/DNS/HTTPS raggiungibili. Test Node regressione per stesso boot, witness manomessa, symlink/hardlink, rootful, systemd down, socket/port/network/label spoof, auth ed env drift. CI Github rootful NON costituisce collaudo VM rootless fisica. Rimangono #87 M2, pairing/rotazione, reboot fisico e prova HTTPS/Access da Pages. ADR0055.
+
+
+## PM handoff DAG in AI Factory (#98 — 18/11/2026)
+
+- [x] Proiezione deterministica (senza scritture) del progetto su 10 task e dipendenze,
+  owner/ruolo, blocchi e prossimi handoff disponibili; UI visibile in AI Factory.
+- [x] Gate fail-closed per checkpoint completi senza output, dipendenze incomplete,
+  proposte obsolete, review respinta e repair che richiede nuova verifica runtime.
+- [x] Receipt test runner solo come invio da verificare; nessun esito "passed" sintetico.
+  Suite regressiva Vitest e ADR 0056.
+- [ ] PM scheduler persistente, DAG task per feature, allocazione ruoli, SLA/budget,
+  esecuzione tester automatizzata con policy, recovery crash e evidenza runner live:
+  rimangono nell'epica #89; non sono implementati nel browser.

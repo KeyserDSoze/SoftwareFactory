@@ -478,3 +478,16 @@ Il percorso originale del wizard avviava `host-setup start --tunnel` con `docker
 ### Acceptance osservativa post-reboot del runner connector (#96)
 
 La CLI operator-only host-reboot-audit.mjs salva una baseline privata dopo preflight Compose/host, systemd user Docker e linger, Docker rootless verificato per ogni ps/inspect, label/network/mount dei container runner-api e worker, e readiness autenticata. Dopo un reboot Linux differente la CLI ripete questi gate e rifiuta le witness scadute/alterate, ma non modifica Docker e non autentica la prova off-host. Cloudflared può essere richiesto espressamente con --require-tunnel, aggiungendo un container isolato senza socket, ma non certifica la connessione Cloudflare Access, DNS o HTTPS. La CI rootful esercita la logica via mock Node e non prova un reboot vero su VM dedicata (#87 M2, ADR0055).
+
+
+### Proiezione PM/handoff read-only (#98)
+
+\`domain/handoff.ts\` produce una topologia deterministica 6+4 da
+\`FactoryProject.stages\` e \`development.pending\`. La componente AI Factory
+mostra responsabilità di ruolo, prerequisiti e disponibilità senza scrivere
+un secondo task-store: lo stato dopo reload è ricalcolato, e un output mancante
+nega il completamento anche in presenza del flag \`complete\`.
+Un runner job inviato non fornisce un verdetto; il test è sempre da verificare
+in \`CodeAgentPanel\`, che conserva i gate di digest/review/riparazione. I task
+non sono eseguiti da questa vista. Per un coordinatore durevole con queue/lease
+serve una API/worker separata con nuova policy (epica #89, ADR 0056).

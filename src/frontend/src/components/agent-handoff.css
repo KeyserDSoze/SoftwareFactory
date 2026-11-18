@@ -1,0 +1,18 @@
+.handoff-panel{margin:18px 0 22px}
+.handoff-explainer{font-size:12px;line-height:1.7;color:#66758b;margin:0 0 13px}
+.handoff-next{font-size:12px;line-height:1.6;color:#435773;background:#f5f8fd;border:1px solid #e5ebf4;border-radius:8px;padding:10px 12px;margin:0 0 14px}
+.handoff-list{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:0}
+.handoff-item{border:1px solid #e6ecf4;background:#fff;border-radius:10px;padding:12px;min-width:0}
+.handoff-item-top{display:flex;align-items:flex-start;justify-content:space-between;gap:9px}
+.handoff-item-top>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.handoff-item-top strong{font-size:12px;line-height:1.4;color:#273957}
+.handoff-owner{font-size:10px;color:#71839b}
+.handoff-item p{font-size:11px;line-height:1.55;margin:8px 0;color:#526783;overflow-wrap:anywhere}
+.handoff-item small{display:block;font-size:10px;color:#7c8ba1}
+.handoff-state{font-size:10px;font-weight:750;line-height:1.35;padding:5px 8px;border-radius:8px;flex-shrink:0;background:#f0f3f7;color:#5a687c}
+.handoff-completed{background:#e8f7f1;color:#18705f}
+.handoff-ready{background:#e8f0ff;color:#2b5daa}
+.handoff-running{background:#e5f5ff;color:#276b8f}
+.handoff-failed,.handoff-changes_required{background:#fff0ec;color:#a03b31}
+.handoff-verification_required{background:#fff5e6;color:#906009}
+@media(max-width:750px){.handoff-list{grid-template-columns:1fr}.handoff-item-top{flex-wrap:wrap}}
