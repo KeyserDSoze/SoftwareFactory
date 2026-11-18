@@ -226,20 +226,19 @@ export async function registerWorkflow({ dataDir, input, tenantId = null,
     if (replay && sha({ label: replay.label, tasks: replay.tasks,
       ...(replay.enforced ? { enforced: true } : {}) }) !== signature)
       throw fault("WORKFLOW_CONFLICT");
+    const manifest = replay ?? { version: payload.enforced ? 2 : 1, id: randomUUID(),
+      createdAt: new Date().toISOString(), tenantId,
+      ...payload, idempotencyHash: fingerprint };
+    // Verify the ownership of EVERY job before exposing any workflow conflict
+    // detail. Otherwise a mixed-tenant manifest can turn a foreign job into
+    // a 409 oracle by colliding with an existing guarded workflow.
+    const plans = await verifiedTaskPlans(dataDir, manifest, tenantId);
     if (!replay && payload.enforced) {
       // Prevent two enforced DAGs from claiming the same job. Read EVERY
       // retained sibling before accepting a new immutable policy.
       if (records.some(record => record.enforced &&
         record.tasks.some(task => payload.tasks.some(t => t.jobId === task.jobId))))
         throw fault("WORKFLOW_CONFLICT");
-    }
-    const manifest = replay ?? { version: payload.enforced ? 2 : 1, id: randomUUID(),
-      createdAt: new Date().toISOString(), tenantId,
-      ...payload, idempotencyHash: fingerprint };
-    // Fail closed if a retained job disappeared/corrupted or changed digest,
-    // including on idempotent replay. No unverified workflow acknowledgment.
-    const plans = await verifiedTaskPlans(dataDir, manifest, tenantId);
-    if (!replay && payload.enforced) {
       for (const [i, task] of manifest.tasks.entries()) {
         if (plans[i].state !== "queued") throw fault("WORKFLOW_NOT_QUEUED");
         // Claim and manifest registration share the admission lock. A worker
