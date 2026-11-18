@@ -831,3 +831,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Manifest privati su volume condiviso, lock multi-API, owner tenant, recheck revoca, journal SHA per ogni job e `out_of_order`.
 - [x] Test Node per doppie API, replay/conflitto, file manomessi, evidenza non valida e isolamento tra tenant; ADR0058.
 - [ ] Scheduler vero per eseguire task in ordine con budget/approval/lease, azioni AI, retry e recovery su worker; VM rootless/cloudflare live e firma delle evidenze. Rimangono in #89/#2/#87.
+
+
+## Pages: retry senza doppio artifact (#101, 18/11/2026)
+
+- [x] Separazione dei job GitHub Actions build-and-upload e deploy, con needs esplicito e output pages_enabled.
+- [x] Test Node statico sul contratto e diagnosi: artefatto mancante nel primo deploy, due artefatti omonimi dopo retry dell'intero job.
+- [ ] Confermare deploy Pages sull'ultimo commit e chiudere la #101 solo con evidenza verde.

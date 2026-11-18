@@ -802,3 +802,10 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Per GET/POST richiedere Bearer come job, ownership tenant e ricontrollo della revoca; in legacy mode rifiutare job tenant e viceversa. Manifest O_NOFOLLOW, singolo link, uid 0600, hash locale e lock POSIX.
 - Non affermare prova off-host o scheduling durevole di ruoli AI; i manifest sono conservati a parte dalla retention dei report e diventano unverifiable se manca un job.
 - Test `src/runner/tests/workflows.test.mjs`, ADR 0058; #89/#2 rimangono aperte.
+
+
+## Retry GitHub Pages senza duplicati (#101)
+
+- Il workflow \`.github/workflows/pages.yml\` ha due job: build/upload e deploy; deploy dipende dall'output pages_enabled del build.
+- Retry di deploy **non deve ricaricare** un secondo artifact github-pages nello stesso run: deploy-pages@v4 fallisce con metadata duplicati.
+- Mantenere \`src/runner/tests/pages-workflow.test.mjs\`. Solo il workflow Actions reale su main conferma la pubblicazione.
