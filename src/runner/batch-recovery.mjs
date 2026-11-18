@@ -93,24 +93,28 @@ export async function reconcilePendingBatch({ dataDir, id, action }) {
     const pending = path.join(root, ".pending-" + id);
     const intent = await readIntent(pending, id);
     const stage = path.join(dataDir,"workflow-staging",id);
+    let manifest = null;
+    try { manifest = await readVerifiedWorkflowManifest(dataDir,id); }
+    catch(error) { if (error.code !== "ENOENT") throw blocked(); }
+    if (action === "abort" && manifest) throw blocked();
     const found = [];
     for (const job of intent.jobs) {
       const live = await existingDirectory(jobDirectory(dataDir,job.id));
       const staged = await existingDirectory(jobDirectory(stage,job.id));
-      if (live === staged) {
-        // Neither is possible only before the first job has been staged.
-        // An intent is published only AFTER all jobs have been staged.
-        throw blocked();
+      if (live && staged) throw blocked();
+      // Abort can be retried after crashing halfway through safe unlink.
+      // A missing job is acceptable ONLY when the manifest is absent:
+      // there is no new work to start and the marker still fences workers.
+      if (!live && !staged) {
+        if (action !== "abort") throw blocked();
+        found.push({ id: job.id, live: false, absent: true });
+        continue;
       }
       const location = live ? dataDir : stage;
       await assertJobUnstarted(location,job.id,job.digest,intent.tenantId);
-      found.push({ id: job.id, live });
+      found.push({ id: job.id, live, absent: false });
     }
-    let manifest = null;
-    try { manifest = await readVerifiedWorkflowManifest(dataDir,id); }
-    catch(error) { if (error.code !== "ENOENT") throw blocked(); }
     if (action === "abort") {
-      if (manifest) throw blocked(); // never delete jobs in a committed DAG
       // Preflight all journals and claims above, BEFORE touching any paths.
       for (const job of found) {
         if (job.live)
