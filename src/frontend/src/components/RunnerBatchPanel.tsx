@@ -3,6 +3,8 @@ import { Activity, Play, RefreshCw, ShieldAlert } from "lucide-react";
 import type { FactoryProject, FactorySettings } from "../domain/types";
 import { t, normalizeLocale } from "../i18n";
 import { planRunnerBatch, runnerBatchSignature } from "../application/runner-batch";
+import { proposePmTestPlan } from "../application/pm-test-planner";
+import type { PmTestProposal } from "../domain/pm-test-plan";
 import { fetchRunnerWorkflow, runnerEndpoint, runnerPollDecision,
   submitRunnerWorkflowBatch, type RunnerStep, type RunnerWorkflowResult } from "../infrastructure/runner";
 import { readSecret } from "../infrastructure/store";
@@ -35,6 +37,10 @@ export default function RunnerBatchPanel({
   const endpoint = settings.runnerEndpoint || "";
   const secret = readSecret("runner.key");
   const [consented, setConsented] = useState(false);
+  const [pmOffer, setPmOffer] = useState<{ key: string; proposal: PmTestProposal } | null>(null);
+  const [pmBusy, setPmBusy] = useState(false);
+  const [pmNotice, setPmNotice] = useState("");
+  const pmController = useRef<AbortController | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
   const [workflow, setWorkflow] = useState<RunnerWorkflowResult | null>(null);
@@ -45,10 +51,32 @@ export default function RunnerBatchPanel({
   const currentProject = useRef(project);
   currentProject.current = project;
   const storageKey = STORAGE_PREFIX + project.id;
+  const pmProfileId = settings.agentRoutes?.project_manager?.profileId ||
+    settings.assignments.implementation;
+  const pmProfile = settings.profiles.find(p => p.id === pmProfileId);
+  const pmRouteKey = JSON.stringify({
+    profileId: pmProfileId,
+    baseUrl: pmProfile?.baseUrl,
+    model: settings.agentRoutes?.project_manager?.modelId || pmProfile?.model,
+    thinking: settings.agentRoutes?.project_manager?.thinking || pmProfile?.reasoningEffort,
+  });
+  // An AI proposal is always scoped to the original project, chosen tests,
+  // configured model and revision; changing ANY dimension invalidates it.
+  const selectionKey = stamp(project) + ":" + selectedSteps.join(",") + ":" + pmRouteKey;
+  const selectionRef = useRef(selectionKey);
+  selectionRef.current = selectionKey;
+  const pmPlan = pmOffer?.key === selectionKey ? pmOffer.proposal : undefined;
   const planned = useMemo(() => {
-    try { return planRunnerBatch(project, selectedSteps); }
+    try { return planRunnerBatch(project, selectedSteps, pmPlan); }
     catch { return null; }
-  }, [project, selectedSteps]);
+  }, [project, selectedSteps, pmPlan]);
+
+  useEffect(() => {
+    pmController.current?.abort();
+    pmController.current = null;
+    setPmOffer(null); setPmNotice(""); setPmBusy(false); setConsented(false);
+    return () => { pmController.current?.abort(); };
+  }, [selectionKey]);
 
   // A session contains only a UUID, digests, endpoint, and project revision:
   // no token and no uploaded source code are persisted in the browser.
@@ -104,6 +132,35 @@ export default function RunnerBatchPanel({
     return () => { disposed = true; controller.abort(); if (timer) clearTimeout(timer); };
   }, [workflowId, endpoint, secret, pollRestart, locale]);
 
+  const requestPm = async () => {
+    if (pmBusy || busy || requesting || project.development?.pending ||
+        selectedSteps.length < 2 || selectedSteps.length > 5) return;
+    if (!window.confirm(t(locale, "batchPmConsent"))) return;
+    const controller = new AbortController();
+    pmController.current?.abort();
+    pmController.current = controller;
+    const key = selectionKey;
+    setPmBusy(true); setPmNotice("");
+    try {
+      const proposal = await proposePmTestPlan(project, settings, selectedSteps, controller.signal);
+      if (controller.signal.aborted || selectionRef.current !== key) return;
+      setPmOffer({ key, proposal });
+      setConsented(false); // A fresh plan always requires fresh operator consent.
+      setPmNotice(t(locale, "batchPmReady"));
+    } catch (error) {
+      if (!controller.signal.aborted && selectionRef.current === key) {
+        setPmOffer(null); setConsented(false);
+        setPmNotice(t(locale, "batchPmInvalid"));
+        onError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (pmController.current === controller) {
+        pmController.current = null;
+        setPmBusy(false);
+      }
+    }
+  };
+
   const submit = async () => {
     if (!planned || !consented || busy || requesting || !endpoint || !secret ||
         project.development?.pending) return;
@@ -153,13 +210,32 @@ export default function RunnerBatchPanel({
       {t(locale, "batchPendingPatch")}</p> : null}
     {!planned && !project.development?.pending &&
       <p className="helper">{t(locale, "batchNeedTwo")}</p>}
+    <div className="runner-batch-pm">
+      <p className="helper">{t(locale, "batchPmExplain")}</p>
+      <div className="runner-batch-actions">
+        <button type="button" className="secondary"
+          disabled={busy || requesting || pmBusy || !planned || Boolean(project.development?.pending)}
+          onClick={() => void requestPm()}>
+          {pmBusy ? <RefreshCw size={15} className="spinning"/> : <Activity size={15}/>}
+          {t(locale, pmBusy ? "batchPmBusy" : "batchPmGenerate")}
+        </button>
+        {pmPlan && <button type="button" className="secondary" disabled={busy || requesting || pmBusy}
+          onClick={() => { setPmOffer(null); setConsented(false); setPmNotice(""); }}>
+          {t(locale, "batchPmReset")}
+        </button>}
+      </div>
+      {pmNotice && <p className="runner-batch-notice" role="status">{pmNotice}</p>}
+    </div>
     {planned && <div className="runner-batch-preview">
       <strong>{t(locale, "batchPreview")}</strong>
+      {pmPlan && <p className="helper">{t(locale, "batchPmSummary")}: {pmPlan.summary}</p>}
       <small>{t(locale, "batchFiles")}: {Object.keys(planned.tasks[0].request.files).length}</small>
       <ol>{planned.tasks.map((task,i)=><li key={task.id}>
         <span><strong>{task.id}</strong> · {task.role}</span>
         <small>{i === 0 ? t(locale, "batchFirst") :
-          t(locale, "batchAfter") + ": " + task.dependsOn.join(", ")}</small>
+          task.dependsOn.length ? t(locale, "batchAfter") + ": " + task.dependsOn.join(", ") :
+          t(locale, "batchFirst")}</small>
+        {pmPlan && <small>{t(locale, "batchPmReason")}: {pmPlan.tasks.find(t => t.id === task.id)?.reason}</small>}
       </li>)}</ol>
     </div>}
     <label className="checkline runner-batch-consent">

@@ -25,6 +25,8 @@ describe("operator-gated batch UI (#104)", () => {
     expect(html).toContain("dotnet-test");
     expect(html).toContain("Autorizzo esplicitamente");
     expect(html).toContain("Invia batch protetto");
+    expect(html).toContain("Proponi DAG con Project Manager AI");
+    expect(html).toContain("L'operatore deve approvare separatamente");
     expect(html).toContain('type="checkbox"');
     expect(html).toMatch(/<button[^>]*disabled/);
     expect(html).not.toContain("github_pat_");
@@ -33,6 +35,8 @@ describe("operator-gated batch UI (#104)", () => {
     const en=render("en");
     expect(en).toContain("Verified multi-job test plan");
     expect(en).toContain("Submit guarded batch");
+    expect(en).toContain("Propose DAG with AI Project Manager");
+    expect(en).toContain("You must separately approve");
     const unsafe=render("en",true);
     expect(unsafe).toContain("A patch awaits review");
     expect(unsafe).toMatch(/<button[^>]*disabled/);

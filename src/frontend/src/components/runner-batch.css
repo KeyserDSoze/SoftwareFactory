@@ -17,3 +17,9 @@
 .runner-batch-actions button{display:flex;align-items:center;gap:6px}
 .runner-batch-notice{color:#925520;overflow-wrap:anywhere}
 @media(max-width:650px){.runner-batch-actions button{max-width:100%}.runner-batch>summary span{display:none}}
+
+.runner-batch-pm{margin:12px 14px;border:1px dashed #cedbea;border-radius:8px;padding:8px 0}
+.runner-batch-pm .helper{padding:0 12px;font-size:11px}
+.runner-batch-pm .runner-batch-notice{margin:8px 12px;font-size:11px}
+.runner-batch-pm .runner-batch-actions{margin:8px 12px}
+.runner-batch-preview>.helper{font-size:11px;overflow-wrap:anywhere;margin-top:9px}
