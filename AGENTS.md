@@ -840,3 +840,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Doppio consenso visibile (checkbox + confirm), nessun auto-submit da effects o polling. `submitRunnerWorkflowBatch` usa UUID stabile derivato dalla stessa firma dei digest per retry; memorizzare in `sessionStorage` soltanto UUID, signature hash, endpoint e revision tag, mai source/API key.
 - `validateRunnerWorkflowResult` è fail-closed su ID, v2/enforced, evidence head/count, owner e dipendenze topologiche. Se backend auth/integrity fallisce, cancellare il precedente report visualizzato e fermare polling; ritentare soltanto transient 408/429/5xx e network nei limiti di `runnerPollDecision`.
 - I report sono storici dopo una modifica del progetto; nessun `passed` batch approva patch o scrive nella `lastRunnerEvidence` del singolo job. Stringhe IT/EN in i18n.ts; test planner/validator/UI statici + ADR0061.
+
+
+## PM AI propone solo DAG, non esegue task (#106)
+
+- `pm-test-planner.ts` usa `resolveAgentRoute` per il ruolo `project_manager` e `aiComplete` con il modello e il thinking configurati, senza inviare workspace/credenziali, e senza dichiarare prove di esecuzione.
+- `validatePmTestProposal` è un gate **puro**: ogni test selezionato deve apparire esattamente una volta e solo uno, dipendenze precedenti, max 3, no campi extra, prerequisiti build/test e Playwright. Non si può delegare all'LLM la scelta di step, role, comandi o approvazioni.
+- `RunnerBatchPanel` richiede consenso separato prima di inviare metadata al modello e un'altra checkbox + dialog prima del POST batch; invalidare la proposta su test, progetto, revisione o routing modello cambiati, scartare risposte tardive/abortite.
+- Il batch execution server continua con workflow enforced e journal verificato #103/#104, senza toccare i gate di review/repair o le prove `lastRunnerEvidence`. Nessun PM autonomo persistente dichiarato; #89 resta aperta.
+- Conservare test `pm-test-plan.test.ts`, `pm-test-planner.test.ts`, `runner-batch.test.ts`, `RunnerBatchPanel.test.ts`, ADR 0062.

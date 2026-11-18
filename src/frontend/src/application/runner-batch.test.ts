@@ -41,3 +41,52 @@ describe("approved workspace to runner DAG planning (#104)", () => {
     expect(a).not.toBe(await runnerBatchSignature("https://runner.example.com",revision,plan));
   });
 });
+
+
+describe("human-selected set bound to AI PM proposed DAG (#106)", () => {
+  it("can use a valid parallel build proposal with deterministic roles and fan-in", async () => {
+    const { validatePmTestProposal } = await import("../domain/pm-test-plan");
+    const project=createProject();
+    project.config.description="An example web API with tests";
+    const chosen=["dotnet-build","dotnet-test","web-build","web-test","playwright"] as const;
+    const approved=validatePmTestProposal({
+      summary:"Build and test backend/frontend independently, then smoke",
+      tasks:[
+        {id:"web-build",dependsOn:[],reason:"Compile the web source"},
+        {id:"dotnet-build",dependsOn:[],reason:"Compile the backend source"},
+        {id:"web-test",dependsOn:["web-build"],reason:"Run the frontend unit tests"},
+        {id:"dotnet-test",dependsOn:["dotnet-build"],reason:"Run the backend unit tests"},
+        {id:"playwright",dependsOn:["web-test","dotnet-test"],reason:"End-to-end only after upstream verification"},
+      ],
+    },chosen);
+    const custom=planRunnerBatch(project,[...chosen],approved);
+    expect(custom.tasks.map(t=>t.id)).toEqual([
+      "web-build","dotnet-build","web-test","dotnet-test","playwright",
+    ]);
+    expect(custom.tasks.map(t=>t.role)).toEqual([
+      "devops_engineer","devops_engineer","tester","tester","tester",
+    ]);
+    expect(custom.tasks[4].dependsOn).toEqual(["web-test","dotnet-test"]);
+    const manual=planRunnerBatch(project,[...chosen]);
+    const a=await runnerBatchSignature("https://runner.example.com",project,custom);
+    const b=await runnerBatchSignature("https://runner.example.com",project,manual);
+    expect(a).not.toEqual(b);
+    expect(custom.tasks.every(t=>t.request.steps.length===1 && t.request.steps[0]===t.id)).toBe(true);
+  });
+  it("rejects a stale proposal if the operator changes the selection or a patch becomes pending", async () => {
+    const { validatePmTestProposal } = await import("../domain/pm-test-plan");
+    const project=createProject();
+    project.config.description="An example of a backend";
+    const approved=validatePmTestProposal({
+      summary:"Build before running backend tests",
+      tasks:[
+        {id:"dotnet-build",dependsOn:[],reason:"Compile the backend source"},
+        {id:"dotnet-test",dependsOn:["dotnet-build"],reason:"Run the backend test suite"},
+      ],
+    },["dotnet-build","dotnet-test"]);
+    expect(()=>planRunnerBatch(project,["dotnet-build","web-test"],approved)).toThrow();
+    project.development={revision:0,overrides:{},originals:{},history:[],
+      pending:{id:"waiting-review"} as never};
+    expect(()=>planRunnerBatch(project,["dotnet-build","dotnet-test"],approved)).toThrow();
+  });
+});

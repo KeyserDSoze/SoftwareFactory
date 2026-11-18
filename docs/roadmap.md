@@ -868,3 +868,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Fail closed client su identità, dipendenze, head/count, stale source e accesso revocato; retry solo per transport transient, conservazione session-only di UUID/digest non segreti.
 - [x] UI IT/EN centralizzata in i18n, CSS responsive e test Vitest planner/client. ADR0061.
 - [ ] UI multi-progetto/cloud oltre la singola sessione, orchestratore PM AI autorizzato, budget/tenant multi-host e VM rootless/Cloudflare reale restano nelle epic #89/#87/#2.
+
+
+## PM AI con proposta test DAG e doppio consenso (#106)
+
+- [x] Project Manager AI richiamato on-demand con profilo, modello e thinking del ruolo (#89); metadati limitati e test selezionati, nessun sorgente/credenziale.
+- [x] Gate JSON fail-closed: DAG topologico 2–5 task, test esattamente quelli scelti, predecessori obbligatori, ruoli deterministici, nessun esito di build/test inventato.
+- [x] UI IT/EN: prompt provider separatamente consentito, anteprima ragioni, possibilità di reset manuale, conferma runner distinta, invalidazione su mutazioni di snapshot/test/modello.
+- [x] Test Vitest di model routing/automatic thinking, parser e planner, invalidazione proposta, rendering IT/EN, runner journal invariato; ADR0062.
+- [ ] PM/Tester autonomi con task duraturi e budget token, quote per ruolo, leases multi-host, manual authorizations e audit, VM rootless Cloudflare reale: epiche #89/#2/#87.

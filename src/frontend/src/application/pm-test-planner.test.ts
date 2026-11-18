@@ -50,3 +50,26 @@ describe("role-routed PM model planning (#106)",()=>{
     await expect(proposePmTestPlan(project,settings,["dotnet-build","dotnet-test"])).rejects.toThrow();
   });
 });
+
+
+describe("PM model request cancel and fallback semantics (#106)",()=>{
+  afterEach(()=>vi.unstubAllGlobals());
+  it("passes AbortSignal through to provider and keeps automatic thinking omitted",async()=>{
+    vi.stubGlobal("sessionStorage",{getItem:()=>null});
+    const settings=structuredClone(DEFAULT_SETTINGS);
+    settings.profiles[0].model="fallback-model";
+    settings.agentRoutes={project_manager:{thinking:"automatic"}};
+    const project=createProject();
+    const signal=new AbortController().signal;
+    const spy=vi.fn(async (_url:string,req:RequestInit)=>({
+      ok:true,json:async()=>({choices:[{message:{content:response}}]}),
+    }));
+    vi.stubGlobal("fetch",spy);
+    await proposePmTestPlan(project,settings,["dotnet-build","dotnet-test"],signal);
+    const request=spy.mock.calls[0][1];
+    const body=JSON.parse(String(request.body));
+    expect(request.signal).toBe(signal);
+    expect(body.model).toBe("fallback-model");
+    expect(body).not.toHaveProperty("reasoning_effort");
+  });
+});
