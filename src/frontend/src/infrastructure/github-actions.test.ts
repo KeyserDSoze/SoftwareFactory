@@ -99,7 +99,7 @@ describe("PAT-only GitHub Actions test backend", () => {
     for (const wrong of unrelated) {
       expect(() => verifyGithubActionReport(report(), { ...receipt, runId: 456 }, wrong)).toThrow(/non correlato/);
       await expect(loadGithubActionReport(git, token, { ...receipt, runId: 456 }, wrong)).rejects.toThrow(/non correlato/);
-      expect(() => githubActionRunUrl(receipt, wrong)).toThrow(/non correlato/);
+      expect(() => githubActionRunUrl({ ...receipt, runId: 456 }, wrong)).toThrow(/non correlato/);
     }
     await expect(loadGithubActionReport({ ...git, repo: "other" }, token, receipt, run))
       .rejects.toThrow(/Repository o branch diversi/);
