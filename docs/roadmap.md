@@ -856,3 +856,6 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] CLI offline `batch-reconcile` per abortire un batch non committed con job mai avviati oppure finalizzare un manifest già committed, senza perdere prove; test su interruzione tra publish, marker alterato, cleanup parziale e claim attiva.
 - [x] SDK browser `submitRunnerWorkflowBatch` con consenso e retry UUID; ADR 0060, README/AGENTS e test Node/Vitest.
 - [ ] PM AI autonoma con quote di token/costo, gestione multi-host/lease/consenso avanzato, deploy VM Linux rootless+Cloudflare e acceptance off-host rimangono nelle #89/#87/#2.
+
+
+- [x] Recovery del pre-marker tramite `batch-reconcile --discard-stage`, che rifiuta in modo verificato manifest, marker o job già published con lo stesso ID. Test Node di cleanup e fail-closed.

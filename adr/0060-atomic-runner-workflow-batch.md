@@ -40,3 +40,13 @@ viene rimosso automaticamente: l'operatore deve prima fermare i processi.
 Questo protocollo esegue solo test richiesti; non è un PM AI autonomo, non
 applica patch, non attesta rootless Docker/Cloudflare su host reale.
 Le epic #89/#2/#87 mantengono scope autonomo e acceptance on-host.
+
+
+
+## Recupero pre-marker aggiuntivo
+
+Per lo staging orfano creato prima di .pending-UUID, il tool host-only
+supporta anche discard-stage. Può eliminare i file mai pubblicati solo in
+assenza di manifest, marker e ID job già apparsi in jobs/. Un ID sovrapposto
+o un file inatteso blocca la pulizia per evitare cancellazioni di lavoro live.
+Questo non è un'autorità automatica di riparazione o un batch auto-retry.

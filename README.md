@@ -646,3 +646,7 @@ npm run batch-reconcile -- --data-dir /absolute/runner/data --batch-id UUID --ab
 ```
 
 Il comando ricontrolla UID, permessi, marker, digest, claim e journal; rifiuta di eliminare job avviati, di finalizzare un manifest mancante o di abortire uno già committed. Se un crash ha lasciato `.admission`, un amministratore deve prima arrestare i processi e verificare manualmente il lock; **mai** cancellarlo durante lavoro attivo. Staging abbandonato *prima* del marker non è eseguibile e richiede pulizia amministrativa separata. Non c'è auto-recovery silenziosa e non è attestazione off-host. Vedi [ADR 0060](adr/0060-atomic-runner-workflow-batch.md) e [#103](https://github.com/KeyserDSoze/SoftwareFactory/issues/103).
+
+
+### Recupero di staging non pubblicato
+Se un crash avviene **prima** della pubblicazione del marker, nessun job del batch è mai diventato eseguibile. Il comando offline `npm run batch-reconcile -- --data-dir /absolute/runner/data --batch-id UUID --discard-stage` elimina solo lo staging incompleto; rifiuta l'operazione se trova un manifest, un marker o un job con lo stesso UUID già pubblicato in `jobs/`. Ferma comunque API e worker prima della manutenzione; non usare `--discard-stage` per bypassare un marker pendente.

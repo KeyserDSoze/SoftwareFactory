@@ -828,3 +828,6 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Il recovery è SOLO host locale con API/worker fermati, `npm run batch-reconcile -- --data-dir ABS --batch-id UUID --abort|--finalize`; `abort` rifiuta manifest presente o job avviato/claim, `finalize` richiede manifest valido e tutti i job queued.
 - Su errore di recovery conservare marker e prove per analisi; non trasformare errori infrastrutturali in test failed né eliminare automaticamente directory o journal. Lock POSIX `.admission` non va liberato per età.
 - Mantenere test `batch-workflows.test.mjs`, `batch-recovery.test.mjs`, Vitest SDK e ADR 0060. L'API non espone reconcile e non esegue LLM/apply. Rootless VM reale e PM AI autonomo restano nelle #87/#2/#89.
+
+
+- Per un crash **prima** del marker, il tool locale supporta `--discard-stage`: rifiuta manifest, marker e job live coincidenti; lo staging non è mai visto dal worker. Aggiungere/tenere test di non-deletion in `batch-recovery.test.mjs`.
