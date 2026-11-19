@@ -190,7 +190,7 @@ test("forged report digest, journal head, count, step and unauthorized roles fai
     }
     assert.equal((await f.verify(0,id,lease.body.leaseId,job,{},rootKey)).status,401);
     assert.equal((await f.verify(0,id,lease.body.leaseId,job,{},reviewerKey)).status,403);
-    assert.equal((await f.verify(0,id,lease.body.leaseId,job,{},wrongRoleKey)).status,404);
+    assert.equal((await f.verify(0,id,lease.body.leaseId,job,{},wrongRoleKey)).status,403);
   }finally{await f.close();}
 });
 test("old job predating claim, stale lease and no reused proof between handoffs",async()=>{
