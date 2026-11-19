@@ -469,8 +469,7 @@ export function createRunnerServer({
         else if (error.code==="HANDOFF_TEST_FORBIDDEN")
           send(403,{error:"actor_scope_denied"});
         else if (error.code==="HANDOFF_NOT_FOUND" ||
-            error.code==="HANDOFF_INTEGRITY" ||
-            error.code==="HANDOFF_TEST_EVIDENCE")
+            error.code==="HANDOFF_INTEGRITY")
           send(404,{error:"not_found"});
         else if (error.code==="HANDOFF_TEST_EVIDENCE")
           send(409,{error:"test_evidence_invalid"});
