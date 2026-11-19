@@ -253,26 +253,37 @@ function project(record) {
       const reviewSource=reviewSourceSnapshot(record,leases,task,reviewContext);
       const sourceConflict=reviewSource?.status==="conflicting_tested_sources";
       const pending=lease?.submission && !lease.approved && active;
-      const reviewPending=lease?.reviewSubmission && !lease.reviewApproved && active;
+      const reviewPending=lease?.reviewSubmission && !lease.reviewApproved &&
+        !lease.reviewRejected && active;
       return {
         ...task, state:lease?.testVerified ? "runner_verified_test" :
           lease?.reviewApproved ? "human_approved_review" :
           lease?.approved ? "human_approved_checkpoint" :
           (!dependenciesApproved || sourceConflict) ? "blocked" :
+          lease?.reviewRejected ? "review_changes_requested" :
           active ? (reviewPending ? "review_submitted" :
             pending ? "awaiting_human_approval" : "leased") :
           (lease?.attempts ?? 0) >= task.maxAttempts ? "attempts_exhausted" : "ready",
         attempts:lease?.attempts ?? 0,
         fencingVersion:lease?.generation ?? 0,
         leasedUntil:active ? lease.expiresAt : null,
-        submissionId:reviewPending ? lease.reviewSubmission.id :
+        submissionId:reviewPending || lease?.reviewRejected ?
+          lease.reviewSubmission.id :
           pending ? lease.submission.id : null,
-        artifactDigest:lease?.reviewApproved || reviewPending ?
-          lease.reviewSubmission.digest :
+        artifactDigest:lease?.reviewApproved || reviewPending ||
+          lease?.reviewRejected ? lease.reviewSubmission.digest :
           lease?.approved || pending ? lease.submission.digest : null,
         reportedUnits:lease?.approved ? lease.submission.reportedUnits : null,
         approvedBy:lease?.reviewApproved ? lease.reviewApprovedBy :
           lease?.approved ? lease.approvedBy : null,
+        reviewRejection:lease?.lastReviewRejection ? {
+          submissionId:lease.lastReviewRejection.id,
+          artifactDigest:lease.lastReviewRejection.digest,
+          sourceFingerprint:lease.lastReviewRejection.sourceFingerprint,
+          rejectedBy:lease.lastReviewRejection.actorId,
+          decision:"changes_requested",artifactMode:REVIEW_ARTIFACT_MODE,
+        } : null,
+        reviewRejectionCount:lease?.reviewRejectionCount ?? 0,
         reviewApproval:lease?.reviewApproved ? {
           submissionId:lease.reviewSubmission.id,
           artifactDigest:lease.reviewSubmission.digest,
@@ -290,6 +301,7 @@ function project(record) {
         reviewContext,reviewSource,
         evidence:lease?.testVerified ? "verified_runner_journal" :
           lease?.reviewApproved ? "human_review_attestation" :
+          lease?.reviewRejected ? "human_review_rejection" :
           lease?.approved ? "human_approved_digest" : "not_started",
       };
     }),
@@ -358,6 +370,8 @@ function verifyLeaseHistory(record) {
     actorId:null,at:null,claimAt:null,submission:null,
     approved:false,approvedBy:null,testVerified:null,
     reviewSubmission:null,reviewApproved:false,reviewApprovedBy:null,
+    reviewRejected:false,reviewRejectedBy:null,
+    lastReviewRejection:null,reviewRejectionCount:0,
   }]));
   if (!Object.hasOwn(record,"events")) return map;
   if (!Array.isArray(record.events) || record.events.length < 1 ||
@@ -367,7 +381,8 @@ function verifyLeaseHistory(record) {
   for (const [i,event] of record.events.entries()) {
     const isCheckpoint=event?.kind==="submit" || event?.kind==="approve";
     const isTechnical=event?.kind==="test_verified";
-    const isReview=event?.kind==="review_submit" || event?.kind==="review_approve";
+    const isReview=event?.kind==="review_submit" ||
+      event?.kind==="review_approve" || event?.kind==="review_reject";
     const allowedFields=["sequence","previousHash","kind","at","taskId",
       "actorId","generation","leaseId","expiresAt","hash",
       ...(isCheckpoint?["submissionId","artifactDigest","reportedUnits"]:[]),
@@ -375,11 +390,12 @@ function verifyLeaseHistory(record) {
         "jobCount","step"]:[]),
       ...(isReview?["submissionId","artifactDigest","sourceFingerprint"]:[]),
       ...(event?.kind==="review_approve"?["attestation"]:[]),
+      ...(event?.kind==="review_reject"?["decision"]:[]),
       ...(isReview && Object.hasOwn(event,"artifactMode")?["artifactMode"]:[])];
     if (!exact(event,allowedFields) ||
         event.sequence!==i+1 || event.previousHash!==head ||
         !["claim","renew","release","submit","approve","test_verified",
-          "review_submit","review_approve"].includes(event.kind) ||
+          "review_submit","review_approve","review_reject"].includes(event.kind) ||
         typeof event.at!=="string" ||
         !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at) ||
         !Number.isFinite(Date.parse(event.at)) ||
@@ -403,12 +419,16 @@ function verifyLeaseHistory(record) {
           Object.hasOwn(event,"artifactMode") &&
             event.artifactMode!==REVIEW_ARTIFACT_MODE) ||
         event.kind==="review_approve" &&
-          event.attestation!=="manual_inspection")
+          event.attestation!=="manual_inspection" ||
+        event.kind==="review_reject" &&
+          (event.decision!=="changes_requested" ||
+            event.artifactMode!==REVIEW_ARTIFACT_MODE))
       throw issue("HANDOFF_INTEGRITY");
     const task=record.tasks.find(task=>task.id===event.taskId);
     const state=map.get(event.taskId);
     if (!task || !state ||
-        (event.kind==="approve" || event.kind==="review_approve"
+        (event.kind==="approve" || event.kind==="review_approve" ||
+          event.kind==="review_reject"
           ? (!ACTOR.test(event.actorId) || event.actorId===task.owner)
           : task.owner!==event.actorId) ||
         hash(Object.fromEntries(Object.entries(event).filter(([k])=>k!=="hash")))!==event.hash)
@@ -433,6 +453,8 @@ function verifyLeaseHistory(record) {
       state.claimAt=event.at;
       state.submission=null;
       state.reviewSubmission=null;
+      state.reviewRejected=false;
+      state.reviewRejectedBy=null;
     } else if (event.kind==="renew") {
       if (!state.active || state.approved || state.testVerified || state.reviewApproved ||
           state.generation!==event.generation ||
@@ -481,11 +503,12 @@ function verifyLeaseHistory(record) {
       state.reviewSubmission={id:event.submissionId,
         digest:event.artifactDigest,sourceFingerprint:event.sourceFingerprint,
         mode:event.artifactMode};
-    } else if (event.kind==="review_approve") {
+    } else if (event.kind==="review_approve" ||
+        event.kind==="review_reject") {
       if (task.role!=="code_reviewer" || !state.active ||
           state.approved || state.testVerified || state.reviewApproved ||
-          !state.reviewSubmission || state.submission ||
-          state.generation!==event.generation ||
+          state.reviewRejected || !state.reviewSubmission ||
+          state.submission || state.generation!==event.generation ||
           state.leaseId!==event.leaseId ||
           at>=Date.parse(state.expiresAt) ||
           expiration!==Date.parse(state.expiresAt) ||
@@ -495,8 +518,18 @@ function verifyLeaseHistory(record) {
           state.reviewSubmission.mode!==event.artifactMode)
         throw issue("HANDOFF_INTEGRITY");
       state.active=false;
-      state.reviewApproved=true;
-      state.reviewApprovedBy=event.actorId;
+      if (event.kind==="review_approve") {
+        state.reviewApproved=true;
+        state.reviewApprovedBy=event.actorId;
+      } else {
+        state.reviewRejected=true;
+        state.reviewRejectedBy=event.actorId;
+        state.reviewRejectionCount++;
+        state.lastReviewRejection={
+          id:event.submissionId,digest:event.artifactDigest,
+          sourceFingerprint:event.sourceFingerprint,actorId:event.actorId,
+        };
+      }
     } else if (event.kind==="submit") {
       if (task.role!=="project_manager" || !state.active || state.approved ||
           state.submission || state.generation!==event.generation ||
@@ -841,7 +874,9 @@ async function verifyReviewBindings(dataDir,record) {
         sourceFingerprint:source.fingerprint,
         digest:state.reviewSubmission.digest,
       });
-      if(state.reviewApproved && stored.document.recommendation!=="approve")
+      if(state.reviewApproved && stored.document.recommendation!=="approve" ||
+          state.reviewRejected &&
+            stored.document.recommendation!=="changes_requested")
         throw issue("HANDOFF_REVIEW_EVIDENCE");
     }
   }
@@ -942,13 +977,17 @@ function reviewRequest(input) {
     "artifactDigest","sourceFingerprint"];
   const submit=exact(input,[...base,"leaseId"]);
   const approve=exact(input,[...base,"attestation"]);
-  if (!(submit||approve) ||
-      (input.action==="submit" ? !submit : input.action==="approve" ? !approve : true) ||
+  const reject=exact(input,[...base,"decision"]);
+  if (!(submit||approve||reject) ||
+      (input.action==="submit" ? !submit :
+        input.action==="approve" ? !approve :
+        input.action==="reject" ? !reject : true) ||
       !UUID.test(input.handoffId) || !TASK.test(input.taskId) ||
       !UUID.test(input.submissionId) || !SHA.test(input.artifactDigest) ||
       !SHA.test(input.sourceFingerprint) ||
       submit && !UUID.test(input.leaseId) ||
-      approve && input.attestation!=="manual_inspection")
+      approve && input.attestation!=="manual_inspection" ||
+      reject && input.decision!=="changes_requested")
     throw issue("HANDOFF_REVIEW_INVALID");
   return input;
 }
@@ -997,8 +1036,12 @@ export async function mutateAgentTaskReview({
       version:1,handoffId:record.id,taskId:task.id,action:input.action,
       submissionId:input.submissionId,artifactDigest:input.artifactDigest,
       sourceFingerprint:input.sourceFingerprint,generation:state.generation,
-      created,state:input.action==="submit"?"review_submitted":"human_approved_review",
-      evidence:input.action==="submit"?"not_started":"human_review_attestation",
+      created,state:input.action==="submit"?"review_submitted" :
+        input.action==="approve"?"human_approved_review" :
+          "review_changes_requested",
+      evidence:input.action==="submit"?"not_started" :
+        input.action==="approve"?"human_review_attestation" :
+          "human_review_rejection",
       ...(proofMode===REVIEW_ARTIFACT_MODE ?
         {artifactMode:REVIEW_ARTIFACT_MODE}:{}),
     });
@@ -1011,10 +1054,16 @@ export async function mutateAgentTaskReview({
         state.reviewApprovedBy===actor.id) {
       await reauthorize?.(); return reply(false);
     }
-    if (state.reviewApproved || state.approved || state.testVerified ||
+    if (input.action==="reject" && same && state.reviewRejected &&
+        state.reviewRejectedBy===actor.id) {
+      await reauthorize?.(); return reply(false);
+    }
+    if (state.reviewApproved || state.reviewRejected ||
+        state.approved || state.testVerified ||
         record.events?.length>=MAX_LEASE_EVENTS)
-      throw issue(state.reviewApproved || state.approved || state.testVerified ?
-        "HANDOFF_REVIEW_CONFLICT":"HANDOFF_LEASE_CAPACITY");
+      throw issue(state.reviewApproved || state.reviewRejected ||
+        state.approved || state.testVerified ?
+          "HANDOFF_REVIEW_CONFLICT":"HANDOFF_LEASE_CAPACITY");
     if (!state.active || Date.parse(state.expiresAt)<=now ||
         state.at && now<Date.parse(state.at))
       throw issue("HANDOFF_LEASE_STALE");
@@ -1024,6 +1073,8 @@ export async function mutateAgentTaskReview({
         throw issue("HANDOFF_REVIEW_CONFLICT");
     } else if (!same || !state.reviewSubmission || state.submission)
       throw issue("HANDOFF_REVIEW_CONFLICT");
+    if(input.action==="reject" && proofMode!==REVIEW_ARTIFACT_MODE)
+      throw issue("HANDOFF_REVIEW_CONFLICT");
     // New submits always require a server-computed digest from an immutable
     // staged report. Pre-#116 journal entries stay readable and approvable
     // as legacy *manual digest only*, never upgraded to stored evidence.
@@ -1032,7 +1083,9 @@ export async function mutateAgentTaskReview({
       // A report requesting changes cannot silently authorize downstream.
       // Reviewer must resolve findings and submit a new fenced generation.
       if(input.action==="approve" &&
-          artifact.document.recommendation!=="approve")
+          artifact.document.recommendation!=="approve" ||
+          input.action==="reject" &&
+            artifact.document.recommendation!=="changes_requested")
         throw issue("HANDOFF_REVIEW_CONFLICT");
     }
     const commitNow=nowMs();
@@ -1043,7 +1096,8 @@ export async function mutateAgentTaskReview({
     const payload={
       sequence:(record.events?.length??0)+1,
       previousHash:record.head??GENESIS,
-      kind:input.action==="submit"?"review_submit":"review_approve",
+      kind:input.action==="submit"?"review_submit" :
+        input.action==="approve"?"review_approve":"review_reject",
       at,taskId:task.id,actorId:actor.id,
       generation:state.generation,leaseId:state.leaseId,
       expiresAt:state.expiresAt,submissionId:input.submissionId,
@@ -1052,6 +1106,7 @@ export async function mutateAgentTaskReview({
       ...(proofMode===REVIEW_ARTIFACT_MODE ?
         {artifactMode:REVIEW_ARTIFACT_MODE}:{}),
       ...(input.action==="approve"?{attestation:"manual_inspection"}:{}),
+      ...(input.action==="reject"?{decision:"changes_requested"}:{}),
     };
     const event={...payload,hash:hash(payload)};
     const withoutHash={...record,events:[...(record.events??[]),event],
@@ -1068,15 +1123,19 @@ export async function mutateAgentTaskReview({
     if(proofMode===REVIEW_ARTIFACT_MODE) {
       const artifact=await verifyReviewArtifactLink(dataDir,proofLink);
       if(input.action==="approve" &&
-          artifact.document.recommendation!=="approve")
+          artifact.document.recommendation!=="approve" ||
+          input.action==="reject" &&
+            artifact.document.recommendation!=="changes_requested")
         throw issue("HANDOFF_REVIEW_CONFLICT");
     }
     await atomicWrite(filePath(dataDir,record.id),next);
     const checked=await readManifest(dataDir,record.id);
     const committed=verifyLeaseHistory(checked).get(task.id);
     if (input.action==="submit" ?
-        !committed.reviewSubmission || committed.reviewApproved :
-        !committed.reviewApproved)
+        !committed.reviewSubmission || committed.reviewApproved ||
+          committed.reviewRejected :
+        input.action==="approve" ? !committed.reviewApproved :
+          !committed.reviewRejected)
       throw issue("HANDOFF_INTEGRITY");
     return reply(true);
   },waitMs);
