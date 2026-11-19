@@ -623,3 +623,144 @@ export async function mutateAgentTaskCheckpoint({
     return response(true);
   },waitMs);
 }
+
+
+/** A local successful Docker job, not an AI actor claim or a signed off-host
+ * attestation. Rechecked on EVERY retained handoff read (and thus on claim).
+ */
+async function verifyTechnicalJob(dataDir,proof,task,tenantId,claimAt) {
+  try {
+    const verified=await verifyJobEvidenceForRead(dataDir,proof.jobId);
+    const report=verified.report,plan=projectVerifiedJobPlan(verified);
+    const time=value=>typeof value==="string" &&
+      /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) &&
+      Number.isFinite(Date.parse(value)) &&
+      new Date(value).toISOString()===value;
+    const matched=plan.tasks.filter(t=>t.id===proof.step);
+    if (report.id!==proof.jobId ||
+        report.digest!==proof.jobDigest ||
+        verified.head!==proof.jobHead ||
+        verified.entries.length!==proof.jobCount ||
+        (report.tenantId??null)!==tenantId ||
+        report.state!=="passed" || plan.state!=="passed" ||
+        verified.entries.at(-1)?.kind!=="finished" ||
+        !TEST_STEPS.has(proof.step) || task.role!=="tester" ||
+        matched.length!==1 || matched[0].status!=="passed" ||
+        !plan.tasks.every(t=>t.status==="passed") ||
+        !time(report.acceptedAt) || !time(report.startedAt) ||
+        !time(report.finishedAt) || !time(claimAt) || !time(proof.at) ||
+        Date.parse(report.acceptedAt)<=Date.parse(claimAt) ||
+        Date.parse(report.startedAt)<Date.parse(report.acceptedAt) ||
+        Date.parse(report.finishedAt)<Date.parse(report.startedAt) ||
+        Date.parse(report.finishedAt)>Date.parse(proof.at))
+      throw issue("HANDOFF_TEST_EVIDENCE");
+    return verified;
+  } catch { throw issue("HANDOFF_TEST_EVIDENCE"); }
+}
+async function verifyTechnicalProofs(dataDir,record) {
+  const states=verifyLeaseHistory(record);
+  for (const task of record.tasks) {
+    const state=states.get(task.id);
+    if (state.testVerified)
+      await verifyTechnicalJob(dataDir,state.testVerified,task,
+        record.tenantId,state.claimAt);
+  }
+}
+function testVerificationRequest(input) {
+  if (!exact(input,["handoffId","taskId","leaseId","submissionId",
+      "jobId","jobDigest","jobHead","jobCount","step"]) ||
+      !UUID.test(input.handoffId) || !TASK.test(input.taskId) ||
+      !UUID.test(input.leaseId) || !UUID.test(input.submissionId) ||
+      !UUID.test(input.jobId) || !SHA.test(input.jobDigest) ||
+      !SHA.test(input.jobHead) || !Number.isInteger(input.jobCount) ||
+      input.jobCount<1 || input.jobCount>48 || !TEST_STEPS.has(input.step))
+    throw issue("HANDOFF_TEST_INVALID");
+  return input;
+}
+/** An actor may reference an existing test job, but cannot declare its
+ * verdict. Only the worker's inode-checked SHA chain can grant completion.
+ */
+export async function verifyAgentTestTask({
+  dataDir,request,actor,reauthorize,waitMs=1500,
+  nowMs=Date.now, // deterministic test seam, NEVER accepted from HTTP input
+}) {
+  const input=testVerificationRequest(request);
+  if (!actor || actor.role!=="tester" || !ACTOR.test(actor.id) ||
+      !(actor.tenantId===null || typeof actor.tenantId==="string" &&
+        TENANT.test(actor.tenantId)))
+    throw issue("HANDOFF_TEST_FORBIDDEN");
+  return withAdmissionLock(dataDir,async()=>{
+    await reauthorize?.();
+    await trustedDirectory(directory(dataDir));
+    let record;
+    try { record=await readManifest(dataDir,input.handoffId); }
+    catch(error) {
+      if (error.code==="ENOENT") throw issue("HANDOFF_NOT_FOUND");
+      throw error;
+    }
+    const task=record.tasks.find(t=>t.id===input.taskId);
+    if (record.tenantId!==actor.tenantId || !task ||
+        task.role!=="tester" || task.owner!==actor.id)
+      throw issue("HANDOFF_NOT_FOUND");
+    const states=verifyLeaseHistory(record),state=states.get(task.id);
+    const now=nowMs(),at=new Date(now).toISOString();
+    const same=state.testVerified &&
+      state.testVerified.id===input.submissionId &&
+      state.testVerified.jobId===input.jobId &&
+      state.testVerified.jobDigest===input.jobDigest &&
+      state.testVerified.jobHead===input.jobHead &&
+      state.testVerified.jobCount===input.jobCount &&
+      state.testVerified.step===input.step &&
+      state.leaseId===input.leaseId;
+    const reply=created=>({
+      version:1,handoffId:record.id,taskId:task.id,
+      submissionId:input.submissionId,jobId:input.jobId,
+      generation:state.generation,created,state:"runner_verified_test",
+      evidence:{digest:input.jobDigest,head:input.jobHead,
+        count:input.jobCount,step:input.step},
+    });
+    if (same) { await reauthorize?.(); return reply(false); }
+    if (state.approved || state.testVerified)
+      throw issue("HANDOFF_TEST_CONFLICT");
+    if (!state.active || Date.parse(state.expiresAt)<=now ||
+        state.leaseId!==input.leaseId ||
+        state.at && now<Date.parse(state.at) ||
+        !state.claimAt || now<=Date.parse(state.claimAt))
+      throw issue("HANDOFF_LEASE_STALE");
+    if (record.events?.length>=MAX_LEASE_EVENTS)
+      throw issue("HANDOFF_LEASE_CAPACITY");
+    const proof={
+      id:input.submissionId,jobId:input.jobId,
+      jobDigest:input.jobDigest,jobHead:input.jobHead,
+      jobCount:input.jobCount,step:input.step,at,
+    };
+    await verifyTechnicalJob(dataDir,proof,task,record.tenantId,state.claimAt);
+    // Two API replicas serialize a complete verified scan, preventing the
+    // same job from satisfying two distinct Tester task assignments.
+    const all=await listVerified(dataDir);
+    if (all.some(other=>other.events?.some(event=>
+      event.kind==="test_verified" && event.jobId===input.jobId)))
+      throw issue("HANDOFF_TEST_CONFLICT");
+    await reauthorize?.();
+    await verifyTechnicalJob(dataDir,proof,task,record.tenantId,state.claimAt);
+    const eventBody={
+      sequence:(record.events?.length??0)+1,
+      previousHash:record.head??GENESIS,
+      kind:"test_verified",at,taskId:task.id,actorId:actor.id,
+      generation:state.generation,leaseId:state.leaseId,
+      expiresAt:state.expiresAt,submissionId:input.submissionId,
+      jobId:input.jobId,jobDigest:input.jobDigest,jobHead:input.jobHead,
+      jobCount:input.jobCount,step:input.step,
+    };
+    const event={...eventBody,hash:hash(eventBody)};
+    const withoutHash={...record,events:[...(record.events??[]),event],head:event.hash};
+    delete withoutHash.hash;
+    const next={...withoutHash,hash:hash(withoutHash)};
+    if (Buffer.byteLength(JSON.stringify(next))>MAX_RECORD_BYTES)
+      throw issue("HANDOFF_LEASE_CAPACITY");
+    await reauthorize?.();
+    await atomicWrite(filePath(dataDir,record.id),next);
+    await readManifest(dataDir,record.id);
+    return reply(true);
+  },waitMs);
+}
