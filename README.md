@@ -743,3 +743,35 @@ Alla route \`POST /v1/agent-task-checkpoints\` l'approvatore umano invia con la 
 Nessun documento, prompt, sorgente o token è salvato nel registro; anche la lettura autenticata \`GET /v1/agent-handoffs/:id\` non espone il \`leaseId\`. Prima dell'approvazione il task appare \`awaiting_human_approval\` con \`evidence:not_started\`, e i dipendenti restano bloccati. Dopo il controllo indipendente appare \`human_approved_checkpoint\` e il successivo handoff di **revisione** può acquisire una lease. **Non viene dichiarato alcun test come \`passed\` e non viene invocato automaticamente alcun agente AI.** Replay identici di submit/approve non duplicano eventi né unità riportate; una lease revocata/scaduta o un ticket di generazione precedente non possono essere approvati.
 
 \`approvedReportedUnits\` è una somma controllata delle **unità autodichiarate e approvate**, limitata da \`estimatedUnits\` per task e dal \`budgetUnits\` del piano. **Non equivale al consumo verificato dei token o agli addebiti del provider AI**. L'API verifica solo che gli attori con scope appropriato abbiano registrato l'approvazione dell'impronta: non può verificare da sola l'esistenza, il contenuto, la qualità del documento né l'identità legale della persona. Le prove tecniche dei Tester, un eventuale billing firmato e l'orchestrazione autonoma restano nella [#109](https://github.com/KeyserDSoze/SoftwareFactory/issues/109) e nella [#105](https://github.com/KeyserDSoze/SoftwareFactory/issues/105). Vedi [ADR 0065](adr/0065-human-approved-pm-digest-checkpoints.md).
+
+
+
+## Tester AI: completamento vincolato al journal dei test Docker (#111)
+
+Il coordinatore AI distingue ora tre stati: task **assegnato** (lease temporanea), checkpoint di progetto **approvato manualmente** (#110) e task Tester con **prova di test Docker passata**, ricontrollata dal runner. Non è ancora un Tester AI autonomo: un operatore autorizzato o un adapter supervisionato deve acquisire una lease Tester e preparare e inviare il job di test con il protocollo runner esistente.
+
+Per associare il job a un task di ruolo \`tester\`, inviare con la chiave actor-scoped del Tester:
+
+\`\`\`http
+POST /v1/agent-task-verifications
+Authorization: Bearer agent.tester-one.<chiave-segreta>
+Content-Type: application/json
+\`\`\`
+
+\`\`\`json
+{
+  "handoffId": "UUIDv4-HANDOFF",
+  "taskId": "test",
+  "leaseId": "UUIDv4-LEASE-ATTIVA",
+  "submissionId": "UUIDv4-IDEMPOTENZA",
+  "jobId": "UUIDv4-JOB",
+  "jobDigest": "sha256-richiesta-64-caratteri",
+  "jobHead": "sha256-evidence-64-caratteri",
+  "jobCount": 5,
+  "step": "dotnet-test"
+}
+\`\`\`
+
+Il runner ignora qualsiasi dichiarazione di esito dell'attore: confronta \`jobId\`, digest, head/count e step con \`report.json\` ed \`evidence.jsonl\` letti con FD/inode protetti, SHA-chain completa e \`projectVerifiedJobPlan\`. Richiede stato terminale \`passed\`, ogni step realmente passato (senza skipped/timeout), ultimo evento \`finished\`, tenant corretto e job **accettato dopo** la claim del Tester. Uno stesso job non può attestare due task AI distinti. Un job in coda, fallito, incompleto o precedente alla claim non completa nulla.
+
+\`GET /v1/agent-handoffs/:id\` mostra \`runner_verified_test\` con identificativo del job e head dell'evidenza, senza \`leaseId\`. I task downstream diventano assegnabili solo se il journal resta leggibile e valido. Se il job viene eliminato per retention o l'evidenza è alterata, la lettura e la schedulazione falliscono **in modalità fail-closed**, senza mostrare un successo storico non attestato. Le prove sono locali al runner e non costituiscono firma off-host, dimostrazione della qualità del codice, consumo token o completamento di una code review AI. Il ruolo \`code_reviewer\` non può ottenere un completion con la sola suite test. [ADR 0066](adr/0066-tester-completion-from-verified-runner-journal.md), [issue #111](https://github.com/KeyserDSoze/SoftwareFactory/issues/111).

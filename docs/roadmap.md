@@ -909,3 +909,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] GET non mostra leaseId; \`human_approved_checkpoint\` ed \`approvedReportedUnits\` NON sono test \`passed\` o provider-billing verificato. I downstream di revisione si sbloccano solo dopo checkpoint PM approvato.
 - [x] Test Node su 2 API, concorrenza/lost-ack, mismatch identità, expiry/release, revoca file, tenant cross-ownership, injection e tamper, ADR 0065 e documentazione.
 - [ ] La #109 e parent #105 restano aperte: prove tecniche Tester/reviewer journal-bound, consumo token/fatture provate, adapter AI supervisionato, approvazioni off-host e multi-host/rootless VM.
+
+
+
+## Completion tecnica Tester da evidence verificata (#111, 19/11/2026)
+
+- [x] Endpoint actor-only \`POST /v1/agent-task-verifications\` per completare un task \`tester\` dopo un job del runner finalizzato con test realmente passati.
+- [x] Cross-tenant, owner/role e lease fencing; job accettato dopo claim, head/count/digest/step e tutti gli eventi del worker controllati via lettura inode-bound e SHA-chain. Una proof job non è riutilizzabile in altre completion.
+- [x] Evento hash-chained \`test_verified\` idempotente, proiezione \`runner_verified_test\`, task downstream sbloccato solo con proof ancora presente e valida; nessun leaseId visibile in GET, no claim su reviewer tramite mera test suite.
+- [x] Node tests di due API, queued/failed/incomplete/tamper/retention, idempotenza, stale, tenant/role, job vecchio, digest/head/step falsi; ADR 0066 e documentazione.
+- [ ] #109/#105: verifica indipendente di Code Reviewer, provider token/billing realmente attestato, audit/correlazione di sorgenti e identità, durable off-host attestations, orchestrazione AI autonoma. VM rootless/Cloudflare reali #2/#87.

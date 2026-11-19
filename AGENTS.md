@@ -879,3 +879,13 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Eventi \`submit/approve\` hanno seq/hash chain e sono validati insieme a \`claim/renew/release\`; approval manuale aggiorna solo \`human_approved_checkpoint\` e \`approvedReportedUnits\` (unità **autodichiarate**), non \`passed\` tecnico né costi verificati. I task non-PM non possono completarsi con approvazioni umane del solo digest.
 - I task dipendenti si sbloccano solo per predecessori PM con questo checkpoint; se un dependency non-PM non ha proof tecnica, resta bloccato. No apply/push automatico o esecuzione AI. La GET read-only non include leaseId; \`executions:0\` fino a vera esecuzione certificata.
 - Conservare \`src/runner/tests/agent-task-checkpoints.test.mjs\`, ADR 0065 e le issue #109/#105 aperte per prova runner journal-bound, billing reale e attestazione off-host. Non attribuire alla hash-chain locale protezioni da compromissione dell'host.
+
+
+
+## Tester task completion tramite runner evidence, non flag AI (#111)
+
+- Solo il ruolo \`tester\` con credenziale actor-scoped e lease valida può usare \`POST /v1/agent-task-verifications\`: body chiuso (handoffId/taskId/leaseId/submissionId/jobId/jobDigest/jobHead/jobCount/step). Non accettare \`passed:true\`, source, cost, nuove step o stringhe arbitrarie.
+- \`verifyJobEvidenceForRead\` e \`projectVerifiedJobPlan\` costituiscono i gate di verità **locali**: ultimo evento \`finished\`, state \`passed\`, ogni risultato step verificato, id/digest/head/count/step esatti, tenant invariato e \`acceptedAt\` strettamente successivo alla claim. Le proof sono ricontrollate in **ogni** lettura di handoff (e pertanto prima di claim e retry); retention/tamper => fail closed.
+- La transizione \`test_verified\` ha generation/leaseId dalla claim, UUID idempotente e scope tenant/owner/role; lock POSIX comune fra API, scansione dei manifest contro riuso dello stesso job, SHA-chain evento nuova. Il GET non divulga leaseId. Non autorizzare il test su un Reviewer/PM o accettare una suite precedente al task.
+- \`runner_verified_test\` significa solo che **quel job e i suoi step** risultano passati sul runner locale: NON implica che un Tester AI abbia eseguito codice, che il progetto sia approvato o che esista una firma off-host. \`executions:0\` e \`approvedReportedUnits\` indipendenti, budget provider da attestare in #109; code_review AI non completa automaticamente tramite test.
+- Conservare Node regressions \`src/runner/tests/agent-test-verifications.test.mjs\`, ADR 0066, e continuare a richiedere i collaudi dedicati VM rootless/#2/#87.
