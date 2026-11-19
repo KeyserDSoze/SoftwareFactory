@@ -8,7 +8,7 @@ import { admitRunnerJob } from "./admission.mjs";
 import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
-import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
+import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, mutateAgentTaskCheckpoint, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
 import { loadAgentActorsFile, authenticateAgentActor, reauthorizeAgentActor } from "./agent-actors.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -120,11 +120,13 @@ export function createRunnerServer({
     }
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
     const agentLeaseRoute = req.url === "/v1/agent-task-leases";
-    if (agentLeaseRoute && !agentActorsFile) {
+    const agentCheckpointRoute = req.url === "/v1/agent-task-checkpoints";
+    const agentMutationRoute = agentLeaseRoute || agentCheckpointRoute;
+    if (agentMutationRoute && !agentActorsFile) {
       send(503, { error: "agent_auth_unconfigured" }); return;
     }
     let actorPrincipal=null;
-    if (agentLeaseRoute) {
+    if (agentMutationRoute) {
       try {
         actorPrincipal=authenticateAgentActor(req.headers.authorization,
           await loadAgentActorsFile(agentActorsFile));
@@ -151,10 +153,27 @@ export function createRunnerServer({
     const repairOperator = repairRoute
       ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)
       : null;
-    if (agentLeaseRoute ? !actorPrincipal : repairRoute ? !repairOperator :
+    if (agentMutationRoute ? !actorPrincipal : repairRoute ? !repairOperator :
         tenantMode ? !activeTenant : !authenticate(req.headers.authorization, activeRunnerKey)) {
       send(401, { error: "unauthorized" }); return;
     }
+    const reauthorizeActorMutation=async()=> {
+      await reauthorizeAgentActor(
+        agentActorsFile,req.headers.authorization,actorPrincipal);
+      // Root and tenant credentials never authorize task checkpoint mutations,
+      // including after file-backed key rotation while waiting on a lock.
+      if (tenantMode) {
+        if (authenticateRunnerTenant(req.headers.authorization,
+          await loadRunnerTenantsFile(tenantsFile)))
+          throw Object.assign(new Error("shared runner actor credential"),
+            {code:"ACTOR_AUTH_REVOKED"});
+      } else {
+        const latest=fileMode ? await loadRunnerApiKeyFile(apiKeyFile) : apiKey;
+        if (authenticate(req.headers.authorization,latest))
+          throw Object.assign(new Error("shared runner actor credential"),
+            {code:"ACTOR_AUTH_REVOKED"});
+      }
+    };
     if (req.method === "GET" && req.url === "/v1/host-metrics") {
       // No per-tenant authorization model for global host usage: deny tenant mode.
       if (tenantMode) { send(404, { error: "not_found" }); return; }
@@ -333,23 +352,7 @@ export function createRunnerServer({
       try {
         const result=await mutateAgentTaskLease({
           dataDir,request:body,actor:actorPrincipal,waitMs:admissionWaitMs,
-          reauthorize:async()=> {
-            await reauthorizeAgentActor(
-              agentActorsFile,req.headers.authorization,actorPrincipal);
-            // Check privilege separation AGAIN under the admission lock,
-            // including a root key rotated while this request was queued.
-            if (tenantMode) {
-              if (authenticateRunnerTenant(req.headers.authorization,
-                await loadRunnerTenantsFile(tenantsFile)))
-                throw Object.assign(new Error("shared runner actor credential"),
-                  {code:"ACTOR_AUTH_REVOKED"});
-            } else {
-              const latest=fileMode ? await loadRunnerApiKeyFile(apiKeyFile) : apiKey;
-              if (authenticate(req.headers.authorization,latest))
-                throw Object.assign(new Error("shared runner actor credential"),
-                  {code:"ACTOR_AUTH_REVOKED"});
-            }
-          },
+          reauthorize:reauthorizeActorMutation,
         });
         send(200,result);
       } catch(error) {
@@ -360,13 +363,67 @@ export function createRunnerServer({
           send(404,{error:"not_found"});
         else if (error.code==="HANDOFF_LEASE_STALE")
           send(409,{error:"lease_stale"});
-        else if (error.code==="HANDOFF_LEASE_CONFLICT")
+        else if (error.code==="HANDOFF_LEASE_CONFLICT" ||
+            error.code==="HANDOFF_LEASE_COMPLETED")
           send(409,{error:"lease_conflict"});
         else if (error.code==="HANDOFF_LEASE_BLOCKED")
           send(409,{error:"dependency_blocked"});
         else if (error.code==="HANDOFF_LEASE_EXHAUSTED" ||
             error.code==="HANDOFF_LEASE_CAPACITY")
           send(429,{error:"lease_capacity"});
+        else if (error.code==="ACTOR_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if (error.code==="ACTOR_AUTH_UNAVAILABLE")
+          send(503,{error:"agent_auth_unavailable"});
+        else if (error.code==="ADMISSION_BUSY") {
+          res.writeHead(503,{...headers,"Retry-After":"2"});
+          res.end(JSON.stringify({error:"admission_busy"}));
+        } else send(500,{error:"internal_error"});
+      }
+      return;
+    }
+    // Manual human approval of a Project Manager artifact digest only.
+    // Producer has an active fenced lease; independent approver has an
+    // explicit actor capability. It is NEVER a passing technical test.
+    if (req.method === "POST" && agentCheckpointRoute) {
+      if (req.headers["content-type"]?.split(";")[0].trim()!=="application/json") {
+        send(415,{error:"json_required"}); return;
+      }
+      if (Number(req.headers["content-length"] || 0)>1024) {
+        send(413,{error:"too_large"}); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks=[]; let size=0;
+        for await(const chunk of req) {
+          size+=chunk.length;
+          if (size>1024) { send(413,{error:"too_large"}); return; }
+          chunks.push(chunk);
+        }
+        input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400,{error:"invalid_json"}); return; }
+      try {
+        const result=await mutateAgentTaskCheckpoint({
+          dataDir,request:input,actor:actorPrincipal,waitMs:admissionWaitMs,
+          reauthorize:reauthorizeActorMutation,
+        });
+        send(result.created ? 201 : 200,result);
+      } catch(error) {
+        if (error.code==="HANDOFF_CHECKPOINT_INVALID")
+          send(422,{error:"checkpoint_invalid"});
+        else if (error.code==="HANDOFF_CHECKPOINT_FORBIDDEN")
+          send(403,{error:"actor_scope_denied"});
+        else if (error.code==="HANDOFF_NOT_FOUND" ||
+            error.code==="HANDOFF_INTEGRITY")
+          send(404,{error:"not_found"});
+        else if (error.code==="HANDOFF_CHECKPOINT_CONFLICT")
+          send(409,{error:"checkpoint_conflict"});
+        else if (error.code==="HANDOFF_CHECKPOINT_BUDGET")
+          send(422,{error:"reported_units_exceeded"});
+        else if (error.code==="HANDOFF_LEASE_STALE")
+          send(409,{error:"lease_stale"});
+        else if (error.code==="HANDOFF_LEASE_CAPACITY")
+          send(429,{error:"checkpoint_capacity"});
         else if (error.code==="ACTOR_AUTH_REVOKED")
           send(401,{error:"unauthorized"});
         else if (error.code==="ACTOR_AUTH_UNAVAILABLE")
