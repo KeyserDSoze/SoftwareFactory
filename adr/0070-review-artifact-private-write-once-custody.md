@@ -17,3 +17,6 @@ Per le nuove submission, review_submit richiede documento staged e associa artif
 ## Limiti
 
 Controlliamo la provenienza del digest e l'integrità locale, non dimostriamo che un umano abbia letto il rapporto né che un LLM abbia davvero effettuato la review. Il testo è untrusted, non va visualizzato come HTML e la protezione da segreti è best-effort. L'host può reforge hash locali. Gli orfani crash non sono eliminati automaticamente; recovery richiede fermare i servizi e intervento operatore. Attestazione off-host, vero billing provider e agente autonomo restano #113/#109/#105.
+
+
+**Fail-closed sulla raccomandazione:** per i rapporti conservati, una decisione changes_requested non può produrre l'evento di approvazione. Il controllo è ripetuto all'atto del commit e su manifest già approvati, impedendo che un artefatto con finding pendenti autorizzi downstream. Non si riscrive la decisione: occorre un nuovo ticket di review dopo correzione.
