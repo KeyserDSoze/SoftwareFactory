@@ -403,6 +403,19 @@ test("review source is blocked when verified Tester dependencies used distinct f
   }finally {await f.close();}
 });
 
+const reviewDocument=()=>({
+  version:1,
+  summary:"Independent manual inspection of the tested source snapshot.",
+  recommendation:"approve",
+  findings:[{severity:"low",
+    description:"Documentation and invariants were checked without including source."}],
+});
+const stageReport=(f,api,{id,lease,source,owner,submissionId=randomUUID(),
+  document=reviewDocument()})=>
+  f.call(api,"POST","/v1/agent-review-artifacts",{
+    handoffId:id,taskId:"review",leaseId:lease,
+    submissionId,sourceFingerprint:source.fingerprint,document,
+  },owner);
 const reviewerTaskManifest=()=>({
   consent:true,label:"Independent source-bound manual code review",
   budgetUnits:6,tasks:[
@@ -429,11 +442,18 @@ async function prepareReviewer(f,{tenants=false}={}) {
   const owner=tenants?tenantReviewKey:reviewerKey;
   const lease=await f.claim(1,id,"review",owner);
   assert.equal(lease.status,200,JSON.stringify(lease.body));
-  return {id,job,source,lease:lease.body.leaseId,owner};
+  const staged=await stageReport(f,0,{
+    id,source,lease:lease.body.leaseId,owner,
+  });
+  assert.equal(staged.status,201,JSON.stringify(staged.body));
+  assert.equal(staged.body.artifactMode,"stored_review_document_v1");
+  return {id,job,source,lease:lease.body.leaseId,owner,
+    submissionId:staged.body.submissionId,
+    artifactDigest:staged.body.artifactDigest};
 }
-const reviewSubmitBody=(id,lease,sourceFingerprint,submissionId=randomUUID())=>({
+const reviewSubmitBody=(id,lease,sourceFingerprint,submissionId,artifactDigest)=>({
   action:"submit",handoffId:id,taskId:"review",leaseId:lease,submissionId,
-  artifactDigest:reviewDigest,sourceFingerprint,
+  artifactDigest,sourceFingerprint,
 });
 const reviewApprovalBody=submission=>({
   action:"approve",handoffId:submission.handoffId,taskId:submission.taskId,
@@ -448,8 +468,8 @@ const postReview=(f,api,body,token)=>
 test("independent review submit is not completion; manual signoff unlocks only downstream",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f);
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     assert.equal((await f.claim(0,id,"release",releaseKey)).status,409);
     const [first,replay]=await Promise.all([
       postReview(f,0,req,owner),
@@ -475,9 +495,10 @@ test("independent review submit is not completion; manual signoff unlocks only d
     assert.deepEqual(done.body.tasks.map(t=>t.state),
       ["runner_verified_test","human_approved_review","ready"]);
     assert.deepEqual(done.body.tasks[1].reviewApproval,{
-      submissionId:req.submissionId,artifactDigest:reviewDigest,
+      submissionId:req.submissionId,artifactDigest,
       sourceFingerprint:source.fingerprint,approvedBy:"human-review",
       attestation:"manual_inspection",
+      artifactMode:"stored_review_document_v1",
     });
     assert.equal(done.body.tasks[1].evidence,"human_review_attestation");
     assert.equal(done.body.executions,0);
@@ -491,8 +512,8 @@ test("independent review submit is not completion; manual signoff unlocks only d
 test("review rejects fake source, extra keys, wrong role, self-approval and changed artifact",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f);
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     const badSource=await postReview(f,0,{
       ...req,sourceFingerprint:"b".repeat(64),
     },owner);
@@ -518,8 +539,8 @@ test("review rejects fake source, extra keys, wrong role, self-approval and chan
 test("review actor and approver must belong to same tenant as tested input",async()=>{
   const f=await fixture({multiTenant:true});
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f,{tenants:true});
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f,{tenants:true});
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     assert.equal((await postReview(f,0,req,reviewerKey)).status,404);
     assert.equal((await postReview(f,0,req,owner)).status,201);
     assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,404);
@@ -533,8 +554,8 @@ test("review actor and approver must belong to same tenant as tested input",asyn
 test("review source input disappearance makes approved handoff fail closed",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source,job,owner}=await prepareReviewer(f);
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,job,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     assert.equal((await postReview(f,0,req,owner)).status,201);
     assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,201);
     await rm(path.join(f.dataDir,"jobs",job.report.id,"input.json"));
@@ -551,8 +572,8 @@ test("review source input disappearance makes approved handoff fail closed",asyn
 test("review signoff is fenced by key rotation during the admission lock",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f);
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     assert.equal((await postReview(f,0,req,owner)).status,201);
     let acquired;
     const entered=new Promise(resolve=>acquired=resolve);
@@ -582,8 +603,8 @@ test("review signoff is fenced by key rotation during the admission lock",async(
 test("review late completion after lease timeout and forged chained event are rejected",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source}=await prepareReviewer(f);
-    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     let ticks=0; const now=Date.now();
     await assert.rejects(mutateAgentTaskReview({
       dataDir:f.dataDir,actor:{id:"reviewer-one",role:"code_reviewer",tenantId:null},
@@ -604,8 +625,8 @@ test("review late completion after lease timeout and forged chained event are re
 test("released reviewer lease and old fencing generation cannot submit a review",async()=>{
   const f=await fixture();
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f);
-    const old=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const old=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     const release=await f.call(0,"POST","/v1/agent-task-leases",{
       action:"release",handoffId:id,taskId:"review",leaseId:lease,
     },owner);
@@ -616,8 +637,12 @@ test("released reviewer lease and old fencing generation cannot submit a review"
     assert.notEqual(replacement.body.leaseId,lease);
     assert.equal(replacement.body.generation,2);
     assert.equal((await postReview(f,1,old,owner)).status,409);
+    const newStage=await stageReport(f,0,{
+      id,lease:replacement.body.leaseId,source,owner,
+    });
+    assert.equal(newStage.status,201,JSON.stringify(newStage.body));
     const current=reviewSubmitBody(id,replacement.body.leaseId,
-      source.fingerprint);
+      source.fingerprint,newStage.body.submissionId,newStage.body.artifactDigest);
     assert.equal((await postReview(f,1,current,owner)).status,201);
     const review=(await f.view(0,id)).body.tasks[1];
     assert.equal(review.state,"review_submitted");
@@ -628,8 +653,8 @@ test("review approval survives a fresh API instance, without replaying agent exe
   const f=await fixture();
   let restarted;
   try {
-    const {id,lease,source,owner}=await prepareReviewer(f);
-    const submit=reviewSubmitBody(id,lease,source.fingerprint);
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const submit=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
     assert.equal((await postReview(f,0,submit,owner)).status,201);
     assert.equal((await postReview(f,1,reviewApprovalBody(submit),
       reviewApproverKey)).status,201);
