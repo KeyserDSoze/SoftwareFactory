@@ -9,6 +9,8 @@ import { lstat, mkdir, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import { atomicWrite } from "./common.mjs";
 import { parseIdempotencyKey, withAdmissionLock } from "./admission.mjs";
+import { verifyJobEvidenceForRead } from "./evidence.mjs";
+import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA = /^[a-f0-9]{64}$/;
@@ -22,6 +24,7 @@ const MAX_MANIFESTS = 64;
 const MAX_RECORD_BYTES = 64_000;
 const MAX_LEASE_EVENTS = 64;
 const GENESIS = "0".repeat(64);
+const TEST_STEPS = new Set(["dotnet-test","web-test","playwright"]);
 // Even a human-supplied label must not become a secret-bearing manifest.
 const CREDENTIAL_MARKER = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_[a-zA-Z0-9_]{15,}|gh[pousr]_[a-zA-Z0-9]{20,}|Bearer\s+\S+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+/i;
 export const MAX_HANDOFF_BODY_BYTES = 6144;
@@ -136,7 +139,9 @@ async function readManifest(dataDir,id) {
         before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
         before.size !== after.size)
       throw issue("HANDOFF_INTEGRITY");
-    return validateRecord(JSON.parse(buf.toString("utf8")),id);
+    const record=validateRecord(JSON.parse(buf.toString("utf8")),id);
+    await verifyTechnicalProofs(dataDir,record);
+    return record;
   } catch (error) {
     if (error.code === "ENOENT") throw error;
     throw issue("HANDOFF_INTEGRITY");
@@ -168,14 +173,17 @@ function project(record) {
     // These are human-approved self-reported units, NOT verified provider billing.
     approvedReportedUnits:record.tasks.reduce((n,t)=>n+
       (leases.get(t.id)?.approved ? leases.get(t.id).submission.reportedUnits : 0),0),
+    verifiedTestJobs:record.tasks.filter(t=>leases.get(t.id)?.testVerified).length,
     status:"declared", executions:0,
     tasks:record.tasks.map(task => {
       const lease=leases.get(task.id);
       const active=lease?.active && Date.parse(lease.expiresAt)>now;
-      const dependenciesApproved=task.dependsOn.every(id=>leases.get(id)?.approved);
+      const dependenciesApproved=task.dependsOn.every(id=>
+        leases.get(id)?.approved || leases.get(id)?.testVerified);
       const pending=lease?.submission && !lease.approved && active;
       return {
-        ...task, state:lease?.approved ? "human_approved_checkpoint" :
+        ...task, state:lease?.testVerified ? "runner_verified_test" :
+          lease?.approved ? "human_approved_checkpoint" :
           !dependenciesApproved ? "blocked" :
           active ? (pending ? "awaiting_human_approval" : "leased") :
           (lease?.attempts ?? 0) >= task.maxAttempts ? "attempts_exhausted" : "ready",
@@ -186,7 +194,13 @@ function project(record) {
         artifactDigest:lease?.approved || pending ? lease.submission.digest : null,
         reportedUnits:lease?.approved ? lease.submission.reportedUnits : null,
         approvedBy:lease?.approved ? lease.approvedBy : null,
-        evidence:lease?.approved ? "human_approved_digest" : "not_started",
+        testEvidence:lease?.testVerified ? {
+          jobId:lease.testVerified.jobId,digest:lease.testVerified.jobDigest,
+          head:lease.testVerified.jobHead,count:lease.testVerified.jobCount,
+          step:lease.testVerified.step,
+        } : null,
+        evidence:lease?.testVerified ? "verified_runner_journal" :
+          lease?.approved ? "human_approved_digest" : "not_started",
       };
     }),
   };
@@ -251,7 +265,8 @@ export async function getAgentHandoff(dataDir,id,tenantId=null,reauthorize) {
 function verifyLeaseHistory(record) {
   const map=new Map(record.tasks.map(task=>[task.id,{
     attempts:0,generation:0,active:false,leaseId:null,expiresAt:null,
-    actorId:null,at:null,submission:null,approved:false,approvedBy:null,
+    actorId:null,at:null,claimAt:null,submission:null,
+    approved:false,approvedBy:null,testVerified:null,
   }]));
   if (!Object.hasOwn(record,"events")) return map;
   if (!Array.isArray(record.events) || record.events.length < 1 ||
@@ -260,12 +275,15 @@ function verifyLeaseHistory(record) {
   let head=GENESIS,previousTime=0;
   for (const [i,event] of record.events.entries()) {
     const isCheckpoint=event?.kind==="submit" || event?.kind==="approve";
+    const isTechnical=event?.kind==="test_verified";
     const allowedFields=["sequence","previousHash","kind","at","taskId",
       "actorId","generation","leaseId","expiresAt","hash",
-      ...(isCheckpoint?["submissionId","artifactDigest","reportedUnits"]:[])];
+      ...(isCheckpoint?["submissionId","artifactDigest","reportedUnits"]:[]),
+      ...(isTechnical?["submissionId","jobId","jobDigest","jobHead",
+        "jobCount","step"]:[])];
     if (!exact(event,allowedFields) ||
         event.sequence!==i+1 || event.previousHash!==head ||
-        !["claim","renew","release","submit","approve"].includes(event.kind) ||
+        !["claim","renew","release","submit","approve","test_verified"].includes(event.kind) ||
         typeof event.at!=="string" ||
         !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at) ||
         !Number.isFinite(Date.parse(event.at)) ||
@@ -278,7 +296,12 @@ function verifyLeaseHistory(record) {
         new Date(event.expiresAt).toISOString()!==event.expiresAt ||
         isCheckpoint && (!UUID.test(event.submissionId) ||
           !SHA.test(event.artifactDigest) ||
-          !Number.isInteger(event.reportedUnits) || event.reportedUnits<1))
+          !Number.isInteger(event.reportedUnits) || event.reportedUnits<1) ||
+        isTechnical && (!UUID.test(event.submissionId) ||
+          !UUID.test(event.jobId) || !SHA.test(event.jobDigest) ||
+          !SHA.test(event.jobHead) || !Number.isInteger(event.jobCount) ||
+          event.jobCount<1 || event.jobCount>48 ||
+          !TEST_STEPS.has(event.step)))
       throw issue("HANDOFF_INTEGRITY");
     const task=record.tasks.find(task=>task.id===event.taskId);
     const state=map.get(event.taskId);
@@ -290,12 +313,14 @@ function verifyLeaseHistory(record) {
       throw issue("HANDOFF_INTEGRITY");
     const at=Date.parse(event.at),expiration=Date.parse(event.expiresAt);
     if (event.kind==="claim") {
-      if (state.approved || state.active && at<Date.parse(state.expiresAt) ||
+      if (state.approved || state.testVerified ||
+          state.active && at<Date.parse(state.expiresAt) ||
           event.generation!==state.generation+1 ||
           state.at!==null && at<Date.parse(state.at) ||
           state.attempts>=task.maxAttempts ||
           expiration<=at || expiration>at+300000 ||
-          task.dependsOn.some(dep=>!map.get(dep)?.approved))
+          task.dependsOn.some(dep=>!map.get(dep)?.approved &&
+            !map.get(dep)?.testVerified))
         throw issue("HANDOFF_INTEGRITY");
       state.generation=event.generation;
       state.attempts++;
@@ -303,9 +328,11 @@ function verifyLeaseHistory(record) {
       state.expiresAt=event.expiresAt;
       state.actorId=event.actorId;
       state.active=true;
+      state.claimAt=event.at;
       state.submission=null;
     } else if (event.kind==="renew") {
-      if (!state.active || state.approved || state.generation!==event.generation ||
+      if (!state.active || state.approved || state.testVerified ||
+          state.generation!==event.generation ||
           state.leaseId!==event.leaseId ||
           state.actorId!==event.actorId ||
           at>=Date.parse(state.expiresAt) ||
@@ -314,7 +341,8 @@ function verifyLeaseHistory(record) {
         throw issue("HANDOFF_INTEGRITY");
       state.expiresAt=event.expiresAt;
     } else if (event.kind==="release") {
-      if (!state.active || state.approved || state.generation!==event.generation ||
+      if (!state.active || state.approved || state.testVerified ||
+          state.generation!==event.generation ||
           state.leaseId!==event.leaseId ||
           state.actorId!==event.actorId ||
           at>=Date.parse(state.expiresAt) || expiration!==at)
@@ -322,6 +350,21 @@ function verifyLeaseHistory(record) {
       state.expiresAt=event.expiresAt;
       state.active=false;
       state.submission=null;
+    } else if (event.kind==="test_verified") {
+      if (task.role!=="tester" || !state.active || state.approved ||
+          state.testVerified || state.submission ||
+          state.generation!==event.generation ||
+          state.leaseId!==event.leaseId || state.actorId!==event.actorId ||
+          at>=Date.parse(state.expiresAt) ||
+          expiration!==Date.parse(state.expiresAt) ||
+          !state.claimAt || at<=Date.parse(state.claimAt))
+        throw issue("HANDOFF_INTEGRITY");
+      state.testVerified={
+        id:event.submissionId,jobId:event.jobId,
+        jobDigest:event.jobDigest,jobHead:event.jobHead,
+        jobCount:event.jobCount,step:event.step,at:event.at,
+      };
+      state.active=false;
     } else if (event.kind==="submit") {
       if (task.role!=="project_manager" || !state.active || state.approved ||
           state.submission || state.generation!==event.generation ||
@@ -406,9 +449,11 @@ export async function mutateAgentTaskLease({
     if (record.events?.length>=MAX_LEASE_EVENTS) throw issue("HANDOFF_LEASE_CAPACITY");
     const active=state.active && Date.parse(state.expiresAt)>now;
     let generation,leaseId,expiresAt;
-    if (state.approved) throw issue("HANDOFF_LEASE_COMPLETED");
+    if (state.approved || state.testVerified)
+      throw issue("HANDOFF_LEASE_COMPLETED");
     if (input.action==="claim") {
-      if (task.dependsOn.some(dep=>!states.get(dep)?.approved))
+      if (task.dependsOn.some(dep=>
+        !states.get(dep)?.approved && !states.get(dep)?.testVerified))
         throw issue("HANDOFF_LEASE_BLOCKED");
       if (active) throw issue("HANDOFF_LEASE_CONFLICT");
       if (state.attempts>=task.maxAttempts) throw issue("HANDOFF_LEASE_EXHAUSTED");
