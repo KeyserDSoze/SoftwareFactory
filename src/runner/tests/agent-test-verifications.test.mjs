@@ -756,6 +756,10 @@ test("approved review becomes unusable when retained report changes, disappears 
     assert.equal((await f.view(1,id)).status,409);
     await writeFile(pathToDoc,stored,{mode:0o600});
     assert.equal((await f.view(0,id)).status,200);
+    await chmod(pathToDoc,0o644);
+    assert.equal((await f.view(0,id)).status,409);
+    await chmod(pathToDoc,0o600);
+    assert.equal((await f.view(0,id)).status,200);
     await rm(pathToDoc);
     await symlink(path.join(f.base,"untrusted.json"),pathToDoc);
     assert.equal((await f.view(1,id)).status,409);
@@ -850,4 +854,34 @@ test("changes-requested review cannot be independently approved or unlock releas
     assert.equal(view.body.tasks[2].state,"blocked");
     assert.equal((await f.claim(0,id,"release",releaseKey)).status,409);
   }finally {await f.close();}
+});
+
+test("review report staging rechecks credential rotation under the shared lock",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    let started;
+    const entered=new Promise(resolve=>started=resolve);
+    let release;
+    const held=new Promise(resolve=>release=resolve);
+    const holder=withAdmissionLock(f.dataDir,async()=>{
+      started(); await held;
+    },4000);
+    await entered;
+    const stageAgain=stageReport(f,1,{id,lease,source,owner,submissionId});
+    await sleep(35);
+    const registry=JSON.parse(await readFile(f.actorFile,"utf8"));
+    registry.actors.find(a=>a.id==="reviewer-one" && a.role==="code_reviewer" &&
+      a.tenantId===null).key="agent.reviewer-one."+"N".repeat(48);
+    await writeFile(f.actorFile+".next",JSON.stringify(registry),{mode:0o600});
+    await rename(f.actorFile+".next",f.actorFile);
+    release(); await holder;
+    const denied=await stageAgain;
+    assert.equal(denied.status,401,JSON.stringify(denied.body));
+    const recovered=await stageReport(f,0,{
+      id,lease,source,owner:"agent.reviewer-one."+"N".repeat(48),submissionId,
+    });
+    assert.equal(recovered.status,200,JSON.stringify(recovered.body));
+    assert.equal(recovered.body.artifactDigest,artifactDigest);
+  }finally{await f.close();}
 });
