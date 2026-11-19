@@ -273,7 +273,7 @@ test("cross-tenant approver cannot sign unrelated PM digest",async()=>{
     assert.equal((await f.submit(0,id,lease.body.leaseId,subId,producer)).status,201);
     assert.equal((await f.approve(0,id,subId,human)).status,404);
     assert.equal((await f.approve(1,id,subId,reviewerTenant)).status,201);
-    assert.equal((await f.view(0,id)).status,401);
+    assert.equal((await f.view(0,id,rootKey)).status,401);
     assert.equal((await f.view(0,id,f.tenantKey)).body.approvedReportedUnits,2);
   }finally{await f.close();}
 });
@@ -307,7 +307,7 @@ test("valid checkpoint state is persistent over independent API instances and un
     assert.equal((await f.submit(0,id,lease.body.leaseId,subId)).status,201);
     const second=await f.view(1,id);
     assert.equal(second.body.tasks[0].state,"awaiting_human_approval");
-    assert.equal((await f.approve(1,id,subId,human,"0")).status,409);
+    assert.equal((await f.approve(1,id,subId,human,"0")).status,422);
     assert.equal((await f.approve(1,id,subId)).status,201);
     const after=await f.view(0,id);
     assert.equal(after.body.tasks[0].state,"human_approved_checkpoint");
