@@ -342,6 +342,13 @@ test("retained runner input changes or disappearance invalidate Tester proof on 
     const rejected=await f.view(0,id);
     assert.equal(rejected.status,409,JSON.stringify(rejected.body));
     assert.equal(rejected.body.error,"handoff_integrity");
+    // A previous journal `passed` must not survive removal of its source.
+    await rm(inputPath);
+    const missing=await f.view(1,id);
+    assert.equal(missing.status,409,JSON.stringify(missing.body));
+    assert.equal(missing.body.error,"handoff_integrity");
+    const claim=await f.claim(0,id,"review",reviewerKey);
+    assert.equal(claim.status,404,JSON.stringify(claim.body));
   }finally {await f.close();}
 });
 test("review source is blocked when verified Tester dependencies used distinct file snapshots",async()=>{
