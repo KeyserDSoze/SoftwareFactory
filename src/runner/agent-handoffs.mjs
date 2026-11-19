@@ -334,6 +334,7 @@ const leaseRequest = value => {
  */
 export async function mutateAgentTaskLease({
   dataDir,request,actor,reauthorize,waitMs=1500,
+  nowMs=Date.now, // internal deterministic test seam; never from HTTP input
 }) {
   const input=leaseRequest(request);
   if (!actor || !ACTOR.test(actor.id) || !ROLES.has(actor.role) ||
@@ -355,7 +356,7 @@ export async function mutateAgentTaskLease({
       throw issue("HANDOFF_NOT_FOUND");
     const states=verifyLeaseHistory(record);
     const state=states.get(task.id);
-    const now=Date.now(),at=new Date(now).toISOString();
+    const now=nowMs(),at=new Date(now).toISOString();
     if (record.events?.length>=MAX_LEASE_EVENTS) throw issue("HANDOFF_LEASE_CAPACITY");
     const active=state.active && Date.parse(state.expiresAt)>now;
     let generation,leaseId,expiresAt;
