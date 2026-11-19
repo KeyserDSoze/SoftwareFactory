@@ -427,7 +427,7 @@ const reviewerTaskManifest=()=>({
       dependsOn:["review"],estimatedUnits:2,maxAttempts:1},
   ],
 });
-async function prepareReviewer(f,{tenants=false}={}) {
+async function prepareReviewer(f,{tenants=false,document=reviewDocument()}={}) {
   const id=await f.create(tenants?draft():reviewerTaskManifest());
   const claim=await f.claim(0,id);
   assert.equal(claim.status,200,JSON.stringify(claim.body));
@@ -443,7 +443,7 @@ async function prepareReviewer(f,{tenants=false}={}) {
   const lease=await f.claim(1,id,"review",owner);
   assert.equal(lease.status,200,JSON.stringify(lease.body));
   const staged=await stageReport(f,0,{
-    id,source,lease:lease.body.leaseId,owner,
+    id,source,lease:lease.body.leaseId,owner,document,
   });
   assert.equal(staged.status,201,JSON.stringify(staged.body));
   assert.equal(staged.body.artifactMode,"stored_review_document_v1");
@@ -827,4 +827,27 @@ test("legacy #115 review events stay readable without falsely claiming stored re
     assert.equal(reviewed.reviewApproval.artifactMode,undefined);
     assert.equal((await f.claim(0,id,"release",releaseKey)).status,200);
   } finally {await f.close();}
+});
+
+test("changes-requested review cannot be independently approved or unlock release",async()=>{
+  const f=await fixture();
+  try {
+    const document={...reviewDocument(),recommendation:"changes_requested"};
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{document});
+    const submit=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submit,owner)).status,201);
+    const fetched=await f.call(1,"GET","/v1/agent-review-artifacts/"+
+      submissionId,undefined,reviewApproverKey);
+    assert.equal(fetched.status,200);
+    assert.equal(fetched.body.document.recommendation,"changes_requested");
+    const blocked=await postReview(f,0,reviewApprovalBody(submit),reviewApproverKey);
+    assert.equal(blocked.status,409,JSON.stringify(blocked.body));
+    assert.equal(blocked.body.error,"review_conflict");
+    const view=await f.view(1,id);
+    assert.equal(view.body.tasks[1].state,"review_submitted");
+    assert.equal(view.body.tasks[2].state,"blocked");
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,409);
+  }finally {await f.close();}
 });
