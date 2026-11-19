@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { once } from "node:events";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { mkdtemp, mkdir, readFile, writeFile, rm, rename } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunnerServer } from "../api.mjs";
@@ -686,4 +686,145 @@ test("review approval survives a fresh API instance, without replaying agent exe
       await new Promise(resolve=>restarted.close(resolve));
     await f.close();
   }
+});
+
+test("write-once review document is available only after submit to independent approver",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
+    const pre=f.call(1,"GET","/v1/agent-review-artifacts/"+submissionId,
+      undefined,reviewApproverKey);
+    assert.equal((await pre).status,404);
+    const replay=await stageReport(f,1,{id,lease,source,owner,submissionId});
+    assert.equal(replay.status,200,JSON.stringify(replay.body));
+    assert.equal(replay.body.created,false);
+    assert.equal(replay.body.artifactDigest,artifactDigest);
+    const changed=await stageReport(f,0,{id,lease,source,owner,submissionId,
+      document:{...reviewDocument(),summary:"A different valid report must never replace this one."}});
+    assert.equal(changed.status,409,JSON.stringify(changed.body));
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    const get=(i,token)=>f.call(i,"GET","/v1/agent-review-artifacts/"+
+      submissionId,undefined,token);
+    const fetched=await get(1,reviewApproverKey);
+    assert.equal(fetched.status,200,JSON.stringify(fetched.body));
+    assert.deepEqual(fetched.body.document,reviewDocument());
+    assert.equal(fetched.body.artifactDigest,artifactDigest);
+    assert.equal(fetched.body.sourceFingerprint,source.fingerprint);
+    assert.equal(fetched.body.artifactMode,"stored_review_document_v1");
+    assert.equal(JSON.stringify(fetched.body).includes(lease),false);
+    assert.equal((await get(0,owner)).status,200);
+    assert.equal((await get(0,rootKey)).status,401);
+    assert.equal((await get(0,actorKey)).status,404);
+    assert.equal((await get(0,reviewSelfKey)).status,404);
+    assert.equal((await get(0,tenantApproverKey)).status,404);
+  } finally {await f.close();}
+});
+test("new reviewer submit never trusts a caller digest without a staged report",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
+    const forged=await postReview(f,0,{
+      ...req,submissionId:randomUUID(),artifactDigest:"c".repeat(64),
+    },owner);
+    assert.equal(forged.status,409,JSON.stringify(forged.body));
+    assert.equal(forged.body.error,"review_evidence_invalid");
+    assert.equal((await postReview(f,1,{...req,artifactDigest:"b".repeat(64)},
+      owner)).status,409);
+    const submitted=await postReview(f,0,req,owner);
+    assert.equal(submitted.status,201,JSON.stringify(submitted.body));
+    assert.equal(submitted.body.artifactMode,"stored_review_document_v1");
+    const board=(await f.view(1,id)).body;
+    assert.equal(board.tasks[1].state,"review_submitted");
+    assert.equal(board.tasks[2].state,"blocked");
+  } finally {await f.close();}
+});
+test("approved review becomes unusable when retained report changes, disappears or is a symlink",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,1,reviewApprovalBody(req),reviewApproverKey)).status,201);
+    const pathToDoc=path.join(f.dataDir,"agent-review-artifacts",submissionId+".json");
+    const stored=await readFile(pathToDoc,"utf8");
+    assert.equal(stored.includes(lease),false);
+    const forged=JSON.parse(stored);
+    forged.document.summary="A deliberately modified but plausible description.";
+    await writeFile(pathToDoc,JSON.stringify(forged),{mode:0o600});
+    assert.equal((await f.view(1,id)).status,409);
+    await writeFile(pathToDoc,stored,{mode:0o600});
+    assert.equal((await f.view(0,id)).status,200);
+    await rm(pathToDoc);
+    await symlink(path.join(f.base,"untrusted.json"),pathToDoc);
+    assert.equal((await f.view(1,id)).status,409);
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,404);
+    await rm(pathToDoc);
+    assert.equal((await f.view(0,id)).status,409);
+    assert.equal((await f.call(1,"GET","/v1/agent-review-artifacts/"+
+      submissionId,undefined,reviewApproverKey)).status,404);
+  } finally {await f.close();}
+});
+test("staged artifact is bound to lease generation and rejects unsafe report fields",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId}=await prepareReviewer(f);
+    const invalid=await stageReport(f,1,{id,lease,source,owner,
+      document:{version:1,summary:"Contains a hidden credential Bearer abcdefgh",
+        recommendation:"approve",findings:[]}});
+    assert.equal(invalid.status,422);
+    const missing=await stageReport(f,1,{id,lease,source,owner,
+      document:{version:1,summary:"Enough summary, but missing findings.",recommendation:"approve"}});
+    assert.equal(missing.status,422);
+    const alternate=await stageReport(f,0,{id,lease,source,owner});
+    assert.equal(alternate.status,409);
+    const released=await f.call(0,"POST","/v1/agent-task-leases",{
+      action:"release",handoffId:id,taskId:"review",leaseId:lease,
+    },owner);
+    assert.equal(released.status,200);
+    const replay=await stageReport(f,0,{id,lease,source,owner,submissionId});
+    assert.equal(replay.status,409);
+    const newLease=await f.claim(1,id,"review",owner);
+    assert.equal(newLease.status,200);
+    const newReport=await stageReport(f,1,{
+      id,lease:newLease.body.leaseId,source,owner,
+    });
+    assert.equal(newReport.status,201,JSON.stringify(newReport.body));
+    assert.notEqual(newReport.body.submissionId,submissionId);
+    assert.notEqual(newReport.body.artifactDigest,
+      (await readFile(path.join(f.dataDir,"agent-review-artifacts",
+        submissionId+".json"),"utf8")).match(/"digest":"([a-f0-9]{64})"/)?.[1]);
+  } finally {await f.close();}
+});
+test("legacy #115 review events stay readable without falsely claiming stored reports",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,201);
+    const location=path.join(f.dataDir,"agent-handoffs",id+".json");
+    const manifest=JSON.parse(await readFile(location,"utf8"));
+    let head="0".repeat(64);
+    const digest=obj=>createHash("sha256").update(JSON.stringify(obj)).digest("hex");
+    for(const event of manifest.events) {
+      if(event.kind.startsWith("review_")) delete event.artifactMode;
+      event.previousHash=head;
+      delete event.hash;
+      event.hash=digest(event);
+      head=event.hash;
+    }
+    manifest.head=head;
+    delete manifest.hash;
+    manifest.hash=digest(manifest);
+    await writeFile(location,JSON.stringify(manifest),{mode:0o600});
+    await rm(path.join(f.dataDir,"agent-review-artifacts",submissionId+".json"));
+    const read=await f.view(1,id);
+    assert.equal(read.status,200,JSON.stringify(read.body));
+    const reviewed=read.body.tasks[1];
+    assert.equal(reviewed.state,"human_approved_review");
+    assert.equal(reviewed.reviewApproval.artifactMode,undefined);
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,200);
+  } finally {await f.close();}
 });
