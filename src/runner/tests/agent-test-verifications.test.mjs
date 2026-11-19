@@ -123,7 +123,8 @@ async function fixture({multiTenant=false}={}) {
     return verifyJobEvidenceForRead(dataDir,admit.id);
   };
   const close=async()=>{
-    await Promise.all(servers.map(s=>new Promise(ok=>s.close(ok))));
+    await Promise.all(servers.map(s=>s.listening ?
+      new Promise(ok=>s.close(ok)) : Promise.resolve()));
     await rm(base,{recursive:true,force:true});
   };
   return {base,dataDir,actorFile,tenantFile,tenantKey,bravo,call,create,
@@ -598,4 +599,66 @@ test("review late completion after lease timeout and forged chained event are re
     assert.equal((await f.view(1,id)).status,409);
     assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,404);
   }finally{await f.close();}
+});
+
+test("released reviewer lease and old fencing generation cannot submit a review",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f);
+    const old=reviewSubmitBody(id,lease,source.fingerprint);
+    const release=await f.call(0,"POST","/v1/agent-task-leases",{
+      action:"release",handoffId:id,taskId:"review",leaseId:lease,
+    },owner);
+    assert.equal(release.status,200,JSON.stringify(release.body));
+    assert.equal((await postReview(f,0,old,owner)).status,409);
+    const replacement=await f.claim(1,id,"review",owner);
+    assert.equal(replacement.status,200,JSON.stringify(replacement.body));
+    assert.notEqual(replacement.body.leaseId,lease);
+    assert.equal(replacement.body.generation,2);
+    assert.equal((await postReview(f,1,old,owner)).status,409);
+    const current=reviewSubmitBody(id,replacement.body.leaseId,
+      source.fingerprint);
+    assert.equal((await postReview(f,1,current,owner)).status,201);
+    const review=(await f.view(0,id)).body.tasks[1];
+    assert.equal(review.state,"review_submitted");
+    assert.equal(review.fencingVersion,2);
+  }finally {await f.close();}
+});
+test("review approval survives a fresh API instance, without replaying agent execution",async()=>{
+  const f=await fixture();
+  let restarted;
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f);
+    const submit=reviewSubmitBody(id,lease,source.fingerprint);
+    assert.equal((await postReview(f,0,submit,owner)).status,201);
+    assert.equal((await postReview(f,1,reviewApprovalBody(submit),
+      reviewApproverKey)).status,201);
+    await new Promise(resolve=>f.servers[0].close(resolve));
+    restarted=createRunnerServer({
+      dataDir:f.dataDir,apiKey:rootKey,agentActorsFile:f.actorFile,
+      allowedOrigins:[origin],
+    });
+    restarted.listen(0,"127.0.0.1");
+    await once(restarted,"listening");
+    const host="http://127.0.0.1:"+restarted.address().port;
+    const load=await fetch(host+"/v1/agent-handoffs/"+id,{
+      headers:{Origin:origin,Authorization:"Bearer "+rootKey},
+    });
+    assert.equal(load.status,200);
+    const board=await load.json();
+    assert.equal(board.tasks[1].state,"human_approved_review");
+    assert.equal(board.tasks[1].reviewApproval.sourceFingerprint,source.fingerprint);
+    assert.equal(board.executions,0);
+    const claim=await fetch(host+"/v1/agent-task-leases",{
+      method:"POST",headers:{Origin:origin,Authorization:"Bearer "+releaseKey,
+        "Content-Type":"application/json"},
+      body:JSON.stringify({action:"claim",handoffId:id,taskId:"release",
+        ttlSeconds:60}),
+    });
+    assert.equal(claim.status,200,JSON.stringify(await claim.json()));
+  } finally {
+    if(restarted?.listening)
+      await new Promise(resolve=>restarted.close(resolve));
+    await f.close();
+  }
 });
