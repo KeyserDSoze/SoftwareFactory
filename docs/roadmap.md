@@ -926,3 +926,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Route actor-scoped per review con submission digest di documento esterno, source fingerprint #114 e approvazione `manual_inspection` indipendente; eventi persistenti SHA chain e fencing; GET rechecks del journal/input originale.
 - [x] `review_submitted` non sblocca i dipendenti; `human_approved_review` documenta solo la verifica dichiarata da umano e consente claim downstream. Non attribuire provider billing, execution AI o false passed.
 - [ ] Review artifact verificato off-host, misurazione costi da provider reale, agent executor e collaudi VM rootless/Cloudflare: issue #113/#109/#105/#87/#2.
+
+
+## Custodia write-once degli artefatti Reviewer (#116 — 19 novembre 2026)
+
+- [x] Deposito privato di rapporto strutturato bounded con digest calcolato dal server e binding a snapshot Tester, handoff, owner, tenant e fencing.
+- [x] Nuovi submit/approve collegati obbligatoriamente a un rapporto staged, GET actor-only dopo submit, re-verifica di file e journal su ogni read/claim; vecchi checkpoint digest-only riconosciuti come legacy.
+- [ ] L'effettiva lettura/qualità della review, firme off-host e consumi provider restano da dimostrare in #113/#109/#105. Orfani crash richiedono recovery manuale; nessun auto-push o esecuzione LLM.
