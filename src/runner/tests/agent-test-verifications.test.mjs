@@ -127,7 +127,7 @@ async function fixture({multiTenant=false}={}) {
       new Promise(ok=>s.close(ok)) : Promise.resolve()));
     await rm(base,{recursive:true,force:true});
   };
-  return {base,dataDir,actorFile,tenantFile,tenantKey,bravo,call,create,
+  return {base,dataDir,actorFile,tenantFile,tenantKey,bravo,servers,call,create,
     claim,verify,view,run,close};
 }
 test("real worker journal binding: tester completes only a passed code-test and reviewer becomes claimable",async()=>{
