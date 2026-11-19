@@ -43,12 +43,12 @@ async function fixture({withTenant=false,globalKey=rootKey}={}) {
     ],
   }),{mode:0o600});
   const servers=Array.from({length:2},()=>createRunnerServer({
-    dataDir,allowedOrigins:[origin],apiKey:withTenant?"":rootKey,
+    dataDir,allowedOrigins:[origin],apiKey:withTenant?"":globalKey,
     tenantsFile:withTenant?tenantsFile:"",agentActorsFile:registry,
   }));
   for(const s of servers){s.listen(0,"127.0.0.1");await once(s,"listening");}
   const urls=servers.map(s=>"http://127.0.0.1:"+s.address().port);
-  const call=async(index,method,route,body,token=rootKey)=>{
+  const call=async(index,method,route,body,token=globalKey)=>{
     const reply=await fetch(urls[index]+route,{
       method,headers:{Origin:origin,Authorization:"Bearer "+token,
         ...(body===undefined?{}:{"Content-Type":"application/json","Idempotency-Key":randomUUID()})},
