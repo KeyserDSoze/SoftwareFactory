@@ -160,6 +160,36 @@ async function listVerified(dataDir) {
     records.push(await readManifest(dataDir,entry.name.slice(0,-5)));
   return records;
 }
+// A digest of upstream evidence metadata, not of source code or AI review.
+// Every manifest read rechecks the original runner journal for Tester proofs.
+function reviewDependencyContext(record,leases,task) {
+  if (task.role!=="code_reviewer") return null;
+  const dependencies=task.dependsOn.map(taskId=>{
+    const state=leases.get(taskId);
+    if (state?.testVerified) return {
+      taskId,evidence:"verified_runner_journal",
+      jobId:state.testVerified.jobId,digest:state.testVerified.jobDigest,
+      head:state.testVerified.jobHead,count:state.testVerified.jobCount,
+      step:state.testVerified.step,
+    };
+    if (state?.approved) return {
+      taskId,evidence:"human_approved_digest",
+      digest:state.submission.digest,approvedBy:state.approvedBy,
+    };
+    return {taskId,evidence:"not_started"};
+  });
+  // No dependencies means there is no verifiable context to bind.
+  const recorded=dependencies.length>0 &&
+    dependencies.every(dep=>dep.evidence!=="not_started");
+  return {
+    status:recorded?"inputs_recorded":"awaiting_inputs",
+    fingerprint:recorded?hash({
+      scope:"agent-review-context-v1",handoffId:record.id,
+      taskId:task.id,dependencies,
+    }):null,
+    dependencies,
+  };
+}
 function project(record) {
   // A lease is a capability, not evidence that an AI process executed or
   // completed anything. A dependent task stays blocked without a verified
@@ -199,6 +229,7 @@ function project(record) {
           head:lease.testVerified.jobHead,count:lease.testVerified.jobCount,
           step:lease.testVerified.step,
         } : null,
+        reviewContext:reviewDependencyContext(record,leases,task),
         evidence:lease?.testVerified ? "verified_runner_journal" :
           lease?.approved ? "human_approved_digest" : "not_started",
       };

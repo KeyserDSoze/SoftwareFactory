@@ -142,9 +142,18 @@ test("real worker journal binding: tester completes only a passed code-test and 
     assert.deepEqual(current.body.tasks.map(t=>t.state),["runner_verified_test","ready"]);
     assert.equal(current.body.tasks[0].evidence,"verified_runner_journal");
     assert.equal(current.body.tasks[0].testEvidence.step,"dotnet-test");
+    const context=current.body.tasks[1].reviewContext;
+    assert.equal(context.status,"inputs_recorded");
+    assert.match(context.fingerprint,/^[a-f0-9]{64}$/);
+    assert.deepEqual(context.dependencies,[{
+      taskId:"test",evidence:"verified_runner_journal",
+      jobId:job.report.id,digest:job.report.digest,
+      head:job.head,count:job.entries.length,step:"dotnet-test",
+    }]);
     assert.equal(JSON.stringify(current.body).includes(lease.body.leaseId),false);
     assert.equal(JSON.stringify(current.body).includes('"passed"'),false);
     assert.equal((await f.claim(1,id,"review",reviewerKey)).status,200);
+    assert.deepEqual((await f.view(0,id)).body.tasks[1].reviewContext,context);
     assert.equal((await f.claim(0,id,"test")).status,409);
     const raw=await readFile(path.join(f.dataDir,"agent-handoffs",id+".json"),"utf8");
     assert.equal(raw.includes(actorKey),false);

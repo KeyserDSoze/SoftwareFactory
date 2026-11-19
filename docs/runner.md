@@ -1136,3 +1136,24 @@ Il protocollo \`POST /v1/agent-task-verifications\` (Bearer actor \`tester\`, \`
 Il commit usa \`withAdmissionLock\` e rifà la verifica dell'actor file-backed sotto lock. Richiede owner/role e tenant del manifesto, lease corrente e non scaduta, job ammesso **dopo l'istante della claim**, report finalizzato con ultimo evento \`finished\` e \`state:passed\`, tutti gli step effettivamente passati con evidenza SHA-chain verificata e head/count/digest/step uguali a quelli della richiesta. Non ammette riuso del medesimo job in altre completion, anche su API concorrenti. \`submissionId\` identico ripete la risposta senza aggiungere eventi; proof differenti o lease obsolete => 409.
 
 La proiezione \`GET /v1/agent-handoffs/:id\` rilegge l'evidenza del job per **ogni** evento \`test_verified\` e rifà il controllo durante claim dei task dipendenti. Mostra \`runner_verified_test\` e \`testEvidence:{jobId,digest,head,count,step}\`, \`evidence:"verified_runner_journal"\`, \`verifiedTestJobs\`. Non espone leaseId; non dichiara una revisione del codice o esecuzione dell'AI. Se il worker elimina i file per retention o il journal è manomesso, le operazioni rifiutano la prova (integrità 409/404) anziché inventare uno storico passato. Un archivio verificato a lungo termine e firme off-host richiederanno un protocollo distinto; i risultati dipendono dal volume POSIX locale e dal retention di job. Code Reviewer e altri ruoli non sono ancora completabili con questa route. BudgetUnits rimane preventivo e ApprovedReportedUnits non è provider billing.
+
+
+## Provenienza delle dependency per Code Reviewer (#112)
+
+Nel registro handoff AI la proiezione `reviewContext` è **sola lettura**
+ed è presente soltanto sui task con ruolo `code_reviewer`. Elenca, nell'ordine
+del DAG, i riferimenti alle *evidenze upstream* già controllate dal runner:
+digest del checkpoint PM approvato da un umano, oppure job ID, digest,
+head/count del journal e step del Tester. In assenza di dependency
+completate, lo stato è `awaiting_inputs` e `fingerprint` è `null`.
+Quando tutte le dependency esplicite risultano concluse, il sistema emette
+`inputs_recorded` e un SHA-256 domain-separated su handoff, task e lista
+di metadata, senza includere sorgenti, token o lease.
+
+Questo fingerprint **non** è un hash dei sorgenti o della patch, non certifica
+l'esecuzione del Code Reviewer, non equivale a un verdetto di review né
+sblocca task figli. Le prove Tester rimangono legate al journal originario:
+la sua rimozione/manomissione fa fallire la GET. Per una completion di
+review realmente verificata restano necessari snapshot di codice
+immutabili, approvazione indipendente, audit off-host e costi provider
+attestati (#109/#105).

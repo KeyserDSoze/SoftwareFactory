@@ -56,12 +56,18 @@ test("declared DAG persists without executing agents, no made-up passed evidence
     assert.equal(result.body.reservedUnits,7);
     assert.deepEqual(result.body.tasks.map(t=>t.state),["ready","blocked"]);
     assert.deepEqual(result.body.tasks.map(t=>t.evidence),["not_started","not_started"]);
+    assert.equal(result.body.tasks[0].reviewContext,null);
+    assert.deepEqual(result.body.tasks[1].reviewContext,{
+      status:"awaiting_inputs",fingerprint:null,
+      dependencies:[{taskId:"plan",evidence:"not_started"}],
+    });
     assert.equal("passed" in result.body,false);
     const read=await f.get(1,result.body.id);
     assert.equal(read.status,200);
     assert.equal(read.body.created,undefined);
     assert.equal(read.body.status,"declared");
     assert.deepEqual(read.body.tasks.map(t=>t.dependsOn),[[],["plan"]]);
+    assert.deepEqual(read.body.tasks[1].reviewContext,result.body.tasks[1].reviewContext);
     const serialized=await readFile(f.recordPath(result.body.id),"utf8");
     assert.equal(serialized.includes("password"),false);
     assert.equal(serialized.includes("Bearer "),false);

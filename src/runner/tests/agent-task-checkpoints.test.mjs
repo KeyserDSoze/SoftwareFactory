@@ -134,9 +134,16 @@ test("human-approved PM digest unblocks review, never pretends technical test pa
     assert.equal(result.body.tasks[0].evidence,"human_approved_digest");
     assert.equal(result.body.tasks[1].state,"ready");
     assert.equal(result.body.tasks[1].evidence,"not_started");
+    const context=result.body.tasks[1].reviewContext;
+    assert.equal(context.status,"inputs_recorded");
+    assert.match(context.fingerprint,/^[a-f0-9]{64}$/);
+    assert.deepEqual(context.dependencies,[{
+      taskId:"plan",evidence:"human_approved_digest",digest,approvedBy:"human-1",
+    }]);
     assert.equal((await f.claim(1,id,"review",reviewer)).status,200);
     const after=await f.view(0,id);
     assert.equal(after.body.tasks[1].state,"leased");
+    assert.deepEqual(after.body.tasks[1].reviewContext,context);
     assert.equal(after.body.tasks[1].evidence,"not_started");
     assert.equal(JSON.stringify(after.body).includes('"passed"'),false);
     const raw=await readFile(path.join(f.dataDir,"agent-handoffs",id+".json"),"utf8");
