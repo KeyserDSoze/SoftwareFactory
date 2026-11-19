@@ -13,6 +13,9 @@ import { verifyJobEvidenceForRead } from "./evidence.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { readRunnerInput } from "./input.mjs";
 import { validateRequest } from "./common.mjs";
+import { REVIEW_ARTIFACT_MODE,validateReviewArtifactStage,
+  makeReviewArtifactRecord,storeReviewArtifact,verifyReviewArtifactLink
+} from "./review-artifacts.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA = /^[a-f0-9]{64}$/;
@@ -146,7 +149,7 @@ async function readManifest(dataDir,id) {
     const record=validateRecord(JSON.parse(buf.toString("utf8")),id);
     const snapshots=await verifyTechnicalProofs(dataDir,record);
     Object.defineProperty(record,SOURCE_SNAPSHOTS,{value:snapshots});
-    verifyReviewBindings(record);
+    await verifyReviewBindings(dataDir,record);
     return record;
   } catch (error) {
     if (error.code === "ENOENT") throw error;
@@ -276,6 +279,8 @@ function project(record) {
           sourceFingerprint:lease.reviewSubmission.sourceFingerprint,
           approvedBy:lease.reviewApprovedBy,
           attestation:"manual_inspection",
+          ...(lease.reviewSubmission.mode===REVIEW_ARTIFACT_MODE ?
+            {artifactMode:REVIEW_ARTIFACT_MODE} : {}),
         } : null,
         testEvidence:lease?.testVerified ? {
           jobId:lease.testVerified.jobId,digest:lease.testVerified.jobDigest,
@@ -369,7 +374,8 @@ function verifyLeaseHistory(record) {
       ...(isTechnical?["submissionId","jobId","jobDigest","jobHead",
         "jobCount","step"]:[]),
       ...(isReview?["submissionId","artifactDigest","sourceFingerprint"]:[]),
-      ...(event?.kind==="review_approve"?["attestation"]:[])];
+      ...(event?.kind==="review_approve"?["attestation"]:[]),
+      ...(isReview && Object.hasOwn(event,"artifactMode")?["artifactMode"]:[])];
     if (!exact(event,allowedFields) ||
         event.sequence!==i+1 || event.previousHash!==head ||
         !["claim","renew","release","submit","approve","test_verified",
@@ -393,7 +399,9 @@ function verifyLeaseHistory(record) {
           event.jobCount<1 || event.jobCount>48 ||
           !TEST_STEPS.has(event.step)) ||
         isReview && (!UUID.test(event.submissionId) ||
-          !SHA.test(event.artifactDigest) || !SHA.test(event.sourceFingerprint)) ||
+          !SHA.test(event.artifactDigest) || !SHA.test(event.sourceFingerprint) ||
+          Object.hasOwn(event,"artifactMode") &&
+            event.artifactMode!==REVIEW_ARTIFACT_MODE) ||
         event.kind==="review_approve" &&
           event.attestation!=="manual_inspection")
       throw issue("HANDOFF_INTEGRITY");
@@ -471,7 +479,8 @@ function verifyLeaseHistory(record) {
           expiration!==Date.parse(state.expiresAt))
         throw issue("HANDOFF_INTEGRITY");
       state.reviewSubmission={id:event.submissionId,
-        digest:event.artifactDigest,sourceFingerprint:event.sourceFingerprint};
+        digest:event.artifactDigest,sourceFingerprint:event.sourceFingerprint,
+        mode:event.artifactMode};
     } else if (event.kind==="review_approve") {
       if (task.role!=="code_reviewer" || !state.active ||
           state.approved || state.testVerified || state.reviewApproved ||
@@ -482,7 +491,8 @@ function verifyLeaseHistory(record) {
           expiration!==Date.parse(state.expiresAt) ||
           state.reviewSubmission.id!==event.submissionId ||
           state.reviewSubmission.digest!==event.artifactDigest ||
-          state.reviewSubmission.sourceFingerprint!==event.sourceFingerprint)
+          state.reviewSubmission.sourceFingerprint!==event.sourceFingerprint ||
+          state.reviewSubmission.mode!==event.artifactMode)
         throw issue("HANDOFF_INTEGRITY");
       state.active=false;
       state.reviewApproved=true;
@@ -813,7 +823,7 @@ async function verifyTechnicalProofs(dataDir,record) {
   }
   return snapshots;
 }
-function verifyReviewBindings(record) {
+async function verifyReviewBindings(dataDir,record) {
   const states=verifyLeaseHistory(record);
   for (const task of record.tasks) {
     const state=states.get(task.id);
@@ -823,7 +833,106 @@ function verifyReviewBindings(record) {
     if (source?.status!=="runner_input_recorded" ||
         source.fingerprint!==state.reviewSubmission.sourceFingerprint)
       throw issue("HANDOFF_REVIEW_EVIDENCE");
+    if (state.reviewSubmission.mode===REVIEW_ARTIFACT_MODE)
+      await verifyReviewArtifactLink(dataDir,{
+        handoffId:record.id,taskId:task.id,tenantId:record.tenantId,
+        owner:task.owner,generation:state.generation,
+        submissionId:state.reviewSubmission.id,
+        sourceFingerprint:source.fingerprint,
+        digest:state.reviewSubmission.digest,
+      });
   }
+}
+/** The producer may stage one structured report per fenced generation.
+ * This stores no source code in the handoff; the verified digest is server
+ * computed and independent reviewers can retrieve the report after submit.
+ */
+export async function stageAgentReviewArtifact({
+  dataDir,request,actor,reauthorize,waitMs=1500,nowMs=Date.now,
+}) {
+  const input=validateReviewArtifactStage(request);
+  if (!actor || actor.role!=="code_reviewer" || !ACTOR.test(actor.id) ||
+      !(actor.tenantId===null || typeof actor.tenantId==="string" &&
+        TENANT.test(actor.tenantId)))
+    throw issue("HANDOFF_REVIEW_FORBIDDEN");
+  return withAdmissionLock(dataDir,async()=>{
+    await reauthorize?.();
+    await trustedDirectory(directory(dataDir));
+    let record;
+    try {record=await readManifest(dataDir,input.handoffId);}
+    catch(e) {if(e.code==="ENOENT") throw issue("HANDOFF_NOT_FOUND");throw e;}
+    const task=record.tasks.find(t=>t.id===input.taskId);
+    if (record.tenantId!==actor.tenantId || !task ||
+        task.role!=="code_reviewer" || task.owner!==actor.id)
+      throw issue("HANDOFF_NOT_FOUND");
+    const states=verifyLeaseHistory(record),state=states.get(task.id);
+    const source=reviewSourceSnapshot(record,states,task,
+      reviewDependencyContext(record,states,task));
+    if(source?.status!=="runner_input_recorded" ||
+        source.fingerprint!==input.sourceFingerprint)
+      throw issue("HANDOFF_REVIEW_EVIDENCE");
+    const now=nowMs();
+    if(!state.active || Date.parse(state.expiresAt)<=now ||
+        state.leaseId!==input.leaseId ||
+        state.reviewApproved || state.approved || state.testVerified ||
+        state.reviewSubmission &&
+          state.reviewSubmission.id!==input.submissionId)
+      throw issue("HANDOFF_LEASE_STALE");
+    const recordToStore=makeReviewArtifactRecord({
+      handoffId:record.id,taskId:task.id,submissionId:input.submissionId,
+      tenantId:record.tenantId,owner:task.owner,generation:state.generation,
+      sourceFingerprint:source.fingerprint,document:input.document,
+    });
+    await reauthorize?.();
+    if(nowMs()>=Date.parse(state.expiresAt))
+      throw issue("HANDOFF_LEASE_STALE");
+    const saved=await storeReviewArtifact(dataDir,recordToStore);
+    await reauthorize?.();
+    return {created:saved.created,version:1,handoffId:record.id,
+      taskId:task.id,submissionId:input.submissionId,
+      artifactDigest:saved.record.digest,
+      sourceFingerprint:source.fingerprint,artifactMode:REVIEW_ARTIFACT_MODE};
+  },waitMs);
+}
+/** Actor-only read: independent approver can examine the retained report
+ * only AFTER submit. GET never provides the Tester source files or leaseId.
+ */
+export async function getAgentReviewArtifact({
+  dataDir,submissionId,actor,reauthorize,
+}) {
+  if(!UUID.test(submissionId) || !actor || !ACTOR.test(actor.id) ||
+      !["code_reviewer","review_approver"].includes(actor.role))
+    throw issue("HANDOFF_NOT_FOUND");
+  await reauthorize?.();
+  // Resolve a private ID without an oracle about other tenants or tasks.
+  // This bounded scan also rechecks every retained handoff's evidence.
+  const records=await listVerified(dataDir);
+  let found=null;
+  for(const record of records) {
+    if(record.tenantId!==actor.tenantId) continue;
+    const states=verifyLeaseHistory(record);
+    for(const task of record.tasks) {
+      const state=states.get(task.id),submission=state.reviewSubmission;
+      if(submission?.id!==submissionId) continue;
+      if(task.role!=="code_reviewer" ||
+          !(actor.role==="code_reviewer" && actor.id===task.owner ||
+            actor.role==="review_approver" && actor.id!==task.owner) ||
+          submission.mode!==REVIEW_ARTIFACT_MODE)
+        throw issue("HANDOFF_NOT_FOUND");
+      found={record,task,state,submission};
+    }
+  }
+  if(!found) throw issue("HANDOFF_NOT_FOUND");
+  const {record,task,state,submission}=found;
+  const artifact=await verifyReviewArtifactLink(dataDir,{
+    handoffId:record.id,taskId:task.id,tenantId:record.tenantId,
+    owner:task.owner,generation:state.generation,submissionId,
+    sourceFingerprint:submission.sourceFingerprint,digest:submission.digest,
+  });
+  await reauthorize?.();
+  return {version:1,handoffId:record.id,taskId:task.id,submissionId,
+    artifactDigest:artifact.digest,sourceFingerprint:artifact.sourceFingerprint,
+    artifactMode:REVIEW_ARTIFACT_MODE,document:artifact.document};
 }
 function reviewRequest(input) {
   const base=["action","handoffId","taskId","submissionId",
@@ -873,12 +982,22 @@ export async function mutateAgentTaskReview({
       state.reviewSubmission.id===input.submissionId &&
       state.reviewSubmission.digest===input.artifactDigest &&
       state.reviewSubmission.sourceFingerprint===input.sourceFingerprint;
+    const proofMode=input.action==="submit" ?
+      REVIEW_ARTIFACT_MODE : state.reviewSubmission?.mode;
+    const proofLink={
+      handoffId:record.id,taskId:task.id,tenantId:record.tenantId,
+      owner:task.owner,generation:state.generation,
+      submissionId:input.submissionId,
+      sourceFingerprint:input.sourceFingerprint,digest:input.artifactDigest,
+    };
     const reply=created=>({
       version:1,handoffId:record.id,taskId:task.id,action:input.action,
       submissionId:input.submissionId,artifactDigest:input.artifactDigest,
       sourceFingerprint:input.sourceFingerprint,generation:state.generation,
       created,state:input.action==="submit"?"review_submitted":"human_approved_review",
       evidence:input.action==="submit"?"not_started":"human_review_attestation",
+      ...(proofMode===REVIEW_ARTIFACT_MODE ?
+        {artifactMode:REVIEW_ARTIFACT_MODE}:{}),
     });
     if (input.action==="submit" && same && !state.reviewApproved &&
         state.active && Date.parse(state.expiresAt)>now &&
@@ -902,6 +1021,11 @@ export async function mutateAgentTaskReview({
         throw issue("HANDOFF_REVIEW_CONFLICT");
     } else if (!same || !state.reviewSubmission || state.submission)
       throw issue("HANDOFF_REVIEW_CONFLICT");
+    // New submits always require a server-computed digest from an immutable
+    // staged report. Pre-#116 journal entries stay readable and approvable
+    // as legacy *manual digest only*, never upgraded to stored evidence.
+    if(proofMode===REVIEW_ARTIFACT_MODE)
+      await verifyReviewArtifactLink(dataDir,proofLink);
     const commitNow=nowMs();
     if (commitNow>=Date.parse(state.expiresAt) ||
         state.at && commitNow<Date.parse(state.at))
@@ -916,6 +1040,8 @@ export async function mutateAgentTaskReview({
       expiresAt:state.expiresAt,submissionId:input.submissionId,
       artifactDigest:input.artifactDigest,
       sourceFingerprint:input.sourceFingerprint,
+      ...(proofMode===REVIEW_ARTIFACT_MODE ?
+        {artifactMode:REVIEW_ARTIFACT_MODE}:{}),
       ...(input.action==="approve"?{attestation:"manual_inspection"}:{}),
     };
     const event={...payload,hash:hash(payload)};
@@ -928,8 +1054,10 @@ export async function mutateAgentTaskReview({
     await reauthorize?.();
     if (nowMs()>=Date.parse(state.expiresAt))
       throw issue("HANDOFF_LEASE_STALE");
-    // Re-read the upstream input and journal before the atomic commit.
+    // Re-read the upstream test journal and the staged document before commit.
     await readManifest(dataDir,record.id);
+    if(proofMode===REVIEW_ARTIFACT_MODE)
+      await verifyReviewArtifactLink(dataDir,proofLink);
     await atomicWrite(filePath(dataDir,record.id),next);
     const checked=await readManifest(dataDir,record.id);
     const committed=verifyLeaseHistory(checked).get(task.id);
