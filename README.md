@@ -690,3 +690,30 @@ Il runner offre un **registro indipendente dai test Docker** per dichiarare un p
 `GET /v1/agent-handoffs/:uuid` restituisce la dichiarazione e lo stato **`declared`** con task `ready` (nessun predecessore) o `blocked` (dipendenze dichiarate). **Non esiste ancora un agente in esecuzione, un lease o un task riuscito**: `owner` è solo un identificatore dichiarato, NON una credenziale. Il `budgetUnits` è una stima di pianificazione con somma dei task controllata, **non** un contatore verificato di token/crediti reali. Il backend non consente di usare il registro per avviare AI, Docker, patch o approvazioni.
 
 Il file privato salvato su volume POSIX contiene soltanto identità, ruoli, dipendenze, limiti, digest e consenso, senza prompt/sorgenti/token; è verificato tramite hash locale, owner/permessi e invarianti di inode/hardlink/symlink. Due API condividono il lock di admission; risposte perse possono essere recuperate con lo stesso UUID e identico contenuto. Un file sospetto blocca nuovi handoff, senza creare falsi successi. Consulta [ADR 0063](adr/0063-read-only-ai-role-handoff-registry.md) e la [#107](https://github.com/KeyserDSoze/SoftwareFactory/issues/107). **Le lease/fencing, identità per actor, budget reali e scheduler agenti restano #105 e #89.**
+
+
+
+
+## Agenti multi-ruolo: lease scoped con fencing e revoca (#108)
+
+La dichiarazione immutabile dei task AI (#107) supporta ora un gate separato di **presa in carico**. Configurare nella **sola API runner**, non nel worker Docker, \`RUNNER_AGENT_ACTORS_FILE=/percorso/assoluto/actors.json\`, un file privato \`0600\` di proprietà dell'UID API:
+
+\`\`\`json
+{
+  "version": 1,
+  "actors": [
+    {
+      "id": "pm-worker",
+      "tenantId": null,
+      "role": "project_manager",
+      "key": "agent.pm-worker.REPLACE_WITH_32_OR_MORE_RANDOM_BASE64URL_CHARS"
+    }
+  ]
+}
+\`\`\`
+
+Usare chiavi casuali **diverse** dalla chiave generale del runner e da quelle dei tenant. In modalità multi-tenant, impostare \`tenantId\` con l'identificatore esatto del tenant. Il registry viene riletto e verificato sotto lock a ogni mutazione; la sostituzione atomica del file revoca immediatamente le vecchie credenziali. Le chiavi non vengono salvate nei manifest né incluse nelle risposte.
+
+\`POST /v1/agent-task-leases\` richiede la Bearer dell'**attore**, non la chiave globale. Per \`claim\`: \`{"action":"claim","handoffId":"UUID","taskId":"plan","ttlSeconds":60}\`. Per \`renew\`: \`{"action":"renew","handoffId":"UUID","taskId":"plan","ttlSeconds":120,"leaseId":"UUID-DALLA-CLAIM"}\`. Per \`release\`: \`{"action":"release","handoffId":"UUID","taskId":"plan","leaseId":"UUID-DALLA-CLAIM"}\`.
+
+Il server verifica identità tenant+owner+ruolo, predecessori, limiti di tentativi, journal hash-chained e stessa claim-lock POSIX delle ammissioni. Ogni nuova claim aumenta \`generation\`; ticket vecchi o scaduti non possono più rinnovare/rilasciare la lease. \`leaseId\` è riservato al detentore della credenziale e non appare nella GET di piano. Il record è persistente e letto anche dopo riavvio. I task dipendenti restano bloccati: **non esiste ancora un protocollo di completamento verificato**, pertanto una lease non è prova di esecuzione né di test riusciti. BudgetUnits resta una stima riservata, non spesa AI contabilizzata. Non vengono avviati provider AI, Docker, apply o push automatici. [ADR 0064](adr/0064-actor-scoped-fenced-agent-task-leases.md) · [issue #108](https://github.com/KeyserDSoze/SoftwareFactory/issues/108).

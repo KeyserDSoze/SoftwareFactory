@@ -538,3 +538,12 @@ Prima del POST batch esiste ora uno step facoltativo di proposta: `application/p
 ### Registro PM handoff AI durevole read-only (#107)
 
 `src/runner/agent-handoffs.mjs` isola il *control-plane dichiarativo* della software house dai job reali del runner. POST richiede consenso, ruolo/owner per task, DAG aciclico ordinato, quote stimate per task e workflow, UUID idempotente; nessun prompt, token o source file nel record. All'interno del lock POSIX condiviso con admission/claim la API verifica **tutti** i manifest già archiviati prima di inserirne altri, scrive atomico un JSON versione 1 con SHA-256; FD `O_NOFOLLOW`, owner, mode, nlink e inode checks proteggono letture e replay. GET verifica il file e l'ownership tenant, proietta esclusivamente `declared` e `ready/blocked` derivati dalla topologia. Nessun lease, actor bearer, journal d'esecuzione o budget token effettivo è implementato da questa tranche. Vedi ADR0063; #105 mantiene lo sviluppo del coordinatore autorizzato.
+
+
+
+
+### Handoff AI con actor key e lease fenced (#108)
+
+Il manifesto \`agent-handoffs\` v1 conserva immutati i campi dichiarativi di #107 e acquisisce **solo dopo la prima claim** un journal logico \`events/head\` con eventi SHA-chain. \`validateRecord\` verifica l'intera catena ad ogni read, aggiornamenti atomici sotto \`withAdmissionLock\`, versione di fencing per task monotona e \`leaseId\` random UUID. \`project\` non espone il ticket e mantiene \`executions:0/evidence:not_started\` anche per \`leased\`/scaduti/esauriti. I predecessori non possono essere soddisfatti per mera presenza di una claim.
+
+\`agent-actors.mjs\` è un secondo trust boundary: file actor-scoped privato, key non registrata in cloud, re-open su ogni richiesta e dentro il lock, identità \`tenantId+owner+role\` non derivata dai campi user-provided. La nuova route \`/v1/agent-task-leases\` è esclusivamente actor-authenticated, mai Bearer globale/tenant. Il processo API non può dedurre il completamento del task dalle sole lease; le prove, il billing e l'orchestrazione automatica restano un incremento successivo #105/#89. ADR 0064.

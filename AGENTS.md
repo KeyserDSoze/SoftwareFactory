@@ -858,3 +858,14 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - `src/runner/agent-handoffs.mjs` è separato da `src/runner/workflows.mjs` (job Docker). Condivisione `withAdmissionLock` tra API per registrazione, hash idempotenza namespace-bound/tenant-bound, readback con inode/link/perms e hash verificati; rifiuto di file estranei nel registro.
 - `owner` non è identità autenticata né autorizzazione a fare claim. Non esporre POST claim/renew/complete senza actor credentials scoped, lease monotone fencing e journal append-only verificato. BudgetUnits non è contabilità costo AI reale.
 - Preservare i test `src/runner/tests/agent-handoffs.test.mjs`: due API, replay, duplicazioni, conflitti, tamper, tenants cross-owner, revoca file-backed e DAG invalidi. ADR0063, epiche #105/#89 aperte.
+
+
+
+
+## Lease actor-scoped per handoff AI (#108)
+
+- Configurare \`RUNNER_AGENT_ACTORS_FILE\` solo sul servizio **API** (file JSON 0600, UID effettivo, O_NOFOLLOW + nlink 1, fd snapshot prima/dopo) con identità esatta \`tenantId,id,role\`; **mai** fallback dalla key runner/tenant né dalla label \`owner\` del task. Chiave \`agent.<actor-id>.<32+ random>\`, ruotare via atomic rename. Nessun mounting nel worker Docker.
+- \`POST /v1/agent-task-leases\` con Bearer actor e \`claim|renew|release\`; input bounds/keys esatte, controllo di task.owner+role+tenant e reauthorize **sotto lo stesso \`withAdmissionLock\`** usato dalle istanze API. Task con predecessori non attestati = bloccati, senza exception.
+- La lease \`generation\` cresce solo dopo claim nuova, \`leaseId\` nuovo UUID non appare nei GET di handoff. Tutti gli eventi sono hash-chained e verificati a ogni lettura (persistenza via atomic rename), con maxAttempts; ticket vecchi/stale, key ruotate e conflitti = nessun commit.
+- Non esiste un comando \`complete\`/attest né una prova \`passed\`; lo stato \`leased\` segnala solo autorizzazione temporanea, NON lavoro svolto o quote token consumate. BudgetUnits è ancora dichiarato, non contabilità reale. Le dependency rimangono blocked.
+- Node tests in \`src/runner/tests/agent-task-leases.test.mjs\`, ADR0064, parent #105 e #89 aperte per evidence attestate, budget costi e scheduler.

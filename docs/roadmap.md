@@ -887,3 +887,14 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Archiviazione JSON privata hash-bound, same-volume admission lock, autorizzazione file-backed verificata al commit, FD/permessi/symlink/hardlink checks, proiezione rigorosamente `declared` (mai passed).
 - [x] Test Node di 2 API, replay e collisione, revoca tenant, privacy, corruzione/integrità e DAG injection; ADR 0063 e documentazione.
 - [ ] #105: actor credentials/permessi per ruolo, lease rinnovabili con monotonic fencing, journal di claim/complete, budget reale e prove; scheduler autonomo escluso. #89/#87: multi-agent supervisionata e VM rootless/Cloudflare live.
+
+
+
+
+## Actor-scoped PM handoff leases (#108 — 19/11/2026)
+
+- [x] Registry actor file-only/0600 e chiavi scoped tenant+owner+role, rotazione/revoca con O_NOFOLLOW + snapshot su FD, nessun riutilizzo della chiave runner.
+- [x] Route claim/renew/release con recheck credenziale, due API serializzate sul lock POSIX, generation monotona/leaseId random, expiry 30–300 secondi e maxAttempts per task.
+- [x] Ledger SHA-256 chained degli eventi claim/renew/release in JSON atomico; letture fail-closed su manomissione, replay e ticket scaduti. Root GET vede soltanto \`leased\`, scadenza e attempts, non leaseId.
+- [x] Test Node su 2 API, stale/expiry, revoca sotto lock, cross-tenant, role mismatch, tamper e symlink/hardlink/permessi file; ADR0064 e README/AGENTS.
+- [ ] Claim NON è un esito \`passed\`, dependency resta blocked; manca protocollo completion/attestazione, budget costo reale, adapter AI supervisionato, lease multi-host e VM rootless/Cloudflare (parent #105/#89/#87/#2).
