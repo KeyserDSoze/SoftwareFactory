@@ -56,7 +56,7 @@ async function fixture({withTenant=false}={}) {
     });
     return {status:reply.status,body:await reply.json()};
   };
-  const create=async(ownerKey=withTenant?alpha:rootKey)=>{
+  const create=async(ownerKey=withTenant?alpha:globalKey)=>{
     const r=await call(0,"POST","/v1/agent-handoffs",manifest(),ownerKey);
     assert.equal(r.status,201,JSON.stringify(r.body));
     return r.body;
@@ -237,5 +237,19 @@ test("actor registry symlink, widened permissions and hardlink deny ALL lease au
     await rename(f.registry,location);
     await symlink(location,f.registry);
     assert.equal((await claim()).status,503);
+  }finally{await f.close();}
+});
+
+
+test("even a duplicated configuration key cannot impersonate both runner admin and actor",async()=>{
+  const f=await fixture({globalKey:pm});
+  try {
+    const manifest=await f.create();
+    const result=await f.lease(0,manifest.id,"plan","claim",pm,{ttlSeconds:60});
+    assert.equal(result.status,401);
+    const plan=await f.call(1,"GET","/v1/agent-handoffs/"+manifest.id,undefined,pm);
+    assert.equal(plan.status,200);
+    assert.equal(plan.body.tasks[0].state,"ready");
+    assert.equal(plan.body.tasks[0].attempts,0);
   }finally{await f.close();}
 });
