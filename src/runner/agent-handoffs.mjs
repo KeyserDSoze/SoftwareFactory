@@ -18,7 +18,9 @@ const ROLES = new Set(["project_manager", "tester", "test_architect",
   "devops_engineer", "code_reviewer", "fullstack_developer",
   "fix_developer", "release_manager", "security_engineer"]);
 const MAX_MANIFESTS = 64;
-const MAX_RECORD_BYTES = 8192;
+const MAX_RECORD_BYTES = 64_000;
+const MAX_LEASE_EVENTS = 48;
+const GENESIS = "0".repeat(64);
 // Even a human-supplied label must not become a secret-bearing manifest.
 const CREDENTIAL_MARKER = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_[a-zA-Z0-9_]{15,}|gh[pousr]_[a-zA-Z0-9]{20,}|Bearer\s+\S+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+/i;
 export const MAX_HANDOFF_BODY_BYTES = 6144;
@@ -78,8 +80,11 @@ async function ensureRoot(dataDir) {
   await trustedDirectory(root);
 }
 function validateRecord(data, id) {
-  if (!exact(data, ["version","id","createdAt","tenantId","consent","label",
-    "budgetUnits","tasks","idempotencyHash","requestHash","hash"]) ||
+  const base = ["version","id","createdAt","tenantId","consent","label",
+    "budgetUnits","tasks","idempotencyHash","requestHash","hash"];
+  const withEvents = Object.hasOwn(data ?? {}, "events") ||
+    Object.hasOwn(data ?? {}, "head");
+  if (!(withEvents ? exact(data, [...base,"events","head"]) : exact(data,base)) ||
     data.version !== 1 || data.id !== id ||
     (data.tenantId !== null &&
       (typeof data.tenantId !== "string" || !TENANT.test(data.tenantId))) ||
@@ -100,6 +105,7 @@ function validateRecord(data, id) {
   if (hash(withoutHash) !== stored ||
       Buffer.byteLength(JSON.stringify(data)) > MAX_RECORD_BYTES)
     throw issue("HANDOFF_INTEGRITY");
+  verifyLeaseHistory(data); // Check full event chain on EVERY read and replay.
   return data;
 }
 /** O_NOFOLLOW + one link + stable fd snapshots: never trust a JSON filename
@@ -117,9 +123,14 @@ async function readManifest(dataDir,id) {
       st.size <= MAX_RECORD_BYTES;
     if (!safe(before)) throw issue("HANDOFF_INTEGRITY");
     const buf = Buffer.alloc(before.size);
-    const {bytesRead} = await fd.read(buf,0,buf.length,0);
+    let offset=0;
+    while (offset<buf.length) {
+      const {bytesRead} = await fd.read(buf,offset,buf.length-offset,offset);
+      if (!bytesRead) throw issue("HANDOFF_INTEGRITY");
+      offset+=bytesRead;
+    }
     const after = await fd.stat();
-    if (bytesRead !== buf.length || !safe(after) ||
+    if (!safe(after) ||
         before.dev !== after.dev || before.ino !== after.ino ||
         before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs ||
         before.size !== after.size)
@@ -144,16 +155,29 @@ async function listVerified(dataDir) {
   return records;
 }
 function project(record) {
-  // No "passed", "executed", or "leased" status without real evidence.
+  // A lease is a capability, not evidence that an AI process executed or
+  // completed anything. A dependent task stays blocked without a verified
+  // completion protocol.
+  const leases=verifyLeaseHistory(record);
+  const now=Date.now();
   return {
     version:1, id:record.id, createdAt:record.createdAt,
     label:record.label, budgetUnits:record.budgetUnits,
     reservedUnits:record.tasks.reduce((n,t)=>n+t.estimatedUnits,0),
     status:"declared", executions:0,
-    tasks:record.tasks.map(task => ({
-      ...task, state:task.dependsOn.length ? "blocked" : "ready",
-      evidence:"not_started",
-    })),
+    tasks:record.tasks.map(task => {
+      const lease=leases.get(task.id);
+      const active=lease?.active && Date.parse(lease.expiresAt)>now;
+      return {
+        ...task, state:task.dependsOn.length ? "blocked" :
+          active ? "leased" :
+          (lease?.attempts ?? 0) >= task.maxAttempts ? "attempts_exhausted" : "ready",
+        attempts:lease?.attempts ?? 0,
+        fencingVersion:lease?.generation ?? 0,
+        leasedUntil:active ? lease.expiresAt : null,
+        evidence:"not_started",
+      };
+    }),
   };
 }
 export async function registerAgentHandoff({
@@ -206,4 +230,180 @@ export async function getAgentHandoff(dataDir,id,tenantId=null,reauthorize) {
       throw issue("HANDOFF_NOT_FOUND");
     throw error;
   }
+}
+
+
+/** Validate monotonic fencing and the full SHA-256 event chain using only
+ * persisted values. SHA-256 detects accidental/casual tamper; an owner of
+ * the host can forge a new chain. This is NOT a signed audit attestation.
+ */
+function verifyLeaseHistory(record) {
+  const map=new Map(record.tasks.map(task=>[task.id,{
+    attempts:0,generation:0,active:false,leaseId:null,expiresAt:null,
+    actorId:null,at:null,
+  }]));
+  if (!Object.hasOwn(record,"events")) return map;
+  if (!Array.isArray(record.events) || record.events.length < 1 ||
+      record.events.length > MAX_LEASE_EVENTS || !SHA.test(record.head))
+    throw issue("HANDOFF_INTEGRITY");
+  let head=GENESIS,previousTime=0;
+  for (const [i,event] of record.events.entries()) {
+    if (!exact(event,["sequence","previousHash","kind","at","taskId",
+        "actorId","generation","leaseId","expiresAt","hash"]) ||
+        event.sequence!==i+1 || event.previousHash!==head ||
+        !["claim","renew","release"].includes(event.kind) ||
+        typeof event.at!=="string" ||
+        !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at) ||
+        !Number.isFinite(Date.parse(event.at)) ||
+        new Date(event.at).toISOString()!==event.at ||
+        Date.parse(event.at)<previousTime ||
+        !UUID.test(event.leaseId) || !SHA.test(event.hash) ||
+        !Number.isInteger(event.generation) || event.generation<1 ||
+        typeof event.expiresAt!=="string" ||
+        !Number.isFinite(Date.parse(event.expiresAt)) ||
+        new Date(event.expiresAt).toISOString()!==event.expiresAt)
+      throw issue("HANDOFF_INTEGRITY");
+    const task=record.tasks.find(task=>task.id===event.taskId);
+    const state=map.get(event.taskId);
+    if (!task || !state || task.owner!==event.actorId ||
+        hash(Object.fromEntries(Object.entries(event).filter(([k])=>k!=="hash")))!==event.hash)
+      throw issue("HANDOFF_INTEGRITY");
+    const at=Date.parse(event.at),expiration=Date.parse(event.expiresAt);
+    if (event.kind==="claim") {
+      if (state.active && at<Date.parse(state.expiresAt) ||
+          event.generation!==state.generation+1 ||
+          state.at!==null && at<Date.parse(state.at) ||
+          state.attempts>=task.maxAttempts ||
+          expiration<=at || expiration>at+300000)
+        throw issue("HANDOFF_INTEGRITY");
+      state.generation=event.generation;
+      state.attempts++;
+      state.leaseId=event.leaseId;
+      state.expiresAt=event.expiresAt;
+      state.actorId=event.actorId;
+      state.active=true;
+    } else if (event.kind==="renew") {
+      if (!state.active || state.generation!==event.generation ||
+          state.leaseId!==event.leaseId ||
+          state.actorId!==event.actorId ||
+          at>=Date.parse(state.expiresAt) ||
+          expiration<=Date.parse(state.expiresAt) ||
+          expiration>at+300000)
+        throw issue("HANDOFF_INTEGRITY");
+      state.expiresAt=event.expiresAt;
+    } else {
+      if (!state.active || state.generation!==event.generation ||
+          state.leaseId!==event.leaseId ||
+          state.actorId!==event.actorId ||
+          at>=Date.parse(state.expiresAt) || expiration!==at)
+        throw issue("HANDOFF_INTEGRITY");
+      state.expiresAt=event.expiresAt;
+      state.active=false;
+    }
+    state.at=event.at;
+    previousTime=at;
+    head=event.hash;
+  }
+  if (record.head!==head) throw issue("HANDOFF_INTEGRITY");
+  return map;
+}
+const leaseRequest = value => {
+  const base=["action","handoffId","taskId"];
+  const claim=exact(value,[...base,"ttlSeconds"]);
+  const renewed=exact(value,[...base,"ttlSeconds","leaseId"]);
+  const released=exact(value,[...base,"leaseId"]);
+  if (!(claim||renewed||released) ||
+      typeof value.handoffId!=="string" || !UUID.test(value.handoffId) ||
+      typeof value.taskId!=="string" || !TASK.test(value.taskId) ||
+      !(value.action==="claim" && claim ||
+        value.action==="renew" && renewed ||
+        value.action==="release" && released) ||
+      value.action!=="release" &&
+        (!Number.isInteger(value.ttlSeconds) || value.ttlSeconds<30 ||
+          value.ttlSeconds>300) ||
+      value.action!=="claim" &&
+        (typeof value.leaseId!=="string" || !UUID.test(value.leaseId)))
+    throw issue("HANDOFF_LEASE_INVALID");
+  return value;
+};
+/** Mutation is fully serialized across runner API replicas. Only an
+ * authenticated, role+tenant scoped actor may claim its explicitly
+ * declared task. A lease has NO ability to submit code, run LLMs, or
+ * assert pass/fail. Dependency tasks remain unclaimable until an actual
+ * completion-evidence protocol exists.
+ */
+export async function mutateAgentTaskLease({
+  dataDir,request,actor,reauthorize,waitMs=1500,
+}) {
+  const input=leaseRequest(request);
+  if (!actor || !ACTOR.test(actor.id) || !ROLES.has(actor.role) ||
+      !(actor.tenantId===null || TENANT.test(actor.tenantId)))
+    throw issue("ACTOR_AUTH_REVOKED");
+  return withAdmissionLock(dataDir,async()=>{
+    await reauthorize?.();
+    await trustedDirectory(directory(dataDir));
+    let record;
+    try { record=await readManifest(dataDir,input.handoffId); }
+    catch(error) {
+      if (error.code==="ENOENT") throw issue("HANDOFF_NOT_FOUND");
+      throw error;
+    }
+    // Keep non-owners and other tenants indistinguishable from missing tasks.
+    const task=record.tasks.find(t=>t.id===input.taskId);
+    if (record.tenantId!==actor.tenantId || !task ||
+        task.owner!==actor.id || task.role!==actor.role)
+      throw issue("HANDOFF_NOT_FOUND");
+    const states=verifyLeaseHistory(record);
+    const state=states.get(task.id);
+    const now=Date.now(),at=new Date(now).toISOString();
+    if (record.events?.length>=MAX_LEASE_EVENTS) throw issue("HANDOFF_LEASE_CAPACITY");
+    const active=state.active && Date.parse(state.expiresAt)>now;
+    let generation,leaseId,expiresAt;
+    if (input.action==="claim") {
+      if (task.dependsOn.length) throw issue("HANDOFF_LEASE_BLOCKED");
+      if (active) throw issue("HANDOFF_LEASE_CONFLICT");
+      if (state.attempts>=task.maxAttempts) throw issue("HANDOFF_LEASE_EXHAUSTED");
+      generation=state.generation+1;
+      leaseId=randomUUID();
+      expiresAt=new Date(now+input.ttlSeconds*1000).toISOString();
+    } else {
+      if (!active || input.leaseId!==state.leaseId)
+        throw issue("HANDOFF_LEASE_STALE");
+      generation=state.generation;
+      leaseId=state.leaseId;
+      expiresAt=input.action==="renew"
+        ? new Date(now+input.ttlSeconds*1000).toISOString() : at;
+      if (input.action==="renew" && Date.parse(expiresAt)<=Date.parse(state.expiresAt))
+        throw issue("HANDOFF_LEASE_INVALID");
+    }
+    if (state.at && now<Date.parse(state.at)) throw issue("HANDOFF_INTEGRITY");
+    const payload={
+      sequence:(record.events?.length??0)+1,
+      previousHash:record.head??GENESIS,
+      kind:input.action,at,taskId:task.id,actorId:actor.id,
+      generation,leaseId,expiresAt,
+    };
+    const event={...payload,hash:hash(payload)};
+    const withoutHash={
+      ...record,
+      events:[...(record.events??[]),event],
+      head:event.hash,
+    };
+    delete withoutHash.hash;
+    const next={...withoutHash,hash:hash(withoutHash)};
+    if (Buffer.byteLength(JSON.stringify(next))>MAX_RECORD_BYTES)
+      throw issue("HANDOFF_LEASE_CAPACITY");
+    // Credential rotation/revocation is observed again immediately before
+    // durable commit, under the same lock that fences other API instances.
+    await reauthorize?.();
+    await atomicWrite(filePath(dataDir,record.id),next);
+    await readManifest(dataDir,record.id);
+    return {
+      handoffId:record.id,taskId:task.id,action:input.action,
+      generation,leaseId,expiresAt,
+      attempts:input.action==="claim"?state.attempts+1:state.attempts,
+      state:input.action==="release"?"released":"leased",
+      evidence:"not_started",
+    };
+  },waitMs);
 }
