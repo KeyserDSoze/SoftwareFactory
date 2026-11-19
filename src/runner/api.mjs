@@ -128,6 +128,11 @@ export function createRunnerServer({
       try {
         actorPrincipal=authenticateAgentActor(req.headers.authorization,
           await loadAgentActorsFile(agentActorsFile));
+        // Even a misconfigured duplicate secret must never turn a runner
+        // admin or tenant bearer into an actor capability.
+        if (actorPrincipal && (tenantMode ? Boolean(activeTenant) :
+            authenticate(req.headers.authorization,activeRunnerKey)))
+          actorPrincipal=null;
       } catch {
         send(503, { error: "agent_auth_unavailable" }); return;
       }
@@ -328,8 +333,23 @@ export function createRunnerServer({
       try {
         const result=await mutateAgentTaskLease({
           dataDir,request:body,actor:actorPrincipal,waitMs:admissionWaitMs,
-          reauthorize:()=>reauthorizeAgentActor(
-            agentActorsFile,req.headers.authorization,actorPrincipal),
+          reauthorize:async()=> {
+            await reauthorizeAgentActor(
+              agentActorsFile,req.headers.authorization,actorPrincipal);
+            // Check privilege separation AGAIN under the admission lock,
+            // including a root key rotated while this request was queued.
+            if (tenantMode) {
+              if (authenticateRunnerTenant(req.headers.authorization,
+                await loadRunnerTenantsFile(tenantsFile)))
+                throw Object.assign(new Error("shared runner actor credential"),
+                  {code:"ACTOR_AUTH_REVOKED"});
+            } else {
+              const latest=fileMode ? await loadRunnerApiKeyFile(apiKeyFile) : apiKey;
+              if (authenticate(req.headers.authorization,latest))
+                throw Object.assign(new Error("shared runner actor credential"),
+                  {code:"ACTOR_AUTH_REVOKED"});
+            }
+          },
         });
         send(200,result);
       } catch(error) {
