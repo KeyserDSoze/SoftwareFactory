@@ -1157,3 +1157,12 @@ la sua rimozione/manomissione fa fallire la GET. Per una completion di
 review realmente verificata restano necessari snapshot di codice
 immutabili, approvazione indipendente, audit off-host e costi provider
 attestati (#109/#105).
+
+
+## Snapshot sorgenti del Reviewer da input runner verificato (#114)
+
+Il `reviewContext.fingerprint` (#112) identifica esclusivamente le prove delle dependency; non è il digest dei file testati. Dopo `test_verified`, ogni lettura dell'handoff (#111) ora verifica **anche** `jobs/<jobId>/input.json`: apertura `O_NOFOLLOW`, inode/UID/link/mtime/size stabili, schema canonico `validateRequest`, digest del job ricomputato e confrontato con il report del journal, conteggi/byte/step coerenti. File mancante o manomesso = `HANDOFF_TEST_EVIDENCE` (GET non restituisce prove apparentemente valide).
+
+Il task `code_reviewer` mostra `reviewSource:{status,digest,fingerprint}`, senza includere i sorgenti nella GET o nel manifesto. Se tutte le dependency dirette risultano completate **e almeno una è Tester**, `digest` è SHA-256 domain-separated di `{scope:"runner-input-files-v1",files:canonicalFiles}`; `fingerprint` lega quello stesso digest a handoff/task e `reviewContext.fingerprint`. Stesso file set, anche con diversa label/step, mantiene lo stesso digest sorgente. Se non ci sono test diretti: `no_tested_source`; se i predecessori non sono pronti: `awaiting_inputs`. Se test verificati usano file diversi: `conflicting_tested_sources`, nessun digest/fingerprint aggregato e il Reviewer resta bloccato.
+
+Questa è **provenienza locale del payload accettato dal runner**, non una prova che un agente abbia letto i file, eseguito una review, approvato la patch, né che file non inclusi nel job siano stati coperti. Non vi è ancora un attestatore esterno né una firma off-host; la #113 richiede submit e approval del Reviewer indipendenti e una decisione umana legata allo snapshot. Budget provider #109/#105 ancora aperto.

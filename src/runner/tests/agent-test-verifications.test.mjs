@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { mkdtemp, mkdir, readFile, writeFile, rm, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,8 +28,9 @@ const draft=()=>({
       dependsOn:["test"],estimatedUnits:2,maxAttempts:1},
   ],
 });
-const request=steps=>validateRequest({label:"Actual worker journal proof",
-  files:{"src/backend/domain/X.cs":"namespace X; public class X {}"},
+const request=(steps,sourceCode="namespace X; public class X {}")=>validateRequest({
+  label:"Actual worker journal proof",
+  files:{"src/backend/domain/X.cs":sourceCode},
   steps,
 });
 async function fixture({multiTenant=false}={}) {
@@ -66,12 +67,12 @@ async function fixture({multiTenant=false}={}) {
     // Hand-off registration needs an explicit idempotency key.
     return r;
   };
-  const create=async()=> {
+  const create=async(body=draft())=> {
     const r=await fetch(url[0]+"/v1/agent-handoffs",{
       method:"POST",headers:{Origin:origin,
         Authorization:"Bearer "+(multiTenant?tenantKey:rootKey),
         "Content-Type":"application/json","Idempotency-Key":randomUUID()},
-      body:JSON.stringify(draft()),
+      body:JSON.stringify(body),
     });
     const data=await r.json();
     assert.equal(r.status,201,JSON.stringify(data));
@@ -89,8 +90,9 @@ async function fixture({multiTenant=false}={}) {
     },token);
   const view=(i,id,token=multiTenant?tenantKey:rootKey)=>
     call(i,"GET","/v1/agent-handoffs/"+id,undefined,token);
-  const run=async({steps=["dotnet-test"],state="passed",tenantId=multiTenant?"alpha":null}={})=>{
-    const checked=request(steps);
+  const run=async({steps=["dotnet-test"],state="passed",
+    tenantId=multiTenant?"alpha":null,sourceCode}={})=>{
+    const checked=request(steps,sourceCode);
     const admit=await admitRunnerJob({
       dataDir,checked,tenant:tenantId?{
         id:tenantId,maxQueued:4,maxRetained:15,maxAcceptedPerMinute:0,
@@ -145,6 +147,17 @@ test("real worker journal binding: tester completes only a passed code-test and 
     const context=current.body.tasks[1].reviewContext;
     assert.equal(context.status,"inputs_recorded");
     assert.match(context.fingerprint,/^[a-f0-9]{64}$/);
+    const expectedSourceDigest=createHash("sha256").update(JSON.stringify({
+      scope:"runner-input-files-v1",files:request(["dotnet-test"]).request.files,
+    })).digest("hex");
+    const expectedReviewFingerprint=createHash("sha256").update(JSON.stringify({
+      scope:"agent-review-source-v1",handoffId:id,taskId:"review",
+      reviewContext:context.fingerprint,digest:expectedSourceDigest,
+    })).digest("hex");
+    assert.deepEqual(current.body.tasks[1].reviewSource,{
+      status:"runner_input_recorded",digest:expectedSourceDigest,
+      fingerprint:expectedReviewFingerprint,
+    });
     assert.deepEqual(context.dependencies,[{
       taskId:"test",evidence:"verified_runner_journal",
       jobId:job.report.id,digest:job.report.digest,
@@ -154,6 +167,8 @@ test("real worker journal binding: tester completes only a passed code-test and 
     assert.equal(JSON.stringify(current.body).includes('"passed"'),false);
     assert.equal((await f.claim(1,id,"review",reviewerKey)).status,200);
     assert.deepEqual((await f.view(0,id)).body.tasks[1].reviewContext,context);
+    assert.deepEqual((await f.view(0,id)).body.tasks[1].reviewSource,
+      current.body.tasks[1].reviewSource);
     assert.equal((await f.claim(0,id,"test")).status,409);
     const raw=await readFile(path.join(f.dataDir,"agent-handoffs",id+".json"),"utf8");
     assert.equal(raw.includes(actorKey),false);
@@ -309,4 +324,62 @@ test("late verification scan cannot commit an expired fencing lease",async()=>{
     assert.equal(status.body.tasks[0].state,"leased");
     assert.equal(status.body.verifiedTestJobs,0);
   } finally { await f.close(); }
+});
+
+test("retained runner input changes or disappearance invalidate Tester proof on GET",async()=>{
+  const f=await fixture();
+  try {
+    const id=await f.create(),lease=await f.claim(0,id);
+    assert.equal(lease.status,200);
+    await sleep(16);
+    const job=await f.run();
+    assert.equal((await f.verify(0,id,lease.body.leaseId,job)).status,201);
+    assert.equal((await f.view(1,id)).status,200);
+    const inputPath=path.join(f.dataDir,"jobs",job.report.id,"input.json");
+    const input=JSON.parse(await readFile(inputPath,"utf8"));
+    input.files["src/backend/domain/X.cs"]="namespace X; public class Changed {}";
+    await writeFile(inputPath,JSON.stringify(input),{mode:0o600});
+    const rejected=await f.view(0,id);
+    assert.equal(rejected.status,409,JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error,"handoff_integrity");
+  }finally {await f.close();}
+});
+test("review source is blocked when verified Tester dependencies used distinct file snapshots",async()=>{
+  const f=await fixture();
+  try {
+    const declaration={
+      consent:true,label:"two independent source inputs",budgetUnits:6,
+      tasks:[
+        {id:"test-a",role:"tester",owner:"tester-one",dependsOn:[],
+          estimatedUnits:2,maxAttempts:1},
+        {id:"test-b",role:"tester",owner:"tester-one",dependsOn:[],
+          estimatedUnits:2,maxAttempts:1},
+        {id:"review",role:"code_reviewer",owner:"reviewer-one",
+          dependsOn:["test-a","test-b"],estimatedUnits:2,maxAttempts:1},
+      ],
+    };
+    const id=await f.create(declaration);
+    for (const [i,taskId,sourceCode] of [
+      [0,"test-a","namespace X; public class A {}"],
+      [1,"test-b","namespace X; public class B {}"],
+    ]) {
+      const lease=await f.claim(i,id,taskId);
+      assert.equal(lease.status,200,JSON.stringify(lease.body));
+      await sleep(16);
+      const job=await f.run({sourceCode});
+      const proof=await f.verify(i,id,lease.body.leaseId,job,{taskId});
+      assert.equal(proof.status,201,JSON.stringify(proof.body));
+    }
+    const view=await f.view(1,id);
+    assert.equal(view.status,200,JSON.stringify(view.body));
+    const review=view.body.tasks.find(task=>task.id==="review");
+    assert.equal(review.reviewContext.status,"inputs_recorded");
+    assert.equal(review.reviewSource.status,"conflicting_tested_sources");
+    assert.equal(review.reviewSource.digest,null);
+    assert.equal(review.reviewSource.fingerprint,null);
+    assert.equal(review.state,"blocked");
+    const attempt=await f.claim(0,id,"review",reviewerKey);
+    assert.equal(attempt.status,409,JSON.stringify(attempt.body));
+    assert.equal(attempt.body.error,"dependency_blocked");
+  }finally {await f.close();}
 });

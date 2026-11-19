@@ -889,3 +889,10 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - La transizione \`test_verified\` ha generation/leaseId dalla claim, UUID idempotente e scope tenant/owner/role; lock POSIX comune fra API, scansione dei manifest contro riuso dello stesso job, SHA-chain evento nuova. Il GET non divulga leaseId. Non autorizzare il test su un Reviewer/PM o accettare una suite precedente al task.
 - \`runner_verified_test\` significa solo che **quel job e i suoi step** risultano passati sul runner locale: NON implica che un Tester AI abbia eseguito codice, che il progetto sia approvato o che esista una firma off-host. \`executions:0\` e \`approvedReportedUnits\` indipendenti, budget provider da attestare in #109; code_review AI non completa automaticamente tramite test.
 - Conservare Node regressions \`src/runner/tests/agent-test-verifications.test.mjs\`, ADR 0066, e continuare a richiedere i collaudi dedicati VM rootless/#2/#87.
+
+
+## Provenienza file testati per Reviewer (#114)
+
+- La snapshot di input verificata deriva solo da `input.json` del job Tester (inode sicuro e payload `validateRequest` canonico) + report/journal `test_verified`, **non** da digest/verdict proposti da AI. Recheck su ogni read, incluse claim dopo prova; input assente o cambiato dopo il test = fail closed.
+- `reviewSource` nel Code Reviewer contiene solo digest dei file e fingerprint domain-separated vincolato a handoff/task/reviewContext; mai sorgente, secret o leaseId. Snapshot discordanti tra test diretti bloccano la claim reviewer. Senza test diretto non inventare snapshot.
+- Nessun `reviewSource` equivale a code review eseguita/approvata, né deve sbloccare downstream. L'approvazione indipendente è ancora da implementare in #113. Test Node e ADR 0068.

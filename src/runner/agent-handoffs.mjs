@@ -11,6 +11,8 @@ import { atomicWrite } from "./common.mjs";
 import { parseIdempotencyKey, withAdmissionLock } from "./admission.mjs";
 import { verifyJobEvidenceForRead } from "./evidence.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
+import { readRunnerInput } from "./input.mjs";
+import { validateRequest } from "./common.mjs";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA = /^[a-f0-9]{64}$/;
@@ -25,6 +27,8 @@ const MAX_RECORD_BYTES = 64_000;
 const MAX_LEASE_EVENTS = 64;
 const GENESIS = "0".repeat(64);
 const TEST_STEPS = new Set(["dotnet-test","web-test","playwright"]);
+// Per-read only: never persist raw source data or snapshot descriptors in a handoff.
+const SOURCE_SNAPSHOTS = Symbol("runner-source-snapshots");
 // Even a human-supplied label must not become a secret-bearing manifest.
 const CREDENTIAL_MARKER = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|github_pat_[a-zA-Z0-9_]{15,}|gh[pousr]_[a-zA-Z0-9]{20,}|Bearer\s+\S+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+/i;
 export const MAX_HANDOFF_BODY_BYTES = 6144;
@@ -140,7 +144,8 @@ async function readManifest(dataDir,id) {
         before.size !== after.size)
       throw issue("HANDOFF_INTEGRITY");
     const record=validateRecord(JSON.parse(buf.toString("utf8")),id);
-    await verifyTechnicalProofs(dataDir,record);
+    const snapshots=await verifyTechnicalProofs(dataDir,record);
+    Object.defineProperty(record,SOURCE_SNAPSHOTS,{value:snapshots});
     return record;
   } catch (error) {
     if (error.code === "ENOENT") throw error;
@@ -190,6 +195,29 @@ function reviewDependencyContext(record,leases,task) {
     dependencies,
   };
 }
+/** A review source descriptor comes ONLY from checked local runner inputs for
+ * direct upstream Tester tasks, never from an agent-supplied digest. This is
+ * evidence of a test's input files, NOT evidence of a review being performed.
+ */
+function reviewSourceSnapshot(record,leases,task,context) {
+  if (task.role!=="code_reviewer") return null;
+  const testDeps=task.dependsOn.filter(id=>leases.get(id)?.testVerified);
+  if (context?.status!=="inputs_recorded")
+    return {status:"awaiting_inputs",digest:null,fingerprint:null};
+  if (testDeps.length===0)
+    return {status:"no_tested_source",digest:null,fingerprint:null};
+  const digests=testDeps.map(id=>record[SOURCE_SNAPSHOTS]?.get(id));
+  if (digests.some(digest=>!SHA.test(digest)))
+    throw issue("HANDOFF_TEST_EVIDENCE");
+  if (new Set(digests).size!==1)
+    return {status:"conflicting_tested_sources",digest:null,fingerprint:null};
+  const digest=digests[0];
+  return {
+    status:"runner_input_recorded",digest,
+    fingerprint:hash({scope:"agent-review-source-v1",handoffId:record.id,
+      taskId:task.id,reviewContext:context.fingerprint,digest}),
+  };
+}
 function project(record) {
   // A lease is a capability, not evidence that an AI process executed or
   // completed anything. A dependent task stays blocked without a verified
@@ -210,11 +238,14 @@ function project(record) {
       const active=lease?.active && Date.parse(lease.expiresAt)>now;
       const dependenciesApproved=task.dependsOn.every(id=>
         leases.get(id)?.approved || leases.get(id)?.testVerified);
+      const reviewContext=reviewDependencyContext(record,leases,task);
+      const reviewSource=reviewSourceSnapshot(record,leases,task,reviewContext);
+      const sourceConflict=reviewSource?.status==="conflicting_tested_sources";
       const pending=lease?.submission && !lease.approved && active;
       return {
         ...task, state:lease?.testVerified ? "runner_verified_test" :
           lease?.approved ? "human_approved_checkpoint" :
-          !dependenciesApproved ? "blocked" :
+          (!dependenciesApproved || sourceConflict) ? "blocked" :
           active ? (pending ? "awaiting_human_approval" : "leased") :
           (lease?.attempts ?? 0) >= task.maxAttempts ? "attempts_exhausted" : "ready",
         attempts:lease?.attempts ?? 0,
@@ -229,7 +260,7 @@ function project(record) {
           head:lease.testVerified.jobHead,count:lease.testVerified.jobCount,
           step:lease.testVerified.step,
         } : null,
-        reviewContext:reviewDependencyContext(record,leases,task),
+        reviewContext,reviewSource,
         evidence:lease?.testVerified ? "verified_runner_journal" :
           lease?.approved ? "human_approved_digest" : "not_started",
       };
@@ -484,7 +515,10 @@ export async function mutateAgentTaskLease({
       throw issue("HANDOFF_LEASE_COMPLETED");
     if (input.action==="claim") {
       if (task.dependsOn.some(dep=>
-        !states.get(dep)?.approved && !states.get(dep)?.testVerified))
+        !states.get(dep)?.approved && !states.get(dep)?.testVerified) ||
+          reviewSourceSnapshot(record,states,task,
+            reviewDependencyContext(record,states,task))?.status===
+              "conflicting_tested_sources")
         throw issue("HANDOFF_LEASE_BLOCKED");
       if (active) throw issue("HANDOFF_LEASE_CONFLICT");
       if (state.attempts>=task.maxAttempts) throw issue("HANDOFF_LEASE_EXHAUSTED");
@@ -689,13 +723,34 @@ async function verifyTechnicalJob(dataDir,proof,task,tenantId,claimAt) {
   } catch { throw issue("HANDOFF_TEST_EVIDENCE"); }
 }
 async function verifyTechnicalProofs(dataDir,record) {
-  const states=verifyLeaseHistory(record);
+  const states=verifyLeaseHistory(record),snapshots=new Map();
   for (const task of record.tasks) {
     const state=states.get(task.id);
-    if (state.testVerified)
-      await verifyTechnicalJob(dataDir,state.testVerified,task,
-        record.tenantId,state.claimAt);
+    if (!state.testVerified) continue;
+    const verified=await verifyTechnicalJob(dataDir,state.testVerified,task,
+      record.tenantId,state.claimAt);
+    try {
+      // The job report digest includes label AND requested steps. Reopen the
+      // immutable, inode-checked input file and validate its canonical form
+      // before deriving a separate source-only fingerprint.
+      const input=await readRunnerInput(dataDir,state.testVerified.jobId);
+      if (!exact(input,["schemaVersion","label","files","steps"]))
+        throw Error("unexpected input fields");
+      const checked=validateRequest(input);
+      if (JSON.stringify(checked.request)!==JSON.stringify(input) ||
+          checked.digest!==verified.report.digest ||
+          checked.digest!==state.testVerified.jobDigest ||
+          checked.fileCount!==verified.report.fileCount ||
+          checked.bytes!==verified.report.bytes ||
+          JSON.stringify(input.steps)!==JSON.stringify(verified.report.steps) ||
+          !input.steps.includes(state.testVerified.step))
+        throw Error("job input does not match verified report");
+      snapshots.set(task.id,hash({
+        scope:"runner-input-files-v1",files:checked.request.files,
+      }));
+    } catch { throw issue("HANDOFF_TEST_EVIDENCE"); }
   }
+  return snapshots;
 }
 function testVerificationRequest(input) {
   if (!exact(input,["handoffId","taskId","leaseId","submissionId",
