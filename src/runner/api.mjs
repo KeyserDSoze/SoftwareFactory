@@ -8,7 +8,7 @@ import { admitRunnerJob } from "./admission.mjs";
 import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
-import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, mutateAgentTaskCheckpoint, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
+import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, mutateAgentTaskCheckpoint, verifyAgentTestTask, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
 import { loadAgentActorsFile, authenticateAgentActor, reauthorizeAgentActor } from "./agent-actors.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
@@ -121,7 +121,8 @@ export function createRunnerServer({
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
     const agentLeaseRoute = req.url === "/v1/agent-task-leases";
     const agentCheckpointRoute = req.url === "/v1/agent-task-checkpoints";
-    const agentMutationRoute = agentLeaseRoute || agentCheckpointRoute;
+    const agentTestRoute = req.url === "/v1/agent-task-verifications";
+    const agentMutationRoute = agentLeaseRoute || agentCheckpointRoute || agentTestRoute;
     if (agentMutationRoute && !agentActorsFile) {
       send(503, { error: "agent_auth_unconfigured" }); return;
     }
@@ -424,6 +425,58 @@ export function createRunnerServer({
           send(409,{error:"lease_stale"});
         else if (error.code==="HANDOFF_LEASE_CAPACITY")
           send(429,{error:"checkpoint_capacity"});
+        else if (error.code==="ACTOR_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if (error.code==="ACTOR_AUTH_UNAVAILABLE")
+          send(503,{error:"agent_auth_unavailable"});
+        else if (error.code==="ADMISSION_BUSY") {
+          res.writeHead(503,{...headers,"Retry-After":"2"});
+          res.end(JSON.stringify({error:"admission_busy"}));
+        } else send(500,{error:"internal_error"});
+      }
+      return;
+    }
+    // Tester-only completion from actual inode-verified worker journal.
+    // Never trust a caller-provided "passed" flag or a PM document digest.
+    if (req.method === "POST" && agentTestRoute) {
+      if (req.headers["content-type"]?.split(";")[0].trim()!=="application/json") {
+        send(415,{error:"json_required"}); return;
+      }
+      if (Number(req.headers["content-length"] || 0)>1024) {
+        send(413,{error:"too_large"}); req.resume(); return;
+      }
+      let input;
+      try {
+        const chunks=[]; let bytes=0;
+        for await(const chunk of req) {
+          bytes+=chunk.length;
+          if (bytes>1024) { send(413,{error:"too_large"}); return; }
+          chunks.push(chunk);
+        }
+        input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400,{error:"invalid_json"}); return; }
+      try {
+        const result=await verifyAgentTestTask({
+          dataDir,request:input,actor:actorPrincipal,waitMs:admissionWaitMs,
+          reauthorize:reauthorizeActorMutation,
+        });
+        send(result.created?201:200,result);
+      } catch(error) {
+        if (error.code==="HANDOFF_TEST_INVALID")
+          send(422,{error:"test_verification_invalid"});
+        else if (error.code==="HANDOFF_TEST_FORBIDDEN")
+          send(403,{error:"actor_scope_denied"});
+        else if (error.code==="HANDOFF_NOT_FOUND" ||
+            error.code==="HANDOFF_INTEGRITY")
+          send(404,{error:"not_found"});
+        else if (error.code==="HANDOFF_TEST_EVIDENCE")
+          send(409,{error:"test_evidence_invalid"});
+        else if (error.code==="HANDOFF_TEST_CONFLICT")
+          send(409,{error:"test_verification_conflict"});
+        else if (error.code==="HANDOFF_LEASE_STALE")
+          send(409,{error:"lease_stale"});
+        else if (error.code==="HANDOFF_LEASE_CAPACITY")
+          send(429,{error:"verification_capacity"});
         else if (error.code==="ACTOR_AUTH_REVOKED")
           send(401,{error:"unauthorized"});
         else if (error.code==="ACTOR_AUTH_UNAVAILABLE")
