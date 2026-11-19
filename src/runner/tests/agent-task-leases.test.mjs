@@ -29,7 +29,7 @@ const manifest=()=>({consent:true,label:"Actor-owned agent tasks",budgetUnits:10
   {id:"review",role:"code_reviewer",owner:"reviewer-1",dependsOn:["plan"],
     estimatedUnits:4,maxAttempts:1},
 ]});
-async function fixture({withTenant=false}={}) {
+async function fixture({withTenant=false,globalKey=rootKey}={}) {
   const base=await mkdtemp(path.join(tmpdir(),"sf-agent-lease-"));
   const dataDir=path.join(base,"data");
   const registry=path.join(base,"actors.json");
