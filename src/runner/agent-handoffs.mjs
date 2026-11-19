@@ -833,14 +833,17 @@ async function verifyReviewBindings(dataDir,record) {
     if (source?.status!=="runner_input_recorded" ||
         source.fingerprint!==state.reviewSubmission.sourceFingerprint)
       throw issue("HANDOFF_REVIEW_EVIDENCE");
-    if (state.reviewSubmission.mode===REVIEW_ARTIFACT_MODE)
-      await verifyReviewArtifactLink(dataDir,{
+    if (state.reviewSubmission.mode===REVIEW_ARTIFACT_MODE) {
+      const stored=await verifyReviewArtifactLink(dataDir,{
         handoffId:record.id,taskId:task.id,tenantId:record.tenantId,
         owner:task.owner,generation:state.generation,
         submissionId:state.reviewSubmission.id,
         sourceFingerprint:source.fingerprint,
         digest:state.reviewSubmission.digest,
       });
+      if(state.reviewApproved && stored.document.recommendation!=="approve")
+        throw issue("HANDOFF_REVIEW_EVIDENCE");
+    }
   }
 }
 /** The producer may stage one structured report per fenced generation.
@@ -982,7 +985,7 @@ export async function mutateAgentTaskReview({
       state.reviewSubmission.id===input.submissionId &&
       state.reviewSubmission.digest===input.artifactDigest &&
       state.reviewSubmission.sourceFingerprint===input.sourceFingerprint;
-    const proofMode=input.action==="submit" ?
+    const proofMode=input.action==="submit" && !state.reviewSubmission ?
       REVIEW_ARTIFACT_MODE : state.reviewSubmission?.mode;
     const proofLink={
       handoffId:record.id,taskId:task.id,tenantId:record.tenantId,
@@ -1024,8 +1027,14 @@ export async function mutateAgentTaskReview({
     // New submits always require a server-computed digest from an immutable
     // staged report. Pre-#116 journal entries stay readable and approvable
     // as legacy *manual digest only*, never upgraded to stored evidence.
-    if(proofMode===REVIEW_ARTIFACT_MODE)
-      await verifyReviewArtifactLink(dataDir,proofLink);
+    if(proofMode===REVIEW_ARTIFACT_MODE) {
+      const artifact=await verifyReviewArtifactLink(dataDir,proofLink);
+      // A report requesting changes cannot silently authorize downstream.
+      // Reviewer must resolve findings and submit a new fenced generation.
+      if(input.action==="approve" &&
+          artifact.document.recommendation!=="approve")
+        throw issue("HANDOFF_REVIEW_CONFLICT");
+    }
     const commitNow=nowMs();
     if (commitNow>=Date.parse(state.expiresAt) ||
         state.at && commitNow<Date.parse(state.at))
@@ -1056,8 +1065,12 @@ export async function mutateAgentTaskReview({
       throw issue("HANDOFF_LEASE_STALE");
     // Re-read the upstream test journal and the staged document before commit.
     await readManifest(dataDir,record.id);
-    if(proofMode===REVIEW_ARTIFACT_MODE)
-      await verifyReviewArtifactLink(dataDir,proofLink);
+    if(proofMode===REVIEW_ARTIFACT_MODE) {
+      const artifact=await verifyReviewArtifactLink(dataDir,proofLink);
+      if(input.action==="approve" &&
+          artifact.document.recommendation!=="approve")
+        throw issue("HANDOFF_REVIEW_CONFLICT");
+    }
     await atomicWrite(filePath(dataDir,record.id),next);
     const checked=await readManifest(dataDir,record.id);
     const committed=verifyLeaseHistory(checked).get(task.id);
