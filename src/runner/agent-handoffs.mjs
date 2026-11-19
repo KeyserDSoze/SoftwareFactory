@@ -858,6 +858,21 @@ async function verifyTechnicalProofs(dataDir,record) {
 }
 async function verifyReviewBindings(dataDir,record) {
   const states=verifyLeaseHistory(record);
+  // An old negative review remains part of the audit history after the
+  // Reviewer claims a new generation. Its document must remain intact too.
+  for (const event of record.events??[]) {
+    if (event.kind!=="review_reject") continue;
+    const task=record.tasks.find(t=>t.id===event.taskId);
+    if (!task) throw issue("HANDOFF_REVIEW_EVIDENCE");
+    const old=await verifyReviewArtifactLink(dataDir,{
+      handoffId:record.id,taskId:event.taskId,tenantId:record.tenantId,
+      owner:task.owner,generation:event.generation,
+      submissionId:event.submissionId,
+      sourceFingerprint:event.sourceFingerprint,digest:event.artifactDigest,
+    });
+    if(old.document.recommendation!=="changes_requested")
+      throw issue("HANDOFF_REVIEW_EVIDENCE");
+  }
   for (const task of record.tasks) {
     const state=states.get(task.id);
     if (!state.reviewSubmission) continue;
