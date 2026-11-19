@@ -991,7 +991,9 @@ test("negative decision is fenced by attempts and historical report remains veri
     assert.equal((await postReview(f,0,req,owner)).status,201);
     assert.equal((await postReview(f,1,reviewRejectionBody(req),
       reviewApproverKey)).status,201);
-    assert.equal((await f.claim(0,id,"review",owner)).status,409);
+    // The existing lease-attempt quota reports 429, not a dependency 409.
+    const exhausted=await f.claim(0,id,"review",owner);
+    assert.equal(exhausted.status,429,JSON.stringify(exhausted.body));
     const pathToDoc=path.join(f.dataDir,"agent-review-artifacts",
       submissionId+".json");
     const before=await readFile(pathToDoc,"utf8");
