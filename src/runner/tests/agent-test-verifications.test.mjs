@@ -540,8 +540,10 @@ test("review source input disappearance makes approved handoff fail closed",asyn
     const view=await f.view(0,id);
     assert.equal(view.status,409,JSON.stringify(view.body));
     assert.equal((await f.claim(1,id,"release",releaseKey)).status,404);
+    // The actor-only endpoint deliberately hides damaged private handoffs
+    // as 404 (no existence oracle), while the root GET reports integrity 409.
     const submit=await postReview(f,0,reviewApprovalBody(req),reviewApproverKey);
-    assert.equal(submit.status,409);
+    assert.equal(submit.status,404);
   }finally{await f.close();}
 });
 
