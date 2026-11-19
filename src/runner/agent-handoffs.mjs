@@ -515,7 +515,8 @@ export async function mutateAgentTaskCheckpoint({
       action:input.action,submissionId:input.submissionId,
       artifactDigest:input.artifactDigest,generation:state.generation,
       state:input.action==="submit"?"awaiting_human_approval":"human_approved_checkpoint",
-      reportedUnits:state.submission?.reportedUnits ?? 0,
+      reportedUnits:input.action==="submit" ? input.reportedUnits :
+        (state.submission?.reportedUnits ?? 0),
       evidence:input.action==="submit"?"not_started":"human_approved_digest",
       created,
     });
