@@ -8,7 +8,8 @@ import { admitRunnerJob } from "./admission.mjs";
 import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs";
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
-import { registerAgentHandoff, getAgentHandoff, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
+import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
+import { loadAgentActorsFile, authenticateAgentActor, reauthorizeAgentActor } from "./agent-actors.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
 import { configureRepairOperators, loadRepairOperatorsFile, authenticateRepairOperator, mayRecordRepairAction, reauthorizeRepairMutation } from "./operator-auth.mjs";
 import { loadRunnerApiKeyFile } from "./runner-auth.mjs";
@@ -19,6 +20,7 @@ export function createRunnerServer({
   apiKey = process.env.RUNNER_API_KEY,
   apiKeyFile = process.env.RUNNER_API_KEY_FILE,
   tenantsFile = process.env.RUNNER_TENANTS_FILE,
+  agentActorsFile = process.env.RUNNER_AGENT_ACTORS_FILE,
   allowedOrigins = (process.env.RUNNER_ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean),
   dataDir = process.env.RUNNER_DATA_DIR || "/data",
   maxQueued = Number(process.env.RUNNER_MAX_QUEUED || 4),
@@ -38,6 +40,10 @@ export function createRunnerServer({
   if (tenantMode && (typeof tenantsFile !== "string" ||
       !path.isAbsolute(tenantsFile) || tenantsFile.includes("\0")))
     throw new Error("RUNNER_TENANTS_FILE must be an absolute path");
+  if (agentActorsFile && (typeof agentActorsFile !== "string" ||
+      !path.isAbsolute(agentActorsFile) || agentActorsFile.includes("\0") ||
+      [tenantsFile,apiKeyFile,repairOperatorsFile].includes(agentActorsFile)))
+    throw new Error("RUNNER_AGENT_ACTORS_FILE must be an independent absolute path");
   // Repair approval has no tenant role/ownership model yet: disallow it
   // altogether in this mode, rather than silently installing a global admin.
   if (tenantMode && (repairOperators || repairOperatorsFile))
@@ -113,6 +119,19 @@ export function createRunnerServer({
       catch { send(503, { error: "runner_auth_unavailable" }); return; }
     }
     const repairRoute = (req.url || "").startsWith("/v1/repair-sessions");
+    const agentLeaseRoute = req.url === "/v1/agent-task-leases";
+    if (agentLeaseRoute && !agentActorsFile) {
+      send(503, { error: "agent_auth_unconfigured" }); return;
+    }
+    let actorPrincipal=null;
+    if (agentLeaseRoute) {
+      try {
+        actorPrincipal=authenticateAgentActor(req.headers.authorization,
+          await loadAgentActorsFile(agentActorsFile));
+      } catch {
+        send(503, { error: "agent_auth_unavailable" }); return;
+      }
+    }
     if (tenantMode && repairRoute) { send(404, { error: "not_found" }); return; }
     if (repairRoute && !repairOperatorsFile && !inlineOperatorRegistry) {
       send(503, { error: "repair_auth_unconfigured" }); return;
@@ -127,7 +146,7 @@ export function createRunnerServer({
     const repairOperator = repairRoute
       ? authenticateRepairOperator(req.headers.authorization, operatorRegistry)
       : null;
-    if (repairRoute ? !repairOperator :
+    if (agentLeaseRoute ? !actorPrincipal : repairRoute ? !repairOperator :
         tenantMode ? !activeTenant : !authenticate(req.headers.authorization, activeRunnerKey)) {
       send(401, { error: "unauthorized" }); return;
     }
@@ -286,6 +305,59 @@ export function createRunnerServer({
     }
 
 
+
+    // Separate actor-scoped capabilities. A runner admin bearer is NOT an
+    // agent credential; no lease operation proves execution or completion.
+    if (req.method === "POST" && agentLeaseRoute) {
+      if (req.headers["content-type"]?.split(";")[0].trim() !== "application/json") {
+        send(415, { error: "json_required" }); return;
+      }
+      if (Number(req.headers["content-length"] || 0) > 1024) {
+        send(413, { error: "too_large" }); req.resume(); return;
+      }
+      let body;
+      try {
+        const chunks=[]; let size=0;
+        for await (const chunk of req) {
+          size+=chunk.length;
+          if (size>1024) { send(413,{error:"too_large"}); return; }
+          chunks.push(chunk);
+        }
+        body=JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { send(400,{error:"invalid_json"}); return; }
+      try {
+        const result=await mutateAgentTaskLease({
+          dataDir,request:body,actor:actorPrincipal,waitMs:admissionWaitMs,
+          reauthorize:()=>reauthorizeAgentActor(
+            agentActorsFile,req.headers.authorization,actorPrincipal),
+        });
+        send(200,result);
+      } catch(error) {
+        if (error.code==="HANDOFF_LEASE_INVALID")
+          send(422,{error:"lease_invalid"});
+        else if (error.code==="HANDOFF_NOT_FOUND" ||
+            error.code==="HANDOFF_INTEGRITY")
+          send(404,{error:"not_found"});
+        else if (error.code==="HANDOFF_LEASE_STALE")
+          send(409,{error:"lease_stale"});
+        else if (error.code==="HANDOFF_LEASE_CONFLICT")
+          send(409,{error:"lease_conflict"});
+        else if (error.code==="HANDOFF_LEASE_BLOCKED")
+          send(409,{error:"dependency_blocked"});
+        else if (error.code==="HANDOFF_LEASE_EXHAUSTED" ||
+            error.code==="HANDOFF_LEASE_CAPACITY")
+          send(429,{error:"lease_capacity"});
+        else if (error.code==="ACTOR_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if (error.code==="ACTOR_AUTH_UNAVAILABLE")
+          send(503,{error:"agent_auth_unavailable"});
+        else if (error.code==="ADMISSION_BUSY") {
+          res.writeHead(503,{...headers,"Retry-After":"2"});
+          res.end(JSON.stringify({error:"admission_busy"}));
+        } else send(500,{error:"internal_error"});
+      }
+      return;
+    }
     // Operator-authorized DECLARATION of an AI handoff DAG. No agent task
     // claims, execution or auto approval can occur on these endpoints.
     const handoffId = /^\/v1\/agent-handoffs\/([a-f0-9-]{36})$/.exec(req.url || "");
