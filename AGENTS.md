@@ -869,3 +869,13 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - La lease \`generation\` cresce solo dopo claim nuova, \`leaseId\` nuovo UUID non appare nei GET di handoff. Tutti gli eventi sono hash-chained e verificati a ogni lettura (persistenza via atomic rename), con maxAttempts; ticket vecchi/stale, key ruotate e conflitti = nessun commit.
 - Non esiste un comando \`complete\`/attest né una prova \`passed\`; lo stato \`leased\` segnala solo autorizzazione temporanea, NON lavoro svolto o quote token consumate. BudgetUnits è ancora dichiarato, non contabilità reale. Le dependency rimangono blocked.
 - Node tests in \`src/runner/tests/agent-task-leases.test.mjs\`, ADR0064, parent #105 e #89 aperte per evidence attestate, budget costi e scheduler.
+
+
+
+## Gate umano sui checkpoint dei PM, senza false passed (#110)
+
+- \`POST /v1/agent-task-checkpoints\` è autorizzato **esclusivamente** tramite \`RUNNER_AGENT_ACTORS_FILE\`: \`submit\` solo actor \`project_manager\` titolare della lease live con \`leaseId\` corrente; \`approve\` solo actor \`checkpoint_approver\` con identità diversa dal producer e stesso tenant. Nessun fallback root/tenant runner, recheck sotto admission lock dopo rotazione delle key.
+- \`submissionId\` è UUIDv4 fornito dal client e riutilizzato nei retry; digest SHA-256, contatori bounded, no prompt/secret/source. Replay identico restituisce created=false senza doppio evento; digest diverso, ticket scaduto/reclaim o approvatore differente sono rifiutati.
+- Eventi \`submit/approve\` hanno seq/hash chain e sono validati insieme a \`claim/renew/release\`; approval manuale aggiorna solo \`human_approved_checkpoint\` e \`approvedReportedUnits\` (unità **autodichiarate**), non \`passed\` tecnico né costi verificati. I task non-PM non possono completarsi con approvazioni umane del solo digest.
+- I task dipendenti si sbloccano solo per predecessori PM con questo checkpoint; se un dependency non-PM non ha proof tecnica, resta bloccato. No apply/push automatico o esecuzione AI. La GET read-only non include leaseId; \`executions:0\` fino a vera esecuzione certificata.
+- Conservare \`src/runner/tests/agent-task-checkpoints.test.mjs\`, ADR 0065 e le issue #109/#105 aperte per prova runner journal-bound, billing reale e attestazione off-host. Non attribuire alla hash-chain locale protezioni da compromissione dell'host.

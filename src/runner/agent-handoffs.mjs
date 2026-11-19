@@ -1,6 +1,7 @@
-/** Persistent DECLARATION ONLY for a multi-role PM handoff (#107).
- * Nothing here starts AI tasks, holds a task lease or attests test execution.
- * POSIX local volume + shared admission lock; do not assume NFS fencing.
+/** Persistent declarations, fenced actor leases, and human-supervised PM
+ * artifact-digest checkpoints. No AI/test execution, no provider billing,
+ * no unsigned receipt interpreted as a passing technical test.
+ * POSIX local volume + shared admission lock; not NFS/multi-host fencing.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";

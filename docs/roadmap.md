@@ -898,3 +898,14 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Ledger SHA-256 chained degli eventi claim/renew/release in JSON atomico; letture fail-closed su manomissione, replay e ticket scaduti. Root GET vede soltanto \`leased\`, scadenza e attempts, non leaseId.
 - [x] Test Node su 2 API, stale/expiry, revoca sotto lock, cross-tenant, role mismatch, tamper e symlink/hardlink/permessi file; ADR0064 e README/AGENTS.
 - [ ] Claim NON è un esito \`passed\`, dependency resta blocked; manca protocollo completion/attestazione, budget costo reale, adapter AI supervisionato, lease multi-host e VM rootless/Cloudflare (parent #105/#89/#87/#2).
+
+
+
+## PM digest checkpoint con approvazione umana separata (#110, 19 novembre 2026)
+
+- [x] Actor \`checkpoint_approver\` scoped tenant su file privato; identità diversa dal producer e bearer distinta da runner root e tenant.
+- [x] Endpoint PM \`POST /v1/agent-task-checkpoints\`: digest SHA-256 e UUIDv4 del documento con lease fence corrente; state \`awaiting_human_approval\` prima di un'approvazione indipendente.
+- [x] \`approve\` con controllo dell'identico digest/generation, key revocation sotto lock, hash-chain sequenziale, idempotenza e niente replay stale o doppia fatturazione dichiarata.
+- [x] GET non mostra leaseId; \`human_approved_checkpoint\` ed \`approvedReportedUnits\` NON sono test \`passed\` o provider-billing verificato. I downstream di revisione si sbloccano solo dopo checkpoint PM approvato.
+- [x] Test Node su 2 API, concorrenza/lost-ack, mismatch identità, expiry/release, revoca file, tenant cross-ownership, injection e tamper, ADR 0065 e documentazione.
+- [ ] La #109 e parent #105 restano aperte: prove tecniche Tester/reviewer journal-bound, consumo token/fatture provate, adapter AI supervisionato, approvazioni off-host e multi-host/rootless VM.

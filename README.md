@@ -717,3 +717,29 @@ Usare chiavi casuali **diverse** dalla chiave generale del runner e da quelle de
 \`POST /v1/agent-task-leases\` richiede la Bearer dell'**attore**, non la chiave globale. Per \`claim\`: \`{"action":"claim","handoffId":"UUID","taskId":"plan","ttlSeconds":60}\`. Per \`renew\`: \`{"action":"renew","handoffId":"UUID","taskId":"plan","ttlSeconds":120,"leaseId":"UUID-DALLA-CLAIM"}\`. Per \`release\`: \`{"action":"release","handoffId":"UUID","taskId":"plan","leaseId":"UUID-DALLA-CLAIM"}\`.
 
 Il server verifica identità tenant+owner+ruolo, predecessori, limiti di tentativi, journal hash-chained e stessa claim-lock POSIX delle ammissioni. Ogni nuova claim aumenta \`generation\`; ticket vecchi o scaduti non possono più rinnovare/rilasciare la lease. \`leaseId\` è riservato al detentore della credenziale e non appare nella GET di piano. Il record è persistente e letto anche dopo riavvio. I task dipendenti restano bloccati: **non esiste ancora un protocollo di completamento verificato**, pertanto una lease non è prova di esecuzione né di test riusciti. BudgetUnits resta una stima riservata, non spesa AI contabilizzata. Non vengono avviati provider AI, Docker, apply o push automatici. [ADR 0064](adr/0064-actor-scoped-fenced-agent-task-leases.md) · [issue #108](https://github.com/KeyserDSoze/SoftwareFactory/issues/108).
+
+
+
+## Checkpoint PM AI con approvatore indipendente (#110, 19 novembre 2026)
+
+Nel runner, il registro handoff ora permette di distinguere **la presa in carico di un task** dalla **revisione umana di un documento**. Questa funzionalità è volutamente limitata ai task con ruolo \`project_manager\`. Il producer conserva la propria lease fencing (#108); l'amministratore configura nel file privato \`RUNNER_AGENT_ACTORS_FILE\` anche un **altro** attore, con \`id\` differente, ruolo \`checkpoint_approver\` e lo stesso tenant. Le credenziali root/tenant del runner non sono accettate da questo endpoint e il PM non può approvare il proprio checkpoint.
+
+L'operatore esamina fuori dal runner il documento del PM e ne verifica manualmente il digest SHA-256. Il PM, con la sua Bearer actor-scoped, presenta la **sola impronta** e unità di lavoro autodichiarate:
+
+\`\`\`json
+{"action":"submit","handoffId":"UUID-HANDOFF","taskId":"plan",
+ "leaseId":"UUID-LEASE","submissionId":"UUIDv4-STABILE",
+ "artifactDigest":"64-caratteri-esadecimali-sha256",
+ "reportedUnits":2}
+\`\`\`
+
+Alla route \`POST /v1/agent-task-checkpoints\` l'approvatore umano invia con la **propria** Bearer scoped il digest del documento effettivamente controllato:
+
+\`\`\`json
+{"action":"approve","handoffId":"UUID-HANDOFF","taskId":"plan",
+ "submissionId":"LO-STESSO-UUIDv4","artifactDigest":"LO-STESSO-SHA256"}
+\`\`\`
+
+Nessun documento, prompt, sorgente o token è salvato nel registro; anche la lettura autenticata \`GET /v1/agent-handoffs/:id\` non espone il \`leaseId\`. Prima dell'approvazione il task appare \`awaiting_human_approval\` con \`evidence:not_started\`, e i dipendenti restano bloccati. Dopo il controllo indipendente appare \`human_approved_checkpoint\` e il successivo handoff di **revisione** può acquisire una lease. **Non viene dichiarato alcun test come \`passed\` e non viene invocato automaticamente alcun agente AI.** Replay identici di submit/approve non duplicano eventi né unità riportate; una lease revocata/scaduta o un ticket di generazione precedente non possono essere approvati.
+
+\`approvedReportedUnits\` è una somma controllata delle **unità autodichiarate e approvate**, limitata da \`estimatedUnits\` per task e dal \`budgetUnits\` del piano. **Non equivale al consumo verificato dei token o agli addebiti del provider AI**. L'API verifica solo che gli attori con scope appropriato abbiano registrato l'approvazione dell'impronta: non può verificare da sola l'esistenza, il contenuto, la qualità del documento né l'identità legale della persona. Le prove tecniche dei Tester, un eventuale billing firmato e l'orchestrazione autonoma restano nella [#109](https://github.com/KeyserDSoze/SoftwareFactory/issues/109) e nella [#105](https://github.com/KeyserDSoze/SoftwareFactory/issues/105). Vedi [ADR 0065](adr/0065-human-approved-pm-digest-checkpoints.md).
