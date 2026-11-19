@@ -896,3 +896,10 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - La snapshot di input verificata deriva solo da `input.json` del job Tester (inode sicuro e payload `validateRequest` canonico) + report/journal `test_verified`, **non** da digest/verdict proposti da AI. Recheck su ogni read, incluse claim dopo prova; input assente o cambiato dopo il test = fail closed.
 - `reviewSource` nel Code Reviewer contiene solo digest dei file e fingerprint domain-separated vincolato a handoff/task/reviewContext; mai sorgente, secret o leaseId. Snapshot discordanti tra test diretti bloccano la claim reviewer. Senza test diretto non inventare snapshot.
 - Nessun `reviewSource` equivale a code review eseguita/approvata, né deve sbloccare downstream. L'approvazione indipendente è ancora da implementare in #113. Test Node e ADR 0068.
+
+
+## Review manuale indipendente su input runner (#115)
+
+- `POST /v1/agent-task-reviews` usa solo actor credential file-backed e tenant-bound; `submit` da `code_reviewer` con lease corrente, `approve` da `review_approver` diverso con `attestation:manual_inspection`. Mai accettare runner root/tenant bearer o `passed:true`, prompt, codice o secret negli eventi.
+- Gli eventi `review_submit`/ `review_approve` sono hash-chained, richiedono idempotency UUID, digest dell'artefatto esterno e `reviewSource.fingerprint` controllato con test/journal/input originali. `review_submitted` NON sblocca il DAG; solo la decisione umana indipendente `human_approved_review` lo sblocca, pur mantenendo `executions:0` e budget provider non attestato.
+- Fonte mancante, snapshot discordanti, key ruotata sotto lock, lease stale e hash manomessi => fail closed. Tale attestazione è manuale, non una prova dell'esecuzione di Code Reviewer LLM; ADR 0069, #113/#109/#105 aperte.

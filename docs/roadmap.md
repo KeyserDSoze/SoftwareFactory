@@ -919,3 +919,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Evento hash-chained \`test_verified\` idempotente, proiezione \`runner_verified_test\`, task downstream sbloccato solo con proof ancora presente e valida; nessun leaseId visibile in GET, no claim su reviewer tramite mera test suite.
 - [x] Node tests di due API, queued/failed/incomplete/tamper/retention, idempotenza, stale, tenant/role, job vecchio, digest/head/step falsi; ADR 0066 e documentazione.
 - [ ] #109/#105: verifica indipendente di Code Reviewer, provider token/billing realmente attestato, audit/correlazione di sorgenti e identità, durable off-host attestations, orchestrazione AI autonoma. VM rootless/Cloudflare reali #2/#87.
+
+
+## Approvazione manuale Reviewer vincolata a fonte testata (#115)
+
+- [x] Route actor-scoped per review con submission digest di documento esterno, source fingerprint #114 e approvazione `manual_inspection` indipendente; eventi persistenti SHA chain e fencing; GET rechecks del journal/input originale.
+- [x] `review_submitted` non sblocca i dipendenti; `human_approved_review` documenta solo la verifica dichiarata da umano e consente claim downstream. Non attribuire provider billing, execution AI o false passed.
+- [ ] Review artifact verificato off-host, misurazione costi da provider reale, agent executor e collaudi VM rootless/Cloudflare: issue #113/#109/#105/#87/#2.

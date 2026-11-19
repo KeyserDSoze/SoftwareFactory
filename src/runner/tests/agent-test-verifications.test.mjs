@@ -10,7 +10,7 @@ import { createRunnerServer } from "../api.mjs";
 import { validateRequest } from "../common.mjs";
 import { admitRunnerJob, withAdmissionLock } from "../admission.mjs";
 import { executeJob } from "../worker.mjs";
-import { verifyAgentTestTask } from "../agent-handoffs.mjs";
+import { verifyAgentTestTask, mutateAgentTaskReview } from "../agent-handoffs.mjs";
 import { verifyJobEvidenceForRead } from "../evidence.mjs";
 
 const rootKey="journal-test-root-key-abcdefghijklmnopqrstuvwxyz";
@@ -18,6 +18,12 @@ const actorKey="agent.tester-one."+"T".repeat(48);
 const reviewerKey="agent.reviewer-one."+"R".repeat(48);
 const wrongRoleKey="agent.tester-one."+"W".repeat(48);
 const foreignKey="agent.tester-one."+"F".repeat(48);
+const reviewApproverKey="agent.human-review."+"H".repeat(48);
+const reviewSelfKey="agent.reviewer-one."+"I".repeat(48);
+const tenantReviewKey="agent.reviewer-one."+"X".repeat(48);
+const tenantApproverKey="agent.human-review."+"Z".repeat(48);
+const releaseKey="agent.release-one."+"L".repeat(48);
+const reviewDigest="a".repeat(64);
 const origin="http://localhost:5173";
 const draft=()=>({
   consent:true,label:"Journal verified tester handoff",
@@ -43,6 +49,11 @@ async function fixture({multiTenant=false}={}) {
     {id:"reviewer-one",role:"code_reviewer",tenantId:null,key:reviewerKey},
     {id:"tester-one",role:"code_reviewer",tenantId:null,key:wrongRoleKey},
     {id:"tester-one",role:"tester",tenantId:"alpha",key:foreignKey},
+    {id:"reviewer-one",role:"code_reviewer",tenantId:"alpha",key:tenantReviewKey},
+    {id:"human-review",role:"review_approver",tenantId:null,key:reviewApproverKey},
+    {id:"reviewer-one",role:"review_approver",tenantId:null,key:reviewSelfKey},
+    {id:"human-review",role:"review_approver",tenantId:"alpha",key:tenantApproverKey},
+    {id:"release-one",role:"release_manager",tenantId:null,key:releaseKey},
   ]}),{mode:0o600});
   if(multiTenant)await writeFile(tenantFile,JSON.stringify({version:1,tenants:[
     {id:"alpha",key:tenantKey,maxQueued:4,maxRetained:15,maxAcceptedPerMinute:0},
@@ -389,4 +400,200 @@ test("review source is blocked when verified Tester dependencies used distinct f
     assert.equal(attempt.status,409,JSON.stringify(attempt.body));
     assert.equal(attempt.body.error,"dependency_blocked");
   }finally {await f.close();}
+});
+
+const reviewerTaskManifest=()=>({
+  consent:true,label:"Independent source-bound manual code review",
+  budgetUnits:6,tasks:[
+    {id:"test",role:"tester",owner:"tester-one",dependsOn:[],
+      estimatedUnits:2,maxAttempts:2},
+    {id:"review",role:"code_reviewer",owner:"reviewer-one",
+      dependsOn:["test"],estimatedUnits:2,maxAttempts:2},
+    {id:"release",role:"release_manager",owner:"release-one",
+      dependsOn:["review"],estimatedUnits:2,maxAttempts:1},
+  ],
+});
+async function prepareReviewer(f,{tenants=false}={}) {
+  const id=await f.create(tenants?draft():reviewerTaskManifest());
+  const claim=await f.claim(0,id);
+  assert.equal(claim.status,200,JSON.stringify(claim.body));
+  await sleep(20); // job accepted strictly after the Tester claim
+  const job=await f.run();
+  const verified=await f.verify(1,id,claim.body.leaseId,job);
+  assert.equal(verified.status,201,JSON.stringify(verified.body));
+  const view=await f.view(0,id);
+  assert.equal(view.status,200,JSON.stringify(view.body));
+  const source=view.body.tasks.find(t=>t.id==="review").reviewSource;
+  assert.equal(source.status,"runner_input_recorded");
+  const owner=tenants?tenantReviewKey:reviewerKey;
+  const lease=await f.claim(1,id,"review",owner);
+  assert.equal(lease.status,200,JSON.stringify(lease.body));
+  return {id,job,source,lease:lease.body.leaseId,owner};
+}
+const reviewSubmitBody=(id,lease,sourceFingerprint,submissionId=randomUUID())=>({
+  action:"submit",handoffId:id,taskId:"review",leaseId:lease,submissionId,
+  artifactDigest:reviewDigest,sourceFingerprint,
+});
+const reviewApprovalBody=submission=>({
+  action:"approve",handoffId:submission.handoffId,taskId:submission.taskId,
+  submissionId:submission.submissionId,
+  artifactDigest:submission.artifactDigest,
+  sourceFingerprint:submission.sourceFingerprint,
+  attestation:"manual_inspection",
+});
+const postReview=(f,api,body,token)=>
+  f.call(api,"POST","/v1/agent-task-reviews",body,token);
+
+test("independent review submit is not completion; manual signoff unlocks only downstream",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,409);
+    const [first,replay]=await Promise.all([
+      postReview(f,0,req,owner),
+      postReview(f,1,req,owner),
+    ]);
+    assert.deepEqual([first.status,replay.status].sort(),[200,201],
+      JSON.stringify({first,replay}));
+    const pending=await f.view(0,id);
+    assert.equal(pending.body.tasks[1].state,"review_submitted");
+    assert.equal(pending.body.tasks[2].state,"blocked");
+    assert.equal(pending.body.tasks[1].evidence,"not_started");
+    assert.equal(pending.body.executions,0);
+    assert.equal(pending.body.approvedReportedUnits,0);
+    assert.equal((await f.claim(1,id,"release",releaseKey)).status,409);
+    const approved=await postReview(f,0,reviewApprovalBody(req),reviewApproverKey);
+    assert.equal(approved.status,201,JSON.stringify(approved.body));
+    assert.equal(approved.body.created,true);
+    const twice=await postReview(f,1,reviewApprovalBody(req),reviewApproverKey);
+    assert.equal(twice.status,200,JSON.stringify(twice.body));
+    assert.equal(twice.body.created,false);
+    const done=await f.view(1,id);
+    assert.equal(done.status,200,JSON.stringify(done.body));
+    assert.deepEqual(done.body.tasks.map(t=>t.state),
+      ["runner_verified_test","human_approved_review","ready"]);
+    assert.deepEqual(done.body.tasks[1].reviewApproval,{
+      submissionId:req.submissionId,artifactDigest:reviewDigest,
+      sourceFingerprint:source.fingerprint,approvedBy:"human-review",
+      attestation:"manual_inspection",
+    });
+    assert.equal(done.body.tasks[1].evidence,"human_review_attestation");
+    assert.equal(done.body.executions,0);
+    assert.equal(done.body.approvedReportedUnits,0);
+    assert.equal(JSON.stringify(done.body).includes(lease),false);
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,200);
+    assert.equal((await f.claim(0,id,"review",owner)).status,409);
+  } finally { await f.close(); }
+});
+
+test("review rejects fake source, extra keys, wrong role, self-approval and changed artifact",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    const badSource=await postReview(f,0,{
+      ...req,sourceFingerprint:"b".repeat(64),
+    },owner);
+    assert.equal(badSource.status,409,JSON.stringify(badSource.body));
+    assert.equal((await postReview(f,0,{...req,passed:true},owner)).status,422);
+    assert.equal((await postReview(f,0,req,actorKey)).status,403);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),owner)).status,403);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewSelfKey)).status,404);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,409);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,0,{...req,artifactDigest:"c".repeat(64)},owner)).status,409);
+    assert.equal((await postReview(f,0,reviewApprovalBody({
+      ...req,artifactDigest:"c".repeat(64)}),reviewApproverKey)).status,409);
+    assert.equal((await postReview(f,0,{
+      ...reviewApprovalBody(req),attestation:"automatic"},reviewApproverKey)).status,422);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),rootKey)).status,401);
+    const done=await f.view(0,id);
+    assert.equal(done.body.tasks[1].state,"review_submitted");
+    assert.equal(done.body.tasks[2].state,"blocked");
+  }finally{await f.close();}
+});
+
+test("review actor and approver must belong to same tenant as tested input",async()=>{
+  const f=await fixture({multiTenant:true});
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f,{tenants:true});
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    assert.equal((await postReview(f,0,req,reviewerKey)).status,404);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,404);
+    const result=await postReview(f,0,reviewApprovalBody(req),tenantApproverKey);
+    assert.equal(result.status,201,JSON.stringify(result.body));
+    const done=await f.view(1,id);
+    assert.equal(done.body.tasks[1].state,"human_approved_review");
+  }finally{await f.close();}
+});
+
+test("review source input disappearance makes approved handoff fail closed",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,job,owner}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,201);
+    await rm(path.join(f.dataDir,"jobs",job.report.id,"input.json"));
+    const view=await f.view(0,id);
+    assert.equal(view.status,409,JSON.stringify(view.body));
+    assert.equal((await f.claim(1,id,"release",releaseKey)).status,404);
+    const submit=await postReview(f,0,reviewApprovalBody(req),reviewApproverKey);
+    assert.equal(submit.status,409);
+  }finally{await f.close();}
+});
+
+test("review signoff is fenced by key rotation during the admission lock",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    let acquired;
+    const entered=new Promise(resolve=>acquired=resolve);
+    let release;
+    const held=new Promise(resolve=>release=resolve);
+    const holder=withAdmissionLock(f.dataDir,async()=>{
+      acquired(); await held;
+    },4000);
+    await entered;
+    const approving=postReview(f,1,reviewApprovalBody(req),reviewApproverKey);
+    await sleep(35);
+    const raw=JSON.parse(await readFile(f.actorFile,"utf8"));
+    raw.actors.find(a=>a.id==="human-review" && a.tenantId===null).key=
+      "agent.human-review."+"N".repeat(48);
+    const replacement=f.actorFile+".replace";
+    await writeFile(replacement,JSON.stringify(raw),{mode:0o600});
+    await rename(replacement,f.actorFile);
+    release(); await holder;
+    const outcome=await approving;
+    assert.equal(outcome.status,401,JSON.stringify(outcome.body));
+    const status=await f.view(0,id);
+    assert.equal(status.body.tasks[1].state,"review_submitted");
+    assert.equal(status.body.tasks[2].state,"blocked");
+  }finally{await f.close();}
+});
+
+test("review late completion after lease timeout and forged chained event are rejected",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source}=await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint);
+    let ticks=0; const now=Date.now();
+    await assert.rejects(mutateAgentTaskReview({
+      dataDir:f.dataDir,actor:{id:"reviewer-one",role:"code_reviewer",tenantId:null},
+      request:req,nowMs:()=>++ticks===1?now:now+120000,
+    }),{code:"HANDOFF_LEASE_STALE"});
+    assert.equal((await f.view(0,id)).body.tasks[1].state,"leased");
+    const good=await postReview(f,0,req,reviewerKey);
+    assert.equal(good.status,201,JSON.stringify(good.body));
+    const recordPath=path.join(f.dataDir,"agent-handoffs",id+".json");
+    const record=JSON.parse(await readFile(recordPath,"utf8"));
+    record.events.at(-1).sourceFingerprint="c".repeat(64);
+    await writeFile(recordPath,JSON.stringify(record),{mode:0o600});
+    assert.equal((await f.view(1,id)).status,409);
+    assert.equal((await postReview(f,0,reviewApprovalBody(req),reviewApproverKey)).status,404);
+  }finally{await f.close();}
 });
