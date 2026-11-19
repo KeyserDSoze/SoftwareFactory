@@ -1,12 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import type { SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createProject } from "../domain/defaults";
 import { generateFiles } from "./scaffold";
 
+/** CI diagnostics are deliberately read-only: a failing Docker Compose probe
+ * must fail the test instead of being retried, skipped or converted to success.
+ * Never log the entire environment or generated Compose config (credentials).
+ */
+function dockerComposeFailure(step: string, result: SpawnSyncReturns<string>,
+  durationMs: number): string {
+  const error = result.error as NodeJS.ErrnoException | undefined;
+  return JSON.stringify({
+    step,
+    status: result.status,
+    signal: result.signal,
+    errorCode: error?.code ?? null,
+    errorErrno: error?.errno ?? null,
+    errorMessage: error?.message?.slice(0, 400) ?? null,
+    durationMs,
+    stdout: (result.stdout ?? "").slice(0, 1200),
+    stderr: (result.stderr ?? "").slice(0, 1200),
+    // Only operational flags; never expose HOME, PATH, tokens or env values.
+    ci: process.env.CI === "true",
+  }, null, 2);
+}
+
 describe("application scaffold", () => {
+  it("reports Docker Compose probe failures with exit, signal and error diagnostics", () => {
+    const fake = {
+      status: 255, signal: null, stdout: "", stderr: "plugin lookup failure",
+      error: Object.assign(new Error("spawn command failed"), {
+        code: "EACCES", errno: -13,
+      }),
+    } as SpawnSyncReturns<string>;
+    const message = dockerComposeFailure("compose version", fake, 123);
+    const details = JSON.parse(message) as Record<string, unknown>;
+    expect(details).toMatchObject({
+      status: 255, signal: null, errorCode: "EACCES", errorErrno: -13,
+      durationMs: 123, stderr: "plugin lookup failure",
+    });
+    expect(message).not.toContain("PATH=");
+    expect(message).not.toContain("HOME=");
+    expect(message).not.toContain("TOKEN=");
+  });
   function example() {
     const p = createProject();
     p.config.name = "Legge & Codice";
@@ -466,15 +506,19 @@ describe("application scaffold", () => {
     // developers without Docker can still run the pure template assertions.
     const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
       HOME: process.env.HOME || "/tmp" };
+    const startedAt = Date.now();
     const available = spawnSync("docker", ["compose", "version"], {
       encoding: "utf8", timeout: 6000, maxBuffer: 65536, env: processEnv,
     });
+    const probeDetails = dockerComposeFailure("docker compose version", available,
+      Date.now() - startedAt);
     if (available.error &&
         (available.error as NodeJS.ErrnoException).code === "ENOENT") {
-      if (process.env.CI === "true") throw Error("Docker Compose required by CI");
+      if (process.env.CI === "true")
+        throw Error("Docker Compose required by CI: " + probeDetails);
       return;
     }
-    expect(available.status, available.stderr).toBe(0);
+    expect(available.status, probeDetails).toBe(0);
     const directory = mkdtempSync(path.join(tmpdir(), "sf-composed-oidc-"));
     const dockerDir = path.join(directory, "docker");
     mkdirSync(dockerDir);
@@ -483,12 +527,16 @@ describe("application scaffold", () => {
     writeFileSync(composeFile, compose, { mode: 0o600 });
     const render = (envLines: string[]) => {
       writeFileSync(envFile, envLines.join("\n") + "\n", { mode: 0o600 });
+      const startedConfigAt = Date.now();
       const output = spawnSync("docker", [
         "compose", "-f", composeFile, "--env-file", envFile,
         "config", "--format", "json",
       ], { encoding: "utf8", timeout: 12000,
         maxBuffer: 1_000_000, env: processEnv });
-      expect(output.status, output.stderr).toBe(0);
+      const details = dockerComposeFailure("docker compose config",
+        { ...output, stdout: "" }, Date.now() - startedConfigAt);
+      // Deliberately redact the full rendered config: it may contain secrets.
+      expect(output.status, details).toBe(0);
       return JSON.parse(output.stdout) as {
         services: {
           api: { environment: Record<string, string>;
