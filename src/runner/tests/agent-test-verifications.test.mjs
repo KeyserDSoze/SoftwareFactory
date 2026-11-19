@@ -416,19 +416,21 @@ const stageReport=(f,api,{id,lease,source,owner,submissionId=randomUUID(),
     handoffId:id,taskId:"review",leaseId:lease,
     submissionId,sourceFingerprint:source.fingerprint,document,
   },owner);
-const reviewerTaskManifest=()=>({
+const reviewerTaskManifest=(maxAttempts=2)=>({
   consent:true,label:"Independent source-bound manual code review",
   budgetUnits:6,tasks:[
     {id:"test",role:"tester",owner:"tester-one",dependsOn:[],
       estimatedUnits:2,maxAttempts:2},
     {id:"review",role:"code_reviewer",owner:"reviewer-one",
-      dependsOn:["test"],estimatedUnits:2,maxAttempts:2},
+      dependsOn:["test"],estimatedUnits:2,maxAttempts},
     {id:"release",role:"release_manager",owner:"release-one",
       dependsOn:["review"],estimatedUnits:2,maxAttempts:1},
   ],
 });
-async function prepareReviewer(f,{tenants=false,document=reviewDocument()}={}) {
-  const id=await f.create(tenants?draft():reviewerTaskManifest());
+async function prepareReviewer(f,{
+  tenants=false,document=reviewDocument(),maxAttempts=2,
+}={}) {
+  const id=await f.create(tenants?draft():reviewerTaskManifest(maxAttempts));
   const claim=await f.claim(0,id);
   assert.equal(claim.status,200,JSON.stringify(claim.body));
   await sleep(20); // job accepted strictly after the Tester claim
@@ -461,6 +463,13 @@ const reviewApprovalBody=submission=>({
   artifactDigest:submission.artifactDigest,
   sourceFingerprint:submission.sourceFingerprint,
   attestation:"manual_inspection",
+});
+const reviewRejectionBody=submission=>({
+  action:"reject",handoffId:submission.handoffId,taskId:submission.taskId,
+  submissionId:submission.submissionId,
+  artifactDigest:submission.artifactDigest,
+  sourceFingerprint:submission.sourceFingerprint,
+  decision:"changes_requested",
 });
 const postReview=(f,api,body,token)=>
   f.call(api,"POST","/v1/agent-task-reviews",body,token);
@@ -884,4 +893,153 @@ test("review report staging rechecks credential rotation under the shared lock",
     assert.equal(recovered.status,200,JSON.stringify(recovered.body));
     assert.equal(recovered.body.artifactDigest,artifactDigest);
   }finally{await f.close();}
+});
+
+test("independent negative review is replay-safe, blocks release and permits fenced rework",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{document:{
+        ...reviewDocument(),recommendation:"changes_requested",
+      }});
+    const submit=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submit,owner)).status,201);
+    const [first,replay]=await Promise.all([
+      postReview(f,0,reviewRejectionBody(submit),reviewApproverKey),
+      postReview(f,1,reviewRejectionBody(submit),reviewApproverKey),
+    ]);
+    assert.deepEqual([first.status,replay.status].sort(),[200,201],
+      JSON.stringify({first,replay}));
+    const failed=await f.view(1,id);
+    assert.equal(failed.status,200,JSON.stringify(failed.body));
+    assert.equal(failed.body.tasks[1].state,"review_changes_requested");
+    assert.equal(failed.body.tasks[1].evidence,"human_review_rejection");
+    assert.equal(failed.body.tasks[1].reviewRejectionCount,1);
+    assert.deepEqual(failed.body.tasks[1].reviewRejection,{
+      submissionId,artifactDigest,sourceFingerprint:source.fingerprint,
+      rejectedBy:"human-review",decision:"changes_requested",
+      artifactMode:"stored_review_document_v1",
+    });
+    assert.equal(failed.body.tasks[2].state,"blocked");
+    assert.equal(failed.body.executions,0);
+    assert.equal(failed.body.approvedReportedUnits,0);
+    assert.equal(JSON.stringify(failed.body).includes(lease),false);
+    assert.equal((await postReview(f,0,reviewApprovalBody(submit),
+      reviewApproverKey)).status,409);
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,409);
+    const newLease=await f.claim(1,id,"review",owner);
+    assert.equal(newLease.status,200,JSON.stringify(newLease.body));
+    assert.equal(newLease.body.generation,2);
+    assert.notEqual(newLease.body.leaseId,lease);
+    const newDoc=await stageReport(f,0,{
+      id,source,owner,lease:newLease.body.leaseId,
+    });
+    assert.equal(newDoc.status,201,JSON.stringify(newDoc.body));
+    assert.notEqual(newDoc.body.submissionId,submissionId);
+    const newSubmit=reviewSubmitBody(id,newLease.body.leaseId,
+      source.fingerprint,newDoc.body.submissionId,newDoc.body.artifactDigest);
+    assert.equal((await postReview(f,0,newSubmit,owner)).status,201);
+    const approved=await postReview(f,1,reviewApprovalBody(newSubmit),
+      reviewApproverKey);
+    assert.equal(approved.status,201,JSON.stringify(approved.body));
+    const final=(await f.view(0,id)).body;
+    assert.equal(final.tasks[1].state,"human_approved_review");
+    assert.equal(final.tasks[1].reviewRejectionCount,1);
+    assert.equal(final.tasks[1].reviewRejection.submissionId,submissionId);
+    assert.equal(final.tasks[2].state,"ready");
+    assert.equal((await f.claim(0,id,"release",releaseKey)).status,200);
+  }finally {await f.close();}
+});
+
+test("negative review rejection rejects wrong role, wrong decision and positive report",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f);
+    const req=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    const rejection=reviewRejectionBody(req);
+    assert.equal((await postReview(f,0,rejection,reviewApproverKey)).status,409);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,0,rejection,rootKey)).status,401);
+    assert.equal((await postReview(f,0,rejection,owner)).status,403);
+    assert.equal((await postReview(f,0,rejection,reviewSelfKey)).status,404);
+    assert.equal((await postReview(f,0,rejection,tenantApproverKey)).status,404);
+    assert.equal((await postReview(f,0,{
+      ...rejection,decision:"approve"},reviewApproverKey)).status,422);
+    assert.equal((await postReview(f,0,{
+      ...rejection,attestation:"manual_inspection"},reviewApproverKey)).status,422);
+    assert.equal((await postReview(f,0,{
+      ...rejection,artifactDigest:"a".repeat(64)},reviewApproverKey)).status,409);
+    assert.equal((await postReview(f,1,rejection,reviewApproverKey)).status,409);
+    assert.equal((await f.view(0,id)).body.tasks[1].state,"review_submitted");
+    assert.equal((await f.view(0,id)).body.tasks[2].state,"blocked");
+  }finally {await f.close();}
+});
+
+test("negative decision is fenced by attempts and historical report remains verifiable",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{
+        document:{...reviewDocument(),recommendation:"changes_requested"},
+        maxAttempts:1,
+      });
+    const req=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    assert.equal((await postReview(f,1,reviewRejectionBody(req),
+      reviewApproverKey)).status,201);
+    assert.equal((await f.claim(0,id,"review",owner)).status,409);
+    const pathToDoc=path.join(f.dataDir,"agent-review-artifacts",
+      submissionId+".json");
+    const before=await readFile(pathToDoc,"utf8");
+    const forged=JSON.parse(before);
+    forged.document.summary="Tampered historically rejected document must fail closed.";
+    await writeFile(pathToDoc,JSON.stringify(forged),{mode:0o600});
+    assert.equal((await f.view(0,id)).status,409);
+    await writeFile(pathToDoc,before,{mode:0o600});
+    assert.equal((await f.view(1,id)).status,200);
+    const location=path.join(f.dataDir,"agent-handoffs",id+".json");
+    const data=JSON.parse(await readFile(location,"utf8"));
+    data.events.at(-1).decision="approve";
+    await writeFile(location,JSON.stringify(data),{mode:0o600});
+    assert.equal((await f.view(0,id)).status,409);
+  } finally {await f.close();}
+});
+
+test("review rejection revocation while waiting for shared lock cannot commit",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{
+        document:{...reviewDocument(),recommendation:"changes_requested"},
+      });
+    const req=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,req,owner)).status,201);
+    let acquired;
+    const entered=new Promise(resolve=>acquired=resolve);
+    let release;
+    const held=new Promise(resolve=>release=resolve);
+    const holder=withAdmissionLock(f.dataDir,async()=>{
+      acquired();await held;
+    },4000);
+    await entered;
+    const pending=postReview(f,1,reviewRejectionBody(req),reviewApproverKey);
+    await sleep(40);
+    const registry=JSON.parse(await readFile(f.actorFile,"utf8"));
+    registry.actors.find(a=>a.id==="human-review" &&
+      a.tenantId===null && a.role==="review_approver").key=
+        "agent.human-review."+"N".repeat(48);
+    await writeFile(f.actorFile+".new",JSON.stringify(registry),{mode:0o600});
+    await rename(f.actorFile+".new",f.actorFile);
+    release();await holder;
+    const denied=await pending;
+    assert.equal(denied.status,401,JSON.stringify(denied.body));
+    const view=(await f.view(0,id)).body;
+    assert.equal(view.tasks[1].state,"review_submitted");
+    assert.equal(view.tasks[2].state,"blocked");
+  }finally {await f.close();}
 });
