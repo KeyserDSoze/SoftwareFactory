@@ -32,6 +32,7 @@ function dockerComposeFailure(step: string, result: SpawnSyncReturns<string>,
 describe("application scaffold", () => {
   it("reports Docker Compose probe failures with exit, signal and error diagnostics", () => {
     const fake = {
+      pid: 123, output: [null, "", ""],
       status: 255, signal: null, stdout: "", stderr: "plugin lookup failure",
       error: Object.assign(new Error("spawn command failed"), {
         code: "EACCES", errno: -13,
