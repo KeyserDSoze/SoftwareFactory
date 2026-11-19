@@ -360,7 +360,8 @@ export function createRunnerServer({
         if (error.code==="HANDOFF_LEASE_INVALID")
           send(422,{error:"lease_invalid"});
         else if (error.code==="HANDOFF_NOT_FOUND" ||
-            error.code==="HANDOFF_INTEGRITY")
+            error.code==="HANDOFF_INTEGRITY" ||
+            error.code==="HANDOFF_TEST_EVIDENCE")
           send(404,{error:"not_found"});
         else if (error.code==="HANDOFF_LEASE_STALE")
           send(409,{error:"lease_stale"});
@@ -415,7 +416,8 @@ export function createRunnerServer({
         else if (error.code==="HANDOFF_CHECKPOINT_FORBIDDEN")
           send(403,{error:"actor_scope_denied"});
         else if (error.code==="HANDOFF_NOT_FOUND" ||
-            error.code==="HANDOFF_INTEGRITY")
+            error.code==="HANDOFF_INTEGRITY" ||
+            error.code==="HANDOFF_TEST_EVIDENCE")
           send(404,{error:"not_found"});
         else if (error.code==="HANDOFF_CHECKPOINT_CONFLICT")
           send(409,{error:"checkpoint_conflict"});
@@ -467,7 +469,8 @@ export function createRunnerServer({
         else if (error.code==="HANDOFF_TEST_FORBIDDEN")
           send(403,{error:"actor_scope_denied"});
         else if (error.code==="HANDOFF_NOT_FOUND" ||
-            error.code==="HANDOFF_INTEGRITY")
+            error.code==="HANDOFF_INTEGRITY" ||
+            error.code==="HANDOFF_TEST_EVIDENCE")
           send(404,{error:"not_found"});
         else if (error.code==="HANDOFF_TEST_EVIDENCE")
           send(409,{error:"test_evidence_invalid"});
@@ -501,7 +504,8 @@ export function createRunnerServer({
       } catch(error) {
         if (error.code === "HANDOFF_NOT_FOUND" || error.code === "ENOENT")
           send(404,{error:"not_found"});
-        else if (error.code === "HANDOFF_INTEGRITY")
+        else if (error.code === "HANDOFF_INTEGRITY" ||
+                 error.code === "HANDOFF_TEST_EVIDENCE")
           tenantMode ? send(404,{error:"not_found"}) : send(409,{error:"handoff_integrity"});
         else if (error.code === "TENANT_AUTH_REVOKED" || error.code === "RUNNER_AUTH_REVOKED")
           send(401,{error:"unauthorized"});
@@ -548,7 +552,8 @@ export function createRunnerServer({
           send(409,{error:"handoff_conflict"});
         else if (error.code === "HANDOFF_CAPACITY")
           send(429,{error:"handoff_capacity"});
-        else if (error.code === "HANDOFF_INTEGRITY")
+        else if (error.code === "HANDOFF_INTEGRITY" ||
+                 error.code === "HANDOFF_TEST_EVIDENCE")
           tenantMode ? send(404,{error:"not_found"}) : send(409,{error:"handoff_integrity"});
         else if (error.code === "ADMISSION_BUSY") {
           res.writeHead(503,{...headers,"Retry-After":"2"});
