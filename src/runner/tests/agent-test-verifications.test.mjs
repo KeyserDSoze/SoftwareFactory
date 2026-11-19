@@ -949,6 +949,10 @@ test("independent negative review is replay-safe, blocks release and permits fen
     assert.equal(final.tasks[1].reviewRejection.submissionId,submissionId);
     assert.equal(final.tasks[2].state,"ready");
     assert.equal((await f.claim(0,id,"release",releaseKey)).status,200);
+    // Even after a newer review was approved, its negative predecessor
+    // remains part of the bounded audit trail and must not be prunable.
+    await rm(path.join(f.dataDir,"agent-review-artifacts",submissionId+".json"));
+    assert.equal((await f.view(1,id)).status,409);
   }finally {await f.close();}
 });
 
