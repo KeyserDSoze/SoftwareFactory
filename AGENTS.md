@@ -913,3 +913,11 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Eventi storici della #115 senza artifactMode restano validi solo come legacy_external_digest: nessun uplift automatico della fiducia. Questa custodia non prova che il documento sia stato davvero letto né che il modello AI abbia eseguito una review. Test #116, ADR 0070 e #113/#109/#105 rimangono gli indirizzi per prove indipendenti e billing.
 
 - Per #116, un report conservato con recommendation=changes_requested è negativo: la submit rimane possibile per documentare i finding, ma review_approve deve essere rifiutato con conflict. Per il via libera serve una nuova generazione dopo release/fix e un rapporto recommendation=approve realmente staged; regola verificata anche in GET.
+
+
+## Decisione negativa indipendente del Reviewer (#118)
+
+- Dopo `review_submit` con `artifactMode:stored_review_document_v1`, un `review_approver` indipendente same-tenant può inviare `POST /v1/agent-task-reviews` con `action:"reject"`, `handoffId`, `taskId`, `submissionId`, `artifactDigest`, `sourceFingerprint`, `decision:"changes_requested"`; non accettare leaseId, testo o altri campi nella decisione.
+- La reject richiede un report custodito #116 che dichiara `recommendation:"changes_requested"`, journal Tester e snapshot source validi, credenziale ri-autorizzata sotto lock, lease/generation attive. Un report `approve` non è rifiutabile con questo comando; un report negativo non è approvabile. Il journal emette `review_reject` SHA-chained con actor, generazione e source binding; replay identico non genera nuovi eventi.
+- `review_changes_requested` chiude la lease corrente e NON sblocca i dipendenti; `evidence:"human_review_rejection"` non è completion, esecuzione AI o costo provider. Può essere fatto un nuovo claim fino a `maxAttempts`, sempre con nuova generazione, submissionId e documento write-once; conservare `reviewRejection` e contatore, senza esporre leaseId.
+- Ricontrollare anche i rapporti storici rifiutati dopo un claim successivo: manomissioni/retention invalidano la lettura dell'handoff. I report legacy #115 non supportano il nuovo reject: non innalzare retroattivamente il livello di evidenza. Test Node #118, ADR 0071; #113/#109/#105 restano aperte.

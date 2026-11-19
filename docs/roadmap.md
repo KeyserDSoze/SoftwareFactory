@@ -933,3 +933,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Deposito privato di rapporto strutturato bounded con digest calcolato dal server e binding a snapshot Tester, handoff, owner, tenant e fencing.
 - [x] Nuovi submit/approve collegati obbligatoriamente a un rapporto staged, GET actor-only dopo submit, re-verifica di file e journal su ogni read/claim; vecchi checkpoint digest-only riconosciuti come legacy.
 - [ ] L'effettiva lettura/qualità della review, firme off-host e consumi provider restano da dimostrare in #113/#109/#105. Orfani crash richiedono recovery manuale; nessun auto-push o esecuzione LLM.
+
+
+## Decisione negativa del Code Reviewer e rework fenced (#118 — 19/11/2026)
+
+- [x] Nuova `action:reject` riservata al `review_approver` indipendente dopo `review_submit` di artefatto staged con `recommendation:changes_requested`, senza avallare report positivi o legacy digest-only.
+- [x] Evento `review_reject` hash-chained e idempotente, non-terminal completion e no unlock downstream, stato `review_changes_requested`, audit del rifiuto conservato e nuova claim soltanto dentro il budget di `maxAttempts` e nuova generazione.
+- [x] Test Node con due API, concorrenza, revoca, ruoli e tenant, report manomesso, rifiuto vecchio e cap tentativi, con documentazione e ADR 0071.
+- [ ] Prova off-host dell'ispezione reale, esecuzione autonoma AI e accounting provider restano nelle #113/#109/#105; nessun falso `passed` e nessun auto-push.

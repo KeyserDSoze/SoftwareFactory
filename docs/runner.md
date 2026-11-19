@@ -1189,3 +1189,18 @@ I manifest storici #115 privi del campo artifactMode rimangono leggibili e le lo
 
 
 **Gate negativo della review:** se il rapporto staged dichiara recommendation=changes_requested, il reviewer può presentarlo per audit ma il suo review_approver **non può approvarlo** né sbloccare il release task. Serve risolvere i finding, rilasciare la lease e aprire una nuova generazione prima di ripresentare un rapporto con recommendation=approve. Il server verifica questa regola al momento del commit e nelle successive GET di un checkpoint già approvato.
+
+
+## Reject indipendente e ciclo di correzione Code Reviewer (#118)
+
+Un rapporto depositato con `recommendation:"changes_requested"` può essere presentato dal `code_reviewer` via `review_submit` per documentare il lavoro, ma **non può essere approvato** e non sblocca il DAG. L'actor `review_approver` indipendente (Bearer actor in `RUNNER_AGENT_ACTORS_FILE`, stessa tenant, ID diverso dall'owner, nessun fallback root/tenant) può ora registrare `POST /v1/agent-task-reviews` con JSON a schema chiuso:
+
+```json
+{"action":"reject","handoffId":"<UUID-v4>","taskId":"review","submissionId":"<UUID-v4>","artifactDigest":"<sha256>","sourceFingerprint":"<sha256>","decision":"changes_requested"}
+```
+
+Il backend esige una submission corrente già presentata, report **custodito #116** con `artifactMode:stored_review_document_v1` e recommendation `changes_requested`, source fingerprint ancora verificabile dal journal/input del Tester, lease attiva, generation coerente e actor autorizzato sotto `withAdmissionLock`. Non riceve private leaseId dall'approvatore. Un evento `review_reject` registra actor, generation, leaseId interno, submissionId, digest e fingerprint e decisione; l'hash-chain e replay idempotente impediscono duplicazioni. Non è permesso reject di report positivi o di vecchi digest-only legacy #115.
+
+La GET espone `review_changes_requested`, `reviewRejection:{submissionId,artifactDigest,sourceFingerprint,rejectedBy,decision,artifactMode}` e `reviewRejectionCount` senza esporre leaseId, sorgenti o rapporti in chiaro. Il nuovo stato è terminale **per la lease corrente**, NON è approvazione o completion, e i figli restano bloccati. Il Reviewer può reclamare una nuova lease **solo se rimangono tentativi `maxAttempts`**; deve risolvere i finding e depositare un **nuovo** documento nel nuovo fencing generation. Il record dell'ultimo rifiuto e il suo contatore restano visibili anche dopo la nuova claim. Il runner continua a verificare il documento del rifiuto precedente a ogni GET/claim: retention o manomissione del vecchio report impediscono di considerare valido lo storico.
+
+La decisione viene attestata tramite capability Bearer, non certifica la lettura effettiva di ogni file né l'esecuzione di un LLM; `executions` e contabilizzazione provider restano invariati. Nessun auto-apply del codice, deploy automatico o firma off-host.
