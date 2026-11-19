@@ -10,6 +10,7 @@ import { createRunnerServer } from "../api.mjs";
 import { validateRequest } from "../common.mjs";
 import { admitRunnerJob, withAdmissionLock } from "../admission.mjs";
 import { executeJob } from "../worker.mjs";
+import { verifyAgentTestTask } from "../agent-handoffs.mjs";
 import { verifyJobEvidenceForRead } from "../evidence.mjs";
 
 const rootKey="journal-test-root-key-abcdefghijklmnopqrstuvwxyz";
@@ -273,4 +274,30 @@ test("revoked actor during lock, local job fake verdict and byte-limited request
     const huge=await f.verify(0,id,lease.body.leaseId,job,{fake:"x".repeat(1400)});
     assert.equal(huge.status,401); // now revoked, cannot inspect data
   }finally{await f.close();}
+});
+
+
+test("late verification scan cannot commit an expired fencing lease",async()=>{
+  const f=await fixture();
+  try {
+    const id=await f.create(),claim=await f.claim(0,id);
+    assert.equal(claim.status,200);
+    await sleep(16);
+    const job=await f.run();
+    const now=Date.now(),actor={id:"tester-one",tenantId:null,role:"tester"};
+    let calls=0;
+    await assert.rejects(verifyAgentTestTask({
+      dataDir:f.dataDir,actor,request:{
+        handoffId:id,taskId:"test",leaseId:claim.body.leaseId,
+        submissionId:randomUUID(),jobId:job.report.id,
+        jobDigest:job.report.digest,jobHead:job.head,
+        jobCount:job.entries.length,step:"dotnet-test",
+      },
+      nowMs:()=>++calls===1?now:now+120000,
+    }),{code:"HANDOFF_LEASE_STALE"});
+    const status=await f.view(1,id);
+    assert.equal(status.status,200);
+    assert.equal(status.body.tasks[0].state,"leased");
+    assert.equal(status.body.verifiedTestJobs,0);
+  } finally { await f.close(); }
 });

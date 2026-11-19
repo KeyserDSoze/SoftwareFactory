@@ -742,11 +742,20 @@ export async function verifyAgentTestTask({
       event.kind==="test_verified" && event.jobId===input.jobId)))
       throw issue("HANDOFF_TEST_CONFLICT");
     await reauthorize?.();
+    // A long scan cannot commit a lease after it has expired. Bind the event
+    // timestamp to the final validation, not to the initial API receipt.
+    const commitNow=nowMs();
+    if (commitNow<=Date.parse(state.claimAt) ||
+        commitNow>=Date.parse(state.expiresAt) ||
+        state.at && commitNow<Date.parse(state.at))
+      throw issue("HANDOFF_LEASE_STALE");
+    const commitAt=new Date(commitNow).toISOString();
+    proof.at=commitAt;
     await verifyTechnicalJob(dataDir,proof,task,record.tenantId,state.claimAt);
     const eventBody={
       sequence:(record.events?.length??0)+1,
       previousHash:record.head??GENESIS,
-      kind:"test_verified",at,taskId:task.id,actorId:actor.id,
+      kind:"test_verified",at:commitAt,taskId:task.id,actorId:actor.id,
       generation:state.generation,leaseId:state.leaseId,
       expiresAt:state.expiresAt,submissionId:input.submissionId,
       jobId:input.jobId,jobDigest:input.jobDigest,jobHead:input.jobHead,
@@ -759,6 +768,8 @@ export async function verifyAgentTestTask({
     if (Buffer.byteLength(JSON.stringify(next))>MAX_RECORD_BYTES)
       throw issue("HANDOFF_LEASE_CAPACITY");
     await reauthorize?.();
+    if (nowMs()>=Date.parse(state.expiresAt))
+      throw issue("HANDOFF_LEASE_STALE");
     await atomicWrite(filePath(dataDir,record.id),next);
     await readManifest(dataDir,record.id);
     return reply(true);
