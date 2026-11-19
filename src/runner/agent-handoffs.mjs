@@ -146,6 +146,7 @@ async function readManifest(dataDir,id) {
     const record=validateRecord(JSON.parse(buf.toString("utf8")),id);
     const snapshots=await verifyTechnicalProofs(dataDir,record);
     Object.defineProperty(record,SOURCE_SNAPSHOTS,{value:snapshots});
+    verifyReviewBindings(record);
     return record;
   } catch (error) {
     if (error.code === "ENOENT") throw error;
@@ -180,6 +181,12 @@ function reviewDependencyContext(record,leases,task) {
     if (state?.approved) return {
       taskId,evidence:"human_approved_digest",
       digest:state.submission.digest,approvedBy:state.approvedBy,
+    };
+    if (state?.reviewApproved) return {
+      taskId,evidence:"human_review_attestation",
+      digest:state.reviewSubmission.digest,
+      sourceFingerprint:state.reviewSubmission.sourceFingerprint,
+      approvedBy:state.reviewApprovedBy,
     };
     return {taskId,evidence:"not_started"};
   });
@@ -237,24 +244,39 @@ function project(record) {
       const lease=leases.get(task.id);
       const active=lease?.active && Date.parse(lease.expiresAt)>now;
       const dependenciesApproved=task.dependsOn.every(id=>
-        leases.get(id)?.approved || leases.get(id)?.testVerified);
+        leases.get(id)?.approved || leases.get(id)?.testVerified ||
+        leases.get(id)?.reviewApproved);
       const reviewContext=reviewDependencyContext(record,leases,task);
       const reviewSource=reviewSourceSnapshot(record,leases,task,reviewContext);
       const sourceConflict=reviewSource?.status==="conflicting_tested_sources";
       const pending=lease?.submission && !lease.approved && active;
+      const reviewPending=lease?.reviewSubmission && !lease.reviewApproved && active;
       return {
         ...task, state:lease?.testVerified ? "runner_verified_test" :
+          lease?.reviewApproved ? "human_approved_review" :
           lease?.approved ? "human_approved_checkpoint" :
           (!dependenciesApproved || sourceConflict) ? "blocked" :
-          active ? (pending ? "awaiting_human_approval" : "leased") :
+          active ? (reviewPending ? "review_submitted" :
+            pending ? "awaiting_human_approval" : "leased") :
           (lease?.attempts ?? 0) >= task.maxAttempts ? "attempts_exhausted" : "ready",
         attempts:lease?.attempts ?? 0,
         fencingVersion:lease?.generation ?? 0,
         leasedUntil:active ? lease.expiresAt : null,
-        submissionId:pending ? lease.submission.id : null,
-        artifactDigest:lease?.approved || pending ? lease.submission.digest : null,
+        submissionId:reviewPending ? lease.reviewSubmission.id :
+          pending ? lease.submission.id : null,
+        artifactDigest:lease?.reviewApproved || reviewPending ?
+          lease.reviewSubmission.digest :
+          lease?.approved || pending ? lease.submission.digest : null,
         reportedUnits:lease?.approved ? lease.submission.reportedUnits : null,
-        approvedBy:lease?.approved ? lease.approvedBy : null,
+        approvedBy:lease?.reviewApproved ? lease.reviewApprovedBy :
+          lease?.approved ? lease.approvedBy : null,
+        reviewApproval:lease?.reviewApproved ? {
+          submissionId:lease.reviewSubmission.id,
+          artifactDigest:lease.reviewSubmission.digest,
+          sourceFingerprint:lease.reviewSubmission.sourceFingerprint,
+          approvedBy:lease.reviewApprovedBy,
+          attestation:"manual_inspection",
+        } : null,
         testEvidence:lease?.testVerified ? {
           jobId:lease.testVerified.jobId,digest:lease.testVerified.jobDigest,
           head:lease.testVerified.jobHead,count:lease.testVerified.jobCount,
@@ -262,6 +284,7 @@ function project(record) {
         } : null,
         reviewContext,reviewSource,
         evidence:lease?.testVerified ? "verified_runner_journal" :
+          lease?.reviewApproved ? "human_review_attestation" :
           lease?.approved ? "human_approved_digest" : "not_started",
       };
     }),
@@ -329,6 +352,7 @@ function verifyLeaseHistory(record) {
     attempts:0,generation:0,active:false,leaseId:null,expiresAt:null,
     actorId:null,at:null,claimAt:null,submission:null,
     approved:false,approvedBy:null,testVerified:null,
+    reviewSubmission:null,reviewApproved:false,reviewApprovedBy:null,
   }]));
   if (!Object.hasOwn(record,"events")) return map;
   if (!Array.isArray(record.events) || record.events.length < 1 ||
@@ -338,14 +362,18 @@ function verifyLeaseHistory(record) {
   for (const [i,event] of record.events.entries()) {
     const isCheckpoint=event?.kind==="submit" || event?.kind==="approve";
     const isTechnical=event?.kind==="test_verified";
+    const isReview=event?.kind==="review_submit" || event?.kind==="review_approve";
     const allowedFields=["sequence","previousHash","kind","at","taskId",
       "actorId","generation","leaseId","expiresAt","hash",
       ...(isCheckpoint?["submissionId","artifactDigest","reportedUnits"]:[]),
       ...(isTechnical?["submissionId","jobId","jobDigest","jobHead",
-        "jobCount","step"]:[])];
+        "jobCount","step"]:[]),
+      ...(isReview?["submissionId","artifactDigest","sourceFingerprint"]:[]),
+      ...(event?.kind==="review_approve"?["attestation"]:[])];
     if (!exact(event,allowedFields) ||
         event.sequence!==i+1 || event.previousHash!==head ||
-        !["claim","renew","release","submit","approve","test_verified"].includes(event.kind) ||
+        !["claim","renew","release","submit","approve","test_verified",
+          "review_submit","review_approve"].includes(event.kind) ||
         typeof event.at!=="string" ||
         !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(event.at) ||
         !Number.isFinite(Date.parse(event.at)) ||
@@ -363,26 +391,30 @@ function verifyLeaseHistory(record) {
           !UUID.test(event.jobId) || !SHA.test(event.jobDigest) ||
           !SHA.test(event.jobHead) || !Number.isInteger(event.jobCount) ||
           event.jobCount<1 || event.jobCount>48 ||
-          !TEST_STEPS.has(event.step)))
+          !TEST_STEPS.has(event.step)) ||
+        isReview && (!UUID.test(event.submissionId) ||
+          !SHA.test(event.artifactDigest) || !SHA.test(event.sourceFingerprint)) ||
+        event.kind==="review_approve" &&
+          event.attestation!=="manual_inspection")
       throw issue("HANDOFF_INTEGRITY");
     const task=record.tasks.find(task=>task.id===event.taskId);
     const state=map.get(event.taskId);
     if (!task || !state ||
-        (event.kind==="approve"
+        (event.kind==="approve" || event.kind==="review_approve"
           ? (!ACTOR.test(event.actorId) || event.actorId===task.owner)
           : task.owner!==event.actorId) ||
         hash(Object.fromEntries(Object.entries(event).filter(([k])=>k!=="hash")))!==event.hash)
       throw issue("HANDOFF_INTEGRITY");
     const at=Date.parse(event.at),expiration=Date.parse(event.expiresAt);
     if (event.kind==="claim") {
-      if (state.approved || state.testVerified ||
+      if (state.approved || state.testVerified || state.reviewApproved ||
           state.active && at<Date.parse(state.expiresAt) ||
           event.generation!==state.generation+1 ||
           state.at!==null && at<Date.parse(state.at) ||
           state.attempts>=task.maxAttempts ||
           expiration<=at || expiration>at+300000 ||
           task.dependsOn.some(dep=>!map.get(dep)?.approved &&
-            !map.get(dep)?.testVerified))
+            !map.get(dep)?.testVerified && !map.get(dep)?.reviewApproved))
         throw issue("HANDOFF_INTEGRITY");
       state.generation=event.generation;
       state.attempts++;
@@ -392,8 +424,9 @@ function verifyLeaseHistory(record) {
       state.active=true;
       state.claimAt=event.at;
       state.submission=null;
+      state.reviewSubmission=null;
     } else if (event.kind==="renew") {
-      if (!state.active || state.approved || state.testVerified ||
+      if (!state.active || state.approved || state.testVerified || state.reviewApproved ||
           state.generation!==event.generation ||
           state.leaseId!==event.leaseId ||
           state.actorId!==event.actorId ||
@@ -403,7 +436,7 @@ function verifyLeaseHistory(record) {
         throw issue("HANDOFF_INTEGRITY");
       state.expiresAt=event.expiresAt;
     } else if (event.kind==="release") {
-      if (!state.active || state.approved || state.testVerified ||
+      if (!state.active || state.approved || state.testVerified || state.reviewApproved ||
           state.generation!==event.generation ||
           state.leaseId!==event.leaseId ||
           state.actorId!==event.actorId ||
@@ -412,9 +445,10 @@ function verifyLeaseHistory(record) {
       state.expiresAt=event.expiresAt;
       state.active=false;
       state.submission=null;
+      state.reviewSubmission=null;
     } else if (event.kind==="test_verified") {
       if (task.role!=="tester" || !state.active || state.approved ||
-          state.testVerified || state.submission ||
+          state.testVerified || state.submission || state.reviewSubmission ||
           state.generation!==event.generation ||
           state.leaseId!==event.leaseId || state.actorId!==event.actorId ||
           at>=Date.parse(state.expiresAt) ||
@@ -427,6 +461,32 @@ function verifyLeaseHistory(record) {
         jobCount:event.jobCount,step:event.step,at:event.at,
       };
       state.active=false;
+    } else if (event.kind==="review_submit") {
+      if (task.role!=="code_reviewer" || !state.active ||
+          state.approved || state.testVerified || state.reviewApproved ||
+          state.submission || state.reviewSubmission ||
+          state.generation!==event.generation ||
+          state.leaseId!==event.leaseId || state.actorId!==event.actorId ||
+          at>=Date.parse(state.expiresAt) ||
+          expiration!==Date.parse(state.expiresAt))
+        throw issue("HANDOFF_INTEGRITY");
+      state.reviewSubmission={id:event.submissionId,
+        digest:event.artifactDigest,sourceFingerprint:event.sourceFingerprint};
+    } else if (event.kind==="review_approve") {
+      if (task.role!=="code_reviewer" || !state.active ||
+          state.approved || state.testVerified || state.reviewApproved ||
+          !state.reviewSubmission || state.submission ||
+          state.generation!==event.generation ||
+          state.leaseId!==event.leaseId ||
+          at>=Date.parse(state.expiresAt) ||
+          expiration!==Date.parse(state.expiresAt) ||
+          state.reviewSubmission.id!==event.submissionId ||
+          state.reviewSubmission.digest!==event.artifactDigest ||
+          state.reviewSubmission.sourceFingerprint!==event.sourceFingerprint)
+        throw issue("HANDOFF_INTEGRITY");
+      state.active=false;
+      state.reviewApproved=true;
+      state.reviewApprovedBy=event.actorId;
     } else if (event.kind==="submit") {
       if (task.role!=="project_manager" || !state.active || state.approved ||
           state.submission || state.generation!==event.generation ||
@@ -511,11 +571,12 @@ export async function mutateAgentTaskLease({
     if (record.events?.length>=MAX_LEASE_EVENTS) throw issue("HANDOFF_LEASE_CAPACITY");
     const active=state.active && Date.parse(state.expiresAt)>now;
     let generation,leaseId,expiresAt;
-    if (state.approved || state.testVerified)
+    if (state.approved || state.testVerified || state.reviewApproved)
       throw issue("HANDOFF_LEASE_COMPLETED");
     if (input.action==="claim") {
       if (task.dependsOn.some(dep=>
-        !states.get(dep)?.approved && !states.get(dep)?.testVerified) ||
+        !states.get(dep)?.approved && !states.get(dep)?.testVerified &&
+        !states.get(dep)?.reviewApproved) ||
           reviewSourceSnapshot(record,states,task,
             reviewDependencyContext(record,states,task))?.status===
               "conflicting_tested_sources")
@@ -752,6 +813,133 @@ async function verifyTechnicalProofs(dataDir,record) {
   }
   return snapshots;
 }
+function verifyReviewBindings(record) {
+  const states=verifyLeaseHistory(record);
+  for (const task of record.tasks) {
+    const state=states.get(task.id);
+    if (!state.reviewSubmission) continue;
+    const context=reviewDependencyContext(record,states,task);
+    const source=reviewSourceSnapshot(record,states,task,context);
+    if (source?.status!=="runner_input_recorded" ||
+        source.fingerprint!==state.reviewSubmission.sourceFingerprint)
+      throw issue("HANDOFF_REVIEW_EVIDENCE");
+  }
+}
+function reviewRequest(input) {
+  const base=["action","handoffId","taskId","submissionId",
+    "artifactDigest","sourceFingerprint"];
+  const submit=exact(input,[...base,"leaseId"]);
+  const approve=exact(input,[...base,"attestation"]);
+  if (!(submit||approve) ||
+      (input.action==="submit" ? !submit : input.action==="approve" ? !approve : true) ||
+      !UUID.test(input.handoffId) || !TASK.test(input.taskId) ||
+      !UUID.test(input.submissionId) || !SHA.test(input.artifactDigest) ||
+      !SHA.test(input.sourceFingerprint) ||
+      submit && !UUID.test(input.leaseId) ||
+      approve && input.attestation!=="manual_inspection")
+    throw issue("HANDOFF_REVIEW_INVALID");
+  return input;
+}
+/** Supervised manual review attestation, not proof of AI execution or billing. */
+export async function mutateAgentTaskReview({
+  dataDir,request,actor,reauthorize,waitMs=1500,nowMs=Date.now,
+}) {
+  const input=reviewRequest(request);
+  if (!actor || !ACTOR.test(actor.id) ||
+      !(actor.tenantId===null || typeof actor.tenantId==="string" &&
+        TENANT.test(actor.tenantId)) ||
+      !(input.action==="submit" ? actor.role==="code_reviewer" :
+        actor.role==="review_approver"))
+    throw issue("HANDOFF_REVIEW_FORBIDDEN");
+  return withAdmissionLock(dataDir,async()=>{
+    await reauthorize?.();
+    await trustedDirectory(directory(dataDir));
+    let record;
+    try { record=await readManifest(dataDir,input.handoffId); }
+    catch(error) { if (error.code==="ENOENT") throw issue("HANDOFF_NOT_FOUND"); throw error; }
+    const task=record.tasks.find(t=>t.id===input.taskId);
+    if (record.tenantId!==actor.tenantId || !task ||
+        task.role!=="code_reviewer" ||
+        (input.action==="submit" ? task.owner!==actor.id : task.owner===actor.id))
+      throw issue("HANDOFF_NOT_FOUND");
+    const states=verifyLeaseHistory(record),state=states.get(task.id);
+    const context=reviewDependencyContext(record,states,task);
+    const source=reviewSourceSnapshot(record,states,task,context);
+    if (source?.status!=="runner_input_recorded" ||
+        source.fingerprint!==input.sourceFingerprint)
+      throw issue("HANDOFF_REVIEW_EVIDENCE");
+    const now=nowMs();
+    const same=state.reviewSubmission &&
+      state.reviewSubmission.id===input.submissionId &&
+      state.reviewSubmission.digest===input.artifactDigest &&
+      state.reviewSubmission.sourceFingerprint===input.sourceFingerprint;
+    const reply=created=>({
+      version:1,handoffId:record.id,taskId:task.id,action:input.action,
+      submissionId:input.submissionId,artifactDigest:input.artifactDigest,
+      sourceFingerprint:input.sourceFingerprint,generation:state.generation,
+      created,state:input.action==="submit"?"review_submitted":"human_approved_review",
+      evidence:input.action==="submit"?"not_started":"human_review_attestation",
+    });
+    if (input.action==="submit" && same && !state.reviewApproved &&
+        state.active && Date.parse(state.expiresAt)>now &&
+        input.leaseId===state.leaseId) {
+      await reauthorize?.(); return reply(false);
+    }
+    if (input.action==="approve" && same && state.reviewApproved &&
+        state.reviewApprovedBy===actor.id) {
+      await reauthorize?.(); return reply(false);
+    }
+    if (state.reviewApproved || state.approved || state.testVerified ||
+        record.events?.length>=MAX_LEASE_EVENTS)
+      throw issue(state.reviewApproved || state.approved || state.testVerified ?
+        "HANDOFF_REVIEW_CONFLICT":"HANDOFF_LEASE_CAPACITY");
+    if (!state.active || Date.parse(state.expiresAt)<=now ||
+        state.at && now<Date.parse(state.at))
+      throw issue("HANDOFF_LEASE_STALE");
+    if (input.action==="submit") {
+      if (state.reviewSubmission || state.submission ||
+          input.leaseId!==state.leaseId)
+        throw issue("HANDOFF_REVIEW_CONFLICT");
+    } else if (!same || !state.reviewSubmission || state.submission)
+      throw issue("HANDOFF_REVIEW_CONFLICT");
+    const commitNow=nowMs();
+    if (commitNow>=Date.parse(state.expiresAt) ||
+        state.at && commitNow<Date.parse(state.at))
+      throw issue("HANDOFF_LEASE_STALE");
+    const at=new Date(commitNow).toISOString();
+    const payload={
+      sequence:(record.events?.length??0)+1,
+      previousHash:record.head??GENESIS,
+      kind:input.action==="submit"?"review_submit":"review_approve",
+      at,taskId:task.id,actorId:actor.id,
+      generation:state.generation,leaseId:state.leaseId,
+      expiresAt:state.expiresAt,submissionId:input.submissionId,
+      artifactDigest:input.artifactDigest,
+      sourceFingerprint:input.sourceFingerprint,
+      ...(input.action==="approve"?{attestation:"manual_inspection"}:{}),
+    };
+    const event={...payload,hash:hash(payload)};
+    const withoutHash={...record,events:[...(record.events??[]),event],
+      head:event.hash};
+    delete withoutHash.hash;
+    const next={...withoutHash,hash:hash(withoutHash)};
+    if (Buffer.byteLength(JSON.stringify(next))>MAX_RECORD_BYTES)
+      throw issue("HANDOFF_LEASE_CAPACITY");
+    await reauthorize?.();
+    if (nowMs()>=Date.parse(state.expiresAt))
+      throw issue("HANDOFF_LEASE_STALE");
+    // Re-read the upstream input and journal before the atomic commit.
+    await readManifest(dataDir,record.id);
+    await atomicWrite(filePath(dataDir,record.id),next);
+    const checked=await readManifest(dataDir,record.id);
+    const committed=verifyLeaseHistory(checked).get(task.id);
+    if (input.action==="submit" ?
+        !committed.reviewSubmission || committed.reviewApproved :
+        !committed.reviewApproved)
+      throw issue("HANDOFF_INTEGRITY");
+    return reply(true);
+  },waitMs);
+}
 function testVerificationRequest(input) {
   if (!exact(input,["handoffId","taskId","leaseId","submissionId",
       "jobId","jobDigest","jobHead","jobCount","step"]) ||
@@ -806,7 +994,7 @@ export async function verifyAgentTestTask({
         count:input.jobCount,step:input.step},
     });
     if (same) { await reauthorize?.(); return reply(false); }
-    if (state.approved || state.testVerified)
+    if (state.approved || state.testVerified || state.reviewApproved)
       throw issue("HANDOFF_TEST_CONFLICT");
     if (!state.active || Date.parse(state.expiresAt)<=now ||
         state.leaseId!==input.leaseId ||

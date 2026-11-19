@@ -13,7 +13,7 @@ const ACTOR = /^[a-z][a-z0-9_-]{1,31}$/;
 const ROLES = new Set(["project_manager", "tester", "test_architect",
   "devops_engineer", "code_reviewer", "fullstack_developer",
   "fix_developer", "release_manager", "security_engineer",
-  "checkpoint_approver"]);
+  "checkpoint_approver", "review_approver"]);
 const fault = code => Object.assign(new Error(code),{code});
 const exact = (obj, keys) => obj && typeof obj === "object" && !Array.isArray(obj) &&
   Object.keys(obj).sort().join(",") === [...keys].sort().join(",");
