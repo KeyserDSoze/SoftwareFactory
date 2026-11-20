@@ -21,7 +21,10 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
     expect(()=>serializeCasProject(wrongId)).toThrow(/non valido/);
     expect(()=>serializeCasProject(broken)).toThrow(/non valido/);
     expect(()=>serializeCasProject(tooLarge)).toThrow(/troppo grande/);
-    expect(()=>serializeCasProject({...p,circular})).toThrow(/non serializzabile/);
+    // Build a runtime fixture with a cyclic extra property without an
+    // excess-property literal passed directly to the FactoryProject type.
+    const cyclicProject = Object.assign({}, p, {circular});
+    expect(()=>serializeCasProject(cyclicProject)).toThrow(/non serializzabile/);
     await expect(compareAndSwapCasProject(tooLarge,null)).rejects.toThrow(/troppo grande/);
     await expect(compareAndSwapCasProject(p,{id:p.id,revision:0,raw:"secret"}))
       .rejects.toThrow(/Versione CAS/);

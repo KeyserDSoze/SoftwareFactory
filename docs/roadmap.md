@@ -1107,3 +1107,5 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Test unitari su validazione e indisponibilità IndexedDB; aggiunto E2E Chromium con due tab stesso origin: gare di insert e update con un vincitore, stale delete rifiutato, tombstone + recreate con revisione crescente e recovery dopo nuova tab. Log `FACTORY_INDEXEDDB_CAS_E2E_PASS` richiesto.
 - [ ] Confermare Factory CI, Pages e Installer sullo stesso SHA di main, verificando il marker Chromium. Poi chiudere **solo #138**.
 - [ ] **Da fare in #92/#91:** migrazione user-controlled di progetti legacy, cutover dello store autorevole (rimozione del percorso sincrono non transazionale), integrazione di tutte le chiamate UI/app a salvataggio asincrono e prove su browser non cooperativi. Un DB per origin/profilo non equivale a CAS cross-device o sincronizzazione cloud reale.
+
+- [x] Prima Factory CI #44819199533 fermata al typecheck TS2353: test di input ciclico con proprietà extra su literal FactoryProject; fixture corretta con `Object.assign` per conservare la stessa condizione runtime senza forzare il type. Nessun cambio al CAS transazionale. Ripetere CI completa.
