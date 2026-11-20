@@ -8,7 +8,9 @@ import {constants} from "node:fs";
 import {open} from "node:fs/promises";
 import {fileURLToPath} from "node:url";
 import path from "node:path";
-import {isIP} from "node:net";
+import {validatePublicProviderEndpoint as validateAiProviderEndpoint,
+  publicProviderHttpsPost} from "./provider-egress.mjs";
+export {validateAiProviderEndpoint};
 import {canonical, publicKeyFingerprint, readAttestationFile,
   readBoundedJson} from "./attest.mjs";
 import {validateRequest} from "./common.mjs";
@@ -63,20 +65,6 @@ export function validateReviewWorkspace(workspace) {
       sourceDigest,files:checked.request.files,
       workspaceSha256:sha256(canonical(workspace)),
     };
-  }catch {throw fail();}
-}
-export function validateAiProviderEndpoint(value) {
-  try {
-    const url=new URL(value);
-    if(url.protocol!=="https:" || url.username || url.password ||
-        url.search || url.hash || url.port && url.port!=="443" ||
-        !url.pathname.endsWith("/chat/completions") ||
-        url.pathname.includes("//") ||
-        !/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(url.hostname) ||
-        isIP(url.hostname) ||
-        /(?:^|\.)localhost$|(?:^|\.)local$|(?:^|\.)internal$/i.test(url.hostname))
-      throw fail();
-    return url.href;
   }catch {throw fail();}
 }
 export function buildReviewRequest(workspace,model) {
@@ -215,7 +203,7 @@ export function verifyAiReviewReceipt(workspace,receipt,trustedKeySource) {
 }
 export async function executeAiReview({
   workspace,model,providerUrl,apiKey,privateKey,consent,
-  fetchImpl=fetch,
+  fetchImpl,
 }) {
   try {
     if(consent!==CONSENT)throw fail();
@@ -223,11 +211,16 @@ export async function executeAiReview({
     const key=validateApiKey(apiKey);
     const signedBy=signerKey(privateKey);
     const {requestBody,checked}=buildReviewRequest(workspace,model);
-    const response=await fetchImpl(endpoint,{
+    // In production and in the CLI never use default fetch: it may resolve
+    // the DNS hostname again to loopback/private addresses (DNS rebinding).
+    // The fetch injection is reserved for networkless tests.
+    const response=fetchImpl ? await fetchImpl(endpoint,{
       method:"POST",redirect:"manual",
       headers:{"Authorization":"Bearer "+key,
         "Content-Type":"application/json","Accept":"application/json"},
       body:requestBody,signal:AbortSignal.timeout(30_000),
+    }) : await publicProviderHttpsPost({
+      endpoint,requestBody,apiKey:key,
     });
     const raw=await readLimitedResponse(response);
     const envelope=JSON.parse(raw);
