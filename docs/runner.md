@@ -1344,3 +1344,34 @@ Il trasporto off-host chiude ora esplicitamente la risposta HTTPS con `IncomingM
 ## Esito completo del Code Reviewer OpenAI-compatible (#127, ADR 0081)
 
 L'esecutore off-host rifiuta un output AI anche se contiene un documento JSON valido quando la risposta HTTP del modello non rappresenta una singola completazione normale: serve **una sola** `choice`, `message.role="assistant"`, `finish_reason="stop"`, senza `refusal` o tool/function-call attivi. `length`, `content_filter`, `tool_calls`, esiti mancanti e risposte multiple non generano alcuna receipt firmata e non scatenano retry potenzialmente fatturabili. Il controllo riguarda solo le **affermazioni del server HTTPS scelto dall'operatore**; non verifica l'identità del provider, la sincerità dell'endpoint, l'esecuzione effettiva del modello o il billing. Schema receipt v1 e verifica delle osservazioni precedenti restano invariati; approvazione umana indipendente obbligatoria. Test Node di trasporto fittizio, nessuna richiesta reale. #113/#109/#105 ancora aperte.
+
+
+### Bridge offline ricevuta AI → documento custodito (#128)
+
+La CLI `src/runner/ai-review-execute.mjs` dispone ora di una fase **offline** tra la receipt operatore e i gate manuali già esistenti. Il comando `prepare-stage` legge la snapshot pre-review, la receipt Ed25519 e una **chiave pubblica pinned indipendentemente**, rifiuta mismatch, chiede il `lease-id` corrente e un `submission-id` UUID v4 scelto dall'operatore, poi salva con `O_EXCL|O_NOFOLLOW` 0600 soltanto i sei campi del body di `POST /v1/agent-review-artifacts`. Non effettua HTTP, non invia file al provider e non crea task. Il JSON è bounded (massimo 8192 byte comprensivi di newline). L'operatore invia il file con le proprie credenziali actor-scoped **solo dopo aver verificato che la lease è valida**; quindi esegue la separata `review_submit` indicando `artifactDigest` restituito dalla API. Nessuna mutazione automatica, non confondere `prepare-stage` con l'avvenuto deposito.
+
+```bash
+node src/runner/ai-review-execute.mjs prepare-stage \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --public-key=review-trusted.pub \
+  --lease-id=YOUR_ACTIVE_REVIEW_LEASE_UUID \
+  --submission-id=YOUR_NEW_SUBMISSION_UUID \
+  --out=review-stage.json
+
+node src/runner/ai-review-execute.mjs verify-stage \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --public-key=review-trusted.pub --stage=review-stage.json
+```
+
+Dopo aver inviato manualmente il body `review-stage.json` con la credenziale del Reviewer al POST esistente, e aver eseguito `review_submit` manuale, il Reviewer/approvatore indipendente autorizzato può salvare la risposta della GET `/v1/agent-review-artifacts/{submissionId}` in un file privato `stored-review.json` (non inserire Bearer nei comandi), poi controllare che il digest `stored_review_document_v1` ricostruito, `owner` e `tenantId` attesi, generation, source e documento **coincidano** con la receipt originale:
+
+```bash
+node src/runner/ai-review-execute.mjs verify-stored \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --public-key=review-trusted.pub --stage=review-stage.json \
+  --stored=stored-review.json \
+  --expected-owner=YOUR_REVIEWER_ACTOR_ID \
+  --expected-tenant=YOUR_TENANT_ID
+```
+
+Per handoff senza tenant usare letteralmente `--expected-tenant=-`, mentre `--expected-owner` deve essere l'ID actor del reviewer già noto dall'handoff. La CLI non recupera sorgenti o report dall'API, non conferma che il server abbia realmente scritto i byte, non verifica identità del provider e non approva nulla; legge soltanto file forniti dall'operatore e ricalcola i binding verificabili offline. Il server deve rimanere responsabile di actor ACL, review lease, journal e approval indipendente. La firma Ed25519 è **dell'operatore**, non del vendor, e un report GET falsificato da un server ostile non diventa attestazione off-host con il solo hash locale. Nessun costo/token certificato. ADR 0082; #113/#109/#105 aperte.

@@ -14,10 +14,14 @@ export {validateAiProviderEndpoint};
 import {canonical, publicKeyFingerprint, readAttestationFile,
   readBoundedJson} from "./attest.mjs";
 import {validateRequest} from "./common.mjs";
-import {validateReviewDocument} from "./review-artifacts.mjs";
+import {REVIEW_ARTIFACT_MODE, validateReviewArtifactStage,
+  makeReviewArtifactRecord, validateReviewDocument} from "./review-artifacts.mjs";
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const TASK=/^[a-z][a-z0-9-]{1,31}$/;
+const ACTOR=/^[a-z][a-z0-9_-]{1,31}$/;
+const TENANT=/^[a-z][a-z0-9-]{2,31}$/;
+const MAX_STAGE_BYTES=8192;
 const SHA=/^[a-f0-9]{64}$/;
 const SIG=/^[A-Za-z0-9_-]{86}$/;
 const MODEL=/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
@@ -273,6 +277,87 @@ export async function executeAiReview({
     return receipt;
   }catch {throw fail();}
 }
+
+/** Offline-only custody bridge: exact actor-stage payload from a receipt
+ * verified using an independently pinned Ed25519 public key. The receipt
+ * remains an OPERATOR statement, not a provider-authenticated proof.
+ */
+export function prepareAiReviewStage(workspace,receipt,trustedKeySource,{
+  leaseId,submissionId,
+}) {
+  try {
+    const result=verifyAiReviewReceipt(workspace,receipt,trustedKeySource);
+    if(!UUID.test(leaseId) || !UUID.test(submissionId))throw fail();
+    const stage=validateReviewArtifactStage({
+      handoffId:workspace.handoffId,taskId:workspace.taskId,
+      leaseId,submissionId,sourceFingerprint:workspace.sourceFingerprint,
+      document:receipt.statement.document,
+    });
+    if(Buffer.byteLength(JSON.stringify(stage),"utf8")+1>MAX_STAGE_BYTES ||
+        result.sourceDigest!==workspace.sourceDigest)
+      throw fail();
+    return stage;
+  }catch {throw fail();}
+}
+/** Verify the operator did not substitute a report on its way to staging.
+ * This checks the local request; it NEVER calls the runner or submits it.
+ */
+export function verifyAiReviewStage(workspace,receipt,trustedKeySource,stage) {
+  try {
+    validateReviewArtifactStage(stage);
+    const expected=prepareAiReviewStage(workspace,receipt,trustedKeySource,{
+      leaseId:stage.leaseId,submissionId:stage.submissionId,
+    });
+    if(canonical(stage)!==canonical(expected))throw fail();
+    return {verified:true,
+      assurance:"operator_signed_review_document_unverified",
+      handoffId:stage.handoffId,taskId:stage.taskId,
+      submissionId:stage.submissionId,
+      sourceFingerprint:stage.sourceFingerprint};
+  }catch {throw fail();}
+}
+/** Compare a GET /v1/agent-review-artifacts/:submissionId against the
+ * signed operator observation and the intended staged submission.
+ * The server response is still not an independent execution attestation.
+ */
+export function verifyAiReviewStoredArtifact(
+  workspace,receipt,trustedKeySource,stage,stored,{owner,tenantId},
+) {
+  try {
+    verifyAiReviewStage(workspace,receipt,trustedKeySource,stage);
+    if(!ACTOR.test(owner) ||
+        !(tenantId===null || typeof tenantId==="string" &&
+          TENANT.test(tenantId)) ||
+        !exact(stored,["version","handoffId","taskId","submissionId",
+          "tenantId","owner","generation","artifactDigest",
+          "sourceFingerprint","artifactMode","document"]) ||
+        stored.version!==1 || stored.artifactMode!==REVIEW_ARTIFACT_MODE ||
+        stored.handoffId!==stage.handoffId ||
+        stored.taskId!==stage.taskId ||
+        stored.submissionId!==stage.submissionId ||
+        stored.sourceFingerprint!==stage.sourceFingerprint ||
+        stored.generation!==workspace.generation ||
+        stored.owner!==owner || stored.tenantId!==tenantId ||
+        canonical(stored.document)!==canonical(stage.document))
+      throw fail();
+    const record=makeReviewArtifactRecord({
+      handoffId:stored.handoffId,taskId:stored.taskId,
+      submissionId:stored.submissionId,tenantId:stored.tenantId,
+      owner:stored.owner,generation:stored.generation,
+      sourceFingerprint:stored.sourceFingerprint,
+      document:stored.document,
+    });
+    if(stored.artifactDigest!==record.digest)throw fail();
+    return {verified:true,
+      assurance:"operator_signed_review_and_server_record_compared_unverified",
+      handoffId:stage.handoffId,taskId:stage.taskId,
+      submissionId:stage.submissionId,
+      sourceFingerprint:stage.sourceFingerprint,
+      artifactDigest:record.digest,
+      signerKeySha256:receipt.signerKeySha256};
+  }catch {throw fail();}
+}
+
 /** File-safe CLI: reserve the output BEFORE any potentially billable network
  * call to prevent accidental same-path concurrent double execution. A crash
  * leaves an incomplete file that deliberately requires operator intervention.
@@ -282,7 +367,12 @@ export async function main(argv=process.argv.slice(2)) {
   const names=mode==="execute" ?
     ["workspace","provider-url","model","api-key-file","private-key",
       "out","consent"] :
-    mode==="verify" ? ["workspace","receipt","public-key"] : null;
+    mode==="verify" ? ["workspace","receipt","public-key"] :
+    mode==="prepare-stage" ? ["workspace","receipt","public-key",
+      "lease-id","submission-id","out"] :
+    mode==="verify-stage" ? ["workspace","receipt","public-key","stage"] :
+    mode==="verify-stored" ? ["workspace","receipt","public-key",
+      "stage","stored","expected-owner","expected-tenant"] : null;
   if(!names || options.length!==names.length)throw fail();
   const flags=Object.create(null);
   for(const option of options){
@@ -294,12 +384,42 @@ export async function main(argv=process.argv.slice(2)) {
   if(names.some(name=>!flags[name]))throw fail();
   const workspace=await readBoundedJson(flags.workspace,"evidence");
   validateReviewWorkspace(workspace);
-  if(mode==="verify"){
+  if(["verify","prepare-stage","verify-stage","verify-stored"].includes(mode)){
     const receipt=await readBoundedJson(flags.receipt,"receipt");
     const pub=(await readAttestationFile(flags["public-key"],"public-key"))
       .toString("utf8");
-    const result=verifyAiReviewReceipt(workspace,receipt,pub);
-    process.stdout.write("AI_REVIEW_OPERATOR_RECEIPT_VERIFIED\n");
+    if(mode==="verify"){
+      const result=verifyAiReviewReceipt(workspace,receipt,pub);
+      process.stdout.write("AI_REVIEW_OPERATOR_RECEIPT_VERIFIED\n");
+      return result;
+    }
+    if(mode==="prepare-stage"){
+      const stage=prepareAiReviewStage(workspace,receipt,pub,{
+        leaseId:flags["lease-id"],submissionId:flags["submission-id"],
+      });
+      if(typeof constants.O_NOFOLLOW!=="number")throw fail();
+      let out;
+      try {
+        out=await open(flags.out,constants.O_WRONLY|constants.O_CREAT|
+          constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+        await out.writeFile(JSON.stringify(stage)+"\n","utf8");
+        await out.sync();
+      }catch {throw fail();}
+      finally {await out?.close().catch(()=>{});}
+      process.stdout.write("AI_REVIEW_STAGE_REQUEST_WRITTEN\n");
+      return {created:true,submissionId:stage.submissionId};
+    }
+    const stage=await readBoundedJson(flags.stage,"receipt");
+    if(mode==="verify-stage"){
+      const result=verifyAiReviewStage(workspace,receipt,pub,stage);
+      process.stdout.write("AI_REVIEW_STAGE_REQUEST_VERIFIED\n");
+      return result;
+    }
+    const stored=await readBoundedJson(flags.stored,"receipt");
+    const result=verifyAiReviewStoredArtifact(workspace,receipt,pub,
+      stage,stored,{owner:flags["expected-owner"],
+        tenantId:flags["expected-tenant"]==="-"?null:flags["expected-tenant"]});
+    process.stdout.write("AI_REVIEW_STORED_DOCUMENT_COMPARED\n");
     return result;
   }
   if(flags.consent!==CONSENT)throw fail();

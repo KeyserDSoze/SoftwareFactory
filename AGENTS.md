@@ -990,3 +990,9 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 ## Risposte complete della AI review (#127)
 
 - `ai-review-execute.mjs` deve firmare solo una choice OpenAI-compatible con `finish_reason:"stop"`, `message.role:"assistant"`, `content` JSON valido e nessun rifiuto/tool-call attivo. JSON sintatticamente valido con `finish_reason:"length"` o `"content_filter"` non è una review conclusa. Controllare anche cardinalità della choice, ruoli, refusal, tool_calls e function_call; errore pubblico generico, zero retry automatici. Non riscrivere ricevute v1 precedenti né trasformare il flag del provider in prova crittografica. ADR 0081, issue #127; #113/#109/#105 restano aperte.
+
+
+## Bridge offline del rapporto AI Reviewer (#128)
+
+- `prepare-stage` deve ricalcolare signature Ed25519 della receipt da una chiave pubblica pinned, ri-verificare file/bytes/digest di workspace e generare solo i sei campi ammessi dal `POST /v1/agent-review-artifacts`, con lease UUID e submission UUID espliciti: output O_EXCL/O_NOFOLLOW 0600, max 8192 byte, nessuna rete.
+- `verify-stage` confronta il body staged con la receipt verificata; `verify-stored` ricalcola il digest `stored_review_document_v1` della GET actor-only post-submit e confronta documento, owner/tenant attesi, generation/source/submission, senza invocare `review_submit` o `approve`. Mai considerare questa comparazione come provider attestation, CI non contatta alcuna AI. ADR 0082, issue #128; #113/#109/#105 restano aperte.

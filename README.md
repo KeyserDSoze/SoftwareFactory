@@ -800,3 +800,8 @@ La CLI con consenso `ai-review-execute` ora risolve il nome del provider **prima
 ### Gate di completamento della risposta AI Reviewer (#127)
 
 Prima di firmare l'osservazione HTTP, la CLI `ai-review-execute` richiede una sola risposta `choices[0]` da un messaggio `assistant` e `finish_reason: "stop"`, senza rifiuto o chiamata a tool. Anche un JSON valido con `finish_reason:"length"` o `"content_filter"` è rifiutato senza retry. La ricevuta precedente mantiene lo stesso formato ed è solo un'osservazione firmata dall'operatore, non una garanzia del provider o un'approvazione della review. [ADR 0081](adr/0081-ai-review-completion-envelope-gate.md).
+
+
+### Collegamento verificabile del report AI al deposito Reviewer (#128)
+
+`ai-review-execute.mjs` può ora produrre offline `review-stage.json` direttamente dalla ricevuta Ed25519 operatore dopo verifica con chiave pubblica pinned (`prepare-stage`, `verify-stage`). Quando il Reviewer deposita il JSON attraverso la propria API actor-scoped e un approvatore autorizzato rilegge il rapporto conservato, `verify-stored` confronta identità del task, generation, documento, source fingerprint e digest del record salvato con la ricevuta e gli owner/tenant attesi. Il deposito e la revisione restano **azioni manuali**, senza auto-submit né auto-approval; non c'è una attestazione del provider o del billing. Istruzioni in [docs/runner.md](docs/runner.md), ADR 0082.

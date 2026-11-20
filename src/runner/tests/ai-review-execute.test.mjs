@@ -5,10 +5,11 @@ import {chmod, link, mkdtemp, readFile, rm, stat, symlink, writeFile} from "node
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {validateRequest} from "../common.mjs";
-import {makeReviewArtifactRecord} from "../review-artifacts.mjs";
+import {makeReviewArtifactRecord, REVIEW_ARTIFACT_MODE} from "../review-artifacts.mjs";
 import {buildReviewRequest, executeAiReview, main,
-  validateAiProviderEndpoint, validateReviewWorkspace,
-  verifyAiReviewReceipt} from "../ai-review-execute.mjs";
+  prepareAiReviewStage, validateAiProviderEndpoint, validateReviewWorkspace,
+  verifyAiReviewReceipt,verifyAiReviewStage,
+  verifyAiReviewStoredArtifact} from "../ai-review-execute.mjs";
 
 const endpoint="https://reviews.example.com/v1/chat/completions";
 const model="review-model-1";
@@ -297,4 +298,149 @@ test("CLI read-only verification honors protected file descriptors and no overwr
     assert.equal((await stat(receiptFile)).mode & 0o077,0);
     assert.equal((await readFile(receiptFile,"utf8")).includes(apiKey),false);
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+
+test("signed operator receipt creates exact actor-scoped staged document and matches stored readback",async()=>{
+  const ws=workspace(),{privateKey,publicKey}=pair();
+  const receipt=await execute(ws,{privateKey});
+  const leaseId=randomUUID(),submissionId=randomUUID();
+  const stage=prepareAiReviewStage(ws,receipt,publicKey,{leaseId,submissionId});
+  assert.deepEqual(Object.keys(stage).sort(),[
+    "handoffId","taskId","leaseId","submissionId","sourceFingerprint",
+    "document"].sort());
+  assert.equal(stage.document,receipt.statement.document);
+  assert.equal(stage.submissionId,submissionId);
+  assert.ok(Buffer.byteLength(JSON.stringify(stage))+1<=8192);
+  assert.equal(verifyAiReviewStage(ws,receipt,publicKey,stage).verified,true);
+  const owner="reviewer-one",tenantId="tenant-one";
+  const record=makeReviewArtifactRecord({
+    handoffId:ws.handoffId,taskId:ws.taskId,submissionId,tenantId,owner,
+    generation:ws.generation,sourceFingerprint:ws.sourceFingerprint,
+    document:stage.document,
+  });
+  const stored={version:1,handoffId:ws.handoffId,taskId:ws.taskId,
+    submissionId,tenantId,owner,generation:ws.generation,
+    sourceFingerprint:ws.sourceFingerprint,
+    artifactDigest:record.digest,artifactMode:REVIEW_ARTIFACT_MODE,
+    document:record.document};
+  const opts={owner,tenantId};
+  const verified=verifyAiReviewStoredArtifact(ws,receipt,publicKey,stage,stored,opts);
+  assert.equal(verified.verified,true);
+  assert.equal(verified.artifactDigest,record.digest);
+  assert.equal(Object.hasOwn(verified,"passed"),false);
+  assert.equal(Object.hasOwn(verified,"cost"),false);
+  assert.throws(()=>prepareAiReviewStage(ws,receipt,pair().publicKey,
+    {leaseId,submissionId}),{code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>prepareAiReviewStage(ws,receipt,publicKey,
+    {leaseId:"bad",submissionId}),{code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>prepareAiReviewStage(ws,receipt,publicKey,
+    {leaseId,submissionId:"bad"}),{code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>prepareAiReviewStage(workspace(),receipt,publicKey,
+    {leaseId,submissionId}),{code:"AI_REVIEW_INVALID"});
+  const badReceipt=mutate(receipt,r=>{
+    r.statement.document.recommendation="approve";
+  });
+  assert.throws(()=>prepareAiReviewStage(ws,badReceipt,publicKey,
+    {leaseId,submissionId}),{code:"AI_REVIEW_INVALID"});
+  for(const altered of [
+    mutate(stage,x=>{x.document.recommendation="approve";}),
+    mutate(stage,x=>{x.document.summary="Tampered summary";}),
+    mutate(stage,x=>{x.sourceFingerprint="e".repeat(64);}),
+    mutate(stage,x=>{x.submissionId=randomUUID();}),
+    mutate(stage,x=>{x.taskId="different-review";}),
+    mutate(stage,x=>{x.leaseId=randomUUID();}),
+    mutate(stage,x=>{x.extra="passed";}),
+  ]) {
+    // A different lease is a different legitimate request, so only its
+    // chosen lease holder can know that ID; check remaining identity bindings.
+    if(altered.leaseId!==stage.leaseId && 
+        altered.submissionId===stage.submissionId &&
+        altered.document.summary===stage.document.summary)continue;
+    assert.throws(()=>verifyAiReviewStage(ws,receipt,publicKey,altered),
+      {code:"AI_REVIEW_INVALID"});
+  }
+  for(const altered of [
+    mutate(stored,x=>{x.document.summary="Swapped document";}),
+    mutate(stored,x=>{x.document.recommendation="approve";}),
+    mutate(stored,x=>{x.artifactDigest="a".repeat(64);}),
+    mutate(stored,x=>{x.submissionId=randomUUID();}),
+    mutate(stored,x=>{x.generation++;}),
+    mutate(stored,x=>{x.sourceFingerprint="b".repeat(64);}),
+    mutate(stored,x=>{x.artifactMode="legacy_external_digest";}),
+    mutate(stored,x=>{x.owner="other-reviewer";}),
+    mutate(stored,x=>{x.tenantId="different-tenant";}),
+    mutate(stored,x=>{x.passed=true;}),
+  ])assert.throws(()=>verifyAiReviewStoredArtifact(
+    ws,receipt,publicKey,stage,altered,opts),{code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>verifyAiReviewStoredArtifact(
+    ws,receipt,publicKey,stage,stored,{owner:"other",tenantId}),
+  {code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>verifyAiReviewStoredArtifact(
+    ws,receipt,publicKey,stage,stored,{owner,tenantId:"wrong-tenant"}),
+  {code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>verifyAiReviewStoredArtifact(
+    ws,receipt,pair().publicKey,stage,stored,opts),
+  {code:"AI_REVIEW_INVALID"});
+  const noTenantRecord=makeReviewArtifactRecord({...record,tenantId:null});
+  const unscoped={...stored,tenantId:null,artifactDigest:noTenantRecord.digest};
+  assert.equal(verifyAiReviewStoredArtifact(ws,receipt,publicKey,
+    stage,unscoped,{owner,tenantId:null}).verified,true);
+});
+
+test("offline stage CLI is write-once, side-effect free and verifies server readback",async()=>{
+  const dir=await mkdtemp(path.join(tmpdir(),"sf-ai-review-stage-"));
+  const ws=workspace(),{privateKey,publicKey}=pair();
+  const receipt=await execute(ws,{privateKey});
+  const workspacePath=path.join(dir,"workspace.json");
+  const receiptPath=path.join(dir,"receipt.json");
+  const keyPath=path.join(dir,"trusted.pem");
+  const stagePath=path.join(dir,"stage.json");
+  const storedPath=path.join(dir,"stored.json");
+  const leaseId=randomUUID(),submissionId=randomUUID();
+  try {
+    await writeFile(workspacePath,JSON.stringify(ws),{mode:0o600});
+    await writeFile(receiptPath,JSON.stringify(receipt),{mode:0o600});
+    await writeFile(keyPath,publicKey.export({type:"spki",format:"pem"}),
+      {mode:0o644});
+    const shared=["--workspace="+workspacePath,
+      "--receipt="+receiptPath,"--public-key="+keyPath];
+    const createArgs=["prepare-stage",...shared,
+      "--lease-id="+leaseId,"--submission-id="+submissionId,
+      "--out="+stagePath];
+    const created=await main(createArgs);
+    assert.equal(created.submissionId,submissionId);
+    assert.equal((await stat(stagePath)).mode&0o077,0);
+    const contents=await readFile(stagePath,"utf8");
+    assert.equal(contents.includes(sourceCode),false);
+    assert.equal(contents.includes(apiKey),false);
+    assert.ok(Buffer.byteLength(contents)<=8192);
+    assert.equal((await main(["verify-stage",...shared,
+      "--stage="+stagePath])).verified,true);
+    await assert.rejects(main(createArgs),{code:"AI_REVIEW_INVALID"});
+    const markerPath=path.join(dir,"marker.json");
+    await symlink(stagePath,markerPath);
+    await assert.rejects(main(createArgs.map(x=>x.startsWith("--out=")?
+      "--out="+markerPath:x)),{code:"AI_REVIEW_INVALID"});
+    const owner="reviewer-one";
+    const tenantId="tenant-one";
+    const stage=JSON.parse(contents);
+    const storedRecord=makeReviewArtifactRecord({
+      handoffId:ws.handoffId,taskId:ws.taskId,submissionId,tenantId,owner,
+      generation:ws.generation,sourceFingerprint:ws.sourceFingerprint,
+      document:stage.document,
+    });
+    const stored={version:1,handoffId:ws.handoffId,taskId:ws.taskId,
+      submissionId,tenantId,owner,generation:ws.generation,
+      sourceFingerprint:ws.sourceFingerprint,artifactMode:REVIEW_ARTIFACT_MODE,
+      artifactDigest:storedRecord.digest,document:stage.document};
+    await writeFile(storedPath,JSON.stringify(stored),{mode:0o600});
+    const checkArgs=["verify-stored",...shared,"--stage="+stagePath,
+      "--stored="+storedPath,"--expected-owner="+owner,
+      "--expected-tenant="+tenantId];
+    assert.equal((await main(checkArgs)).verified,true);
+    await writeFile(storedPath,JSON.stringify({...stored,
+      document:{...stored.document,recommendation:"approve"}}),{mode:0o600});
+    await assert.rejects(main(checkArgs),{code:"AI_REVIEW_INVALID"});
+  }finally {await rm(dir,{recursive:true,force:true});}
 });

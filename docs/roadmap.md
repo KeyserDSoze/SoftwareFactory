@@ -1014,3 +1014,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Nel client off-host, accettare solo una scelta `assistant` con `finish_reason:"stop"`; il JSON in `content` non deve bastare per una risposta che dichiara truncation/content filtering/rifiuto/tool call. Nessuna firma o replay automatico per risposta invalida.
 - [x] Regression Node con HTTP mockato su finish reason, ruolo, refusal, tool calls e cardinalità, senza chiamate live; preservare v1 delle ricevute storiche e gate manuale.
 - [ ] Verificare Factory CI/Pages/Installer sul commit finale di `main`, registrare risultato nella #127 prima della chiusura. ADR 0081. #113/#109/#105 rimangono aperte.
+
+
+## Bridge offline di receipt → stage → GET custodita (#128, 20/11/2026)
+
+- [x] `prepare-stage` verifica receipt operatore Ed25519 rispetto alla snapshot di codice originale e crea payload actor-stage minimo, bounded e write-once 0600 con `leaseId` e `submissionId` UUIDv4 selezionati manualmente.
+- [x] `verify-stage` controlla che il payload mantenga esattamente l'osservazione firmata; `verify-stored` confronta il record della GET post-submit contro il documento firmato e ricostruisce il digest `stored_review_document_v1` vincolato a source, generation, owner/tenant e submission. Nessuna rete, auto-submit, auto-approve o claim di provider attestation.
+- [ ] Registrare Factory CI/Pages/Installer sullo stesso SHA finale prima della chiusura #128. ADR 0082. #113/#109/#105 restano aperte.

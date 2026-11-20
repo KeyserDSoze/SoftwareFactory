@@ -606,3 +606,8 @@ Il processo Code Reviewer off-host #123 non usa più `fetch` per le sue chiamate
 ### Gate di completamento nel trasporto off-host del Code Reviewer (#127)
 
 Prima di emettere la receipt Ed25519 dell'operatore, `ai-review-execute.mjs` verifica la struttura minima dell'envelope `/chat/completions`: `choices` deve contenere esattamente una entry con `finish_reason:"stop"`, il messaggio deve essere `assistant`, `content` deve contenere un `ReviewDocument` strutturato validato e non devono esserci `refusal`/tool calls. Rifiutare in particolare un JSON sintatticamente valido ma dichiarato troncato/filtrato. Il server remoto può sempre mentire sui metadata: questo è un controllo di coerenza, non una provider attestation, un consuntivo economico o una decisione di approvazione. Nessun cambio al v1 dei digest/receipt. ADR 0081.
+
+
+### Collegamento offline receipt operatore / stage request / rapporto custodito (#128)
+
+Una receipt Ed25519 di osservazione HTTPS già verificata su un workspace Tester immutabile può produrre, da host dell'operatore, una richiesta minima `POST /v1/agent-review-artifacts` tramite `prepare-stage`; UUID della lease e della submission sono espliciti, output `O_EXCL` 0600 e nessuna rete. Dopo il deposito **manuale** nella lease reviewer live, il comando `verify-stored` confronta file del GET actor-only post-submit con la richiesta staged e la receipt firmata, ricalcolando `stored_review_document_v1` da tenant/owner/generation/identità/documento. La verifica del digest è locale, non rende attendibile un server ostile né dimostra esecuzione AI/approvazione. Le policy del DAG non cambiano, i signer non ricevono permessi runner, e i contatori provider restano unverified. ADR 0082.
