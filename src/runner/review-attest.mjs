@@ -3,7 +3,7 @@
  * in the runner. Signing is an operator action, not proof of human reading,
  * executed AI, original runner honesty or provider billing.
  */
-import {createHash, createPrivateKey, createPublicKey, sign, verify} from "node:crypto";
+import {KeyObject, createHash, createPrivateKey, createPublicKey, sign, verify} from "node:crypto";
 import {writeFile} from "node:fs/promises";
 import {fileURLToPath} from "node:url";
 import path from "node:path";
@@ -23,7 +23,8 @@ const fail = () => Object.assign(new Error("Offline review inspection verificati
   {code:"REVIEW_INSPECTION_INVALID"});
 const hash = text => createHash("sha256").update(text).digest("hex");
 function ed25519Public(value) {
-  const key=createPublicKey(value);
+  const key=value instanceof KeyObject && value.type==="public" ?
+    value : createPublicKey(value);
   if(key.type!=="public" || key.asymmetricKeyType!=="ed25519")throw fail();
   return key;
 }
@@ -77,7 +78,9 @@ export function reviewInspectionStatement(bundle) {
 export function signReviewInspectionBundle(bundle,privateKeySource) {
   try {
     const statement=reviewInspectionStatement(bundle);
-    const secret=createPrivateKey(privateKeySource);
+    const secret=privateKeySource instanceof KeyObject &&
+      privateKeySource.type==="private" ?
+      privateKeySource : createPrivateKey(privateKeySource);
     if(secret.type!=="private" || secret.asymmetricKeyType!=="ed25519")
       throw fail();
     const pub=ed25519Public(secret);
