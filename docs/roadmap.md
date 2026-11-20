@@ -941,3 +941,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Evento `review_reject` hash-chained e idempotente, non-terminal completion e no unlock downstream, stato `review_changes_requested`, audit del rifiuto conservato e nuova claim soltanto dentro il budget di `maxAttempts` e nuova generazione.
 - [x] Test Node con due API, concorrenza, revoca, ruoli e tenant, report manomesso, rifiuto vecchio e cap tentativi, con documentazione e ADR 0071.
 - [ ] Prova off-host dell'ispezione reale, esecuzione autonoma AI e accounting provider restano nelle #113/#109/#105; nessun falso `passed` e nessun auto-push.
+
+
+## Ispezione della snapshot effettivamente testata (#119)
+
+- [x] Endpoint read-only actor-only di sorgenti Tester validati, disponibile solo a Reviewer owner o approvatore indipendente same-tenant dopo submit di rapporto staged; validazione ripetuta dei file originari, journal e source fingerprint, no cache/secret/leaseId in risposta.
+- [x] Test Node 2 API su fedeltà file/digest, accesso pre-submit, ACL ruolo/tenant, token revocati, symlink/tamper e dopo approvazione.
+- [ ] Il fatto che un file venga restituito all'approvatore **non dimostra** che sia stato letto o che una AI abbia svolto il Code Review; per prove off-host e contabilizzazione provider restano #113/#109/#105.

@@ -1204,3 +1204,19 @@ Il backend esige una submission corrente già presentata, report **custodito #11
 La GET espone `review_changes_requested`, `reviewRejection:{submissionId,artifactDigest,sourceFingerprint,rejectedBy,decision,artifactMode}` e `reviewRejectionCount` senza esporre leaseId, sorgenti o rapporti in chiaro. Il nuovo stato è terminale **per la lease corrente**, NON è approvazione o completion, e i figli restano bloccati. Il Reviewer può reclamare una nuova lease **solo se rimangono tentativi `maxAttempts`**; deve risolvere i finding e depositare un **nuovo** documento nel nuovo fencing generation. Il record dell'ultimo rifiuto e il suo contatore restano visibili anche dopo la nuova claim. Il runner continua a verificare il documento del rifiuto precedente a ogni GET/claim: retention o manomissione del vecchio report impediscono di considerare valido lo storico.
 
 La decisione viene attestata tramite capability Bearer, non certifica la lettura effettiva di ogni file né l'esecuzione di un LLM; `executions` e contabilizzazione provider restano invariati. Nessun auto-apply del codice, deploy automatico o firma off-host.
+
+
+## Consultazione sorgenti testati per Code Reviewer/approvatore (#119)
+
+L'attestazione manuale di review #115/#116 deve poter esaminare **lo stesso file set che è stato consegnato al Tester**. Dopo la `review_submit` di un rapporto custodito con `artifactMode:stored_review_document_v1`, il Reviewer owner e il `review_approver` con identità diversa (stessa tenant, token actor dedicato) possono fare:
+
+```
+GET /v1/agent-review-sources/<submissionId>
+Authorization: Bearer <actor-key>
+```
+
+La GET risponde con `{version,handoffId,taskId,submissionId,sourceFingerprint,sourceDigest,fileCount,bytes,files}`: `files` contiene il mapping canonico dei percorsi allowlisted e contenuti testuali che facevano parte di un job Tester **direttamente dipendente** dalla review. Nessun sorgente è aggiunto al manifesto DAG o al rapporto Reviewer; niente job ID, leaseId o chiavi nell'output. Lo stesso `sourceDigest` è quello di `reviewSource.digest` e `sourceFingerprint` coincide con `reviewSource.fingerprint` della board. Etichette o step differenti dei job non alterano il digest file-only. Se più Tester upstream hanno file set diversi, la review resta bloccata: nessun bundle composito inventato.
+
+La lettura avviene solo dopo `review_submit` verificata: prima, `404`; Bearer root/tenant, altri ruoli, actor non proprietari e approver di tenant diversa non possono accedere. Il server re-verifica gli eventi SHA-chain, il report/journal tecnico, l'input originale da FD protetto con `O_NOFOLLOW` e stat stabile, il digest pieno del job e quello file-only, e controlla nuovamente la credenziale actor prima della risposta. Rimozione o modifica di `input.json` => fail closed senza output parziale. Anche dopo l'approvazione manuale, l'accesso resta vincolato al record corrente. Gli header sono `Cache-Control: no-store` e `X-Content-Type-Options: nosniff`.
+
+**Sicurezza:** non è un endpoint pubblico e **restituisce codice sorgente** (max 160 file e 1,1 MB di testo secondo lo schema runner), che può essere proprietario. Non salvare in log, strumenti di analytics, cache o servizi di terzi, e non inviare segreti al job. Il consenso esplicito dell'handoff/runner non costituisce permesso per inviare il codice a nuovi provider AI. Non è una prova che l'attore abbia effettivamente letto o compreso i file e non registra esecuzioni o costi di modelli. Per una attestazione esterna occorrono ancora #113/#109/#105.
