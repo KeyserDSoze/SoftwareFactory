@@ -1413,3 +1413,26 @@ node src/runner/ai-review-execute.mjs verify-stored-intent \
 ```
 
 Le due trust key pubbliche devono essere installate/verificate **indipendentemente** dal JSON da controllare; per handoff senza tenant usare `--expected-tenant=-`. Il file `review-stage-intent.json` contiene solo identificatori/hashes/firma, **non** i byte sorgenti. Questo NON prova una risposta del vendor, il corretto svolgimento dell'LLM, l'esistenza di una lease attiva o che il server abbia davvero emesso quel GET. Nessuna richiesta HTTPS, firma di approval o spesa provider dalla CLI.
+
+
+## Dichiarazione di consegna firmata dal provider — verifica opzionale (#130)
+
+Per ridurre la dipendenza dalla sola firma dell'operatore, `provider-delivery-attestation.mjs` implementa **solo il verificatore offline** del contratto `softwarefactory.ai-review.provider-delivery.v1`. Non produce dichiarazioni provider, non le richiede automaticamente durante la review e non fa richieste HTTP. Un venditore deve supportare **esplicitamente** il formato: il normale `/chat/completions` OpenAI-compatible **non** emette questa firma. La chiave pubblica Ed25519 del provider e il suo SHA256 SPKI (DER) devono essere ottenuti e confermati per altra via, così come provider ID e hostname. Non prendere questi input dalla stessa dichiarazione da verificare. La chiave deve essere diversa dalla chiave Ed25519 operatore usata per la receipt.
+
+Esempio di **verifica**, solo dopo aver ottenuto un'evidenza firmata da un vendor con il contratto appropriato (i valori sotto sono segnaposto, non un provider integrato):
+
+```bash
+node src/runner/provider-delivery-attestation.mjs verify \\
+  --workspace=review-workspace.json \\
+  --operator-receipt=ai-review-receipt.json \\
+  --operator-public-key=review-trusted.pub \\
+  --delivery-evidence=vendor-delivery-signed.json \\
+  --provider-public-key=vendor-pinned.pub \\
+  --expected-provider-id=verified-vendor-contract-id \\
+  --expected-provider-host=review.vendor.example \\
+  --expected-provider-key-sha256=VENDOR_SPKI_DER_SHA256_HEX
+```
+
+La dichiarazione firmata è `{version:1,algorithm:'Ed25519',statement,signerKeySha256,signature}` con campi obbligatori `statement:{version:1,context:'softwarefactory.ai-review.provider-delivery.v1',assurance:'provider_key_signed_delivery_claim_not_execution_or_billing',providerId,providerHost,providerEndpointSha256,requestedModel,requestSha256,responseSha256,usage,issuedAt}`. `issuedAt` deve essere ISO8601 UTC canonico in millisecondi, ma **non** certifica il tempo, non impedisce replay e non attribuisce una fattura. Il verifier confronta i campi con la receipt verificata e controlla la firma sulla serializzazione JSON canonica. Il comando emette soltanto `AI_REVIEW_PROVIDER_DELIVERY_CLAIM_VERIFIED` in caso di esito positivo.
+
+**Limitazioni decisive:** un soggetto può fabbricare un provider e generare una propria chiave; pertanto un esito valido con una chiave self-supplied non autentica l'azienda. Un provider può dichiarare dati falsi o firmare una risposta riprodotta; la firma prova solo possesso della chiave. Non dimostra che l'LLM sia stato effettivamente eseguito o che `usage` sia una fattura riconciliata, e non sblocca `review_submit`, `review_approve`, deploy o quota monetaria. Le chiavi provider usate dai **test CI sono tutte sintetiche**, nessun provider live verificato. #113/#109/#105 restano aperte, ADR 0084.

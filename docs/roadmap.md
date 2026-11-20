@@ -1030,3 +1030,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] `sign-stage-intent`: firma domain-separated di hash receipt/stage e vincoli handoff/task/snapshot, lease e submission post-receipt, con chiave Ed25519 off-host, output O_EXCL 0600 e nessun POST.
 - [x] `verify-stage-intent` e `verify-stored-intent`: due trust key public pinned, controllo firma e payload, ricalcolo digest del documento custodito, senza fidarsi di UUID auto-dichiarati nel JSON di stage. Regressioni su chiavi, replay/tamper, source e record.
 - [ ] Verificare CI/Pages/Installer `completed/success` sullo SHA definitivo di main prima di chiudere #129. Nessun vendor-attested receipt o auto-approve; #113/#109/#105 restano aperte. ADR 0083.
+
+
+## Contratto opzionale di evidenza provider key-signed (#130, 20/11/2026)
+
+- [x] Implementare verifier offline Ed25519 per sola dichiarazione di **consegna HTTP**, domain-separated `softwarefactory.ai-review.provider-delivery.v1`, verificando pin indipendente del public key SPKI, provider ID/host dichiarati esternamente e binding ai SHA request/response, model e usage della receipt operatore verificata.
+- [x] Test Node con provider key *sintetica* e casi di mismatch/tamper/identity/role/key/corruption e lettura safe `O_NOFOLLOW`; nessuna capacità di firmare provider nel codice runtime o chiamata vendor in CI.
+- [ ] Registrare prove Factory CI, Pages e Installer sullo SHA finale prima di chiudere #130. Non confondere firma con una fattura e non chiudere #113/#109/#105 senza supporto provider reale, identità certificata e reconciliation. ADR 0084.

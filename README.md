@@ -810,3 +810,8 @@ Prima di firmare l'osservazione HTTP, la CLI `ai-review-execute` richiede una so
 ### Impegno firmato di deposito Code Reviewer (#129)
 
 Un secondo artefatto Ed25519 `stage-intent`, prodotto *dopo* la scelta degli UUID, firma la relazione tra ricevuta operatore, documento staged, lease e submission. Con una chiave pubblica pinnata indipendentemente, la CLI verifica che la richiesta di deposito e la risposta di custodia corrispondano all'intenzione firmata, senza dover adottare gli UUID da un JSON non firmato. I comandi sono esclusivamente offline e non avviano API, provider, approvazioni o billing. Istruzioni nella [guida runner](docs/runner.md), ADR 0083.
+
+
+### Verifica di una dichiarazione firmata di consegna AI (#130)
+
+Se il proprio provider offre **esplicitamente** una dichiarazione di consegna compatibile firmata Ed25519, il comando offline `src/runner/provider-delivery-attestation.mjs verify` può confrontarla con la receipt locale del Code Reviewer. Occorre un public key **autenticato dal contratto/provider con un canale indipendente**, non recuperato dall'evidenza da verificare, e conoscere in anticipo provider ID, hostname e fingerprint della chiave. Il verificatore collega gli hash della richiesta/risposta HTTPS e gli usage dichiarati senza contattare il provider né autorizzare automaticamente task o spese. Nessuna API OpenAI-compatible standard fornisce automaticamente questo formato e **non è ancora attestato alcun provider live**. Una firma valida non prova, da sola, esecuzione LLM o fatturazione. Vedi [guida](docs/runner.md) e [ADR 0084](adr/0084-provider-signed-delivery-evidence-contract.md).
