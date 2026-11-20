@@ -270,8 +270,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
       {remoteRepairId && <p className="helper">Checkpoint repair persistente: <code>{remoteRepairId.slice(0, 8)}…</code>. Le dichiarazioni di review e l'esito dei test vengono registrati sul runner al re-test e all'approvazione; nessuna modifica viene applicata automaticamente.</p>}
     {phase && <div className="code-agent-phase"><RefreshCw size={15} className="spinning" /> {phase}</div>}
     {usage && <p className="helper" role="status">
-      {usage.task}: {formatProviderReportedUsage(usage.receipt)}
-      <span> Solo sessione browser; non è una fattura né una prova di esecuzione sul runner.</span>
+      {usage.task}: {formatProviderReportedUsage(usage.receipt, normalizeLocale(settings.language))}
+      <span> {t(normalizeLocale(settings.language), "providerUsageBrowserOnly")}</span>
     </p>}
     </section>
     {pending && <section className="panel">

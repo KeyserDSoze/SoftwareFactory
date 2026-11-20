@@ -4,6 +4,11 @@
 export type FactoryLocale = "it" | "en";
 export const messages = {
   it: {
+    providerUsagePrefix: "Token dichiarati dal provider (non verificati)",
+    providerUsageInput: "input", providerUsageOutput: "output",
+    providerUsageTotal: "totale",
+    providerUsageNoCost: "Nessun costo monetario certificato.",
+    providerUsageBrowserOnly: "Solo sessione browser; non è una fattura né una prova di esecuzione sul runner.",
     language: "Lingua", installerTitle: "Installa runner Linux", releaseLookup: "Ricerca ultima Release...",
     releaseAvailable: "Installer disponibile", releaseMissing: "Nessuna release pubblicata o GitHub non raggiungibile.",
     releaseDownload: "Scarica installer (.tar.gz)", releaseChecksum: "Scarica SHA-256",
@@ -83,6 +88,11 @@ export const messages = {
     notImplemented: "Non implementato su questo progetto", offline: "Non disponibile", busy: "Invio...",
   },
   en: {
+    providerUsagePrefix: "Provider-reported tokens (unverified)",
+    providerUsageInput: "input", providerUsageOutput: "output",
+    providerUsageTotal: "total",
+    providerUsageNoCost: "No certified monetary cost.",
+    providerUsageBrowserOnly: "Browser session only; not an invoice or proof of execution on the runner.",
     language: "Language", installerTitle: "Install Linux runner", releaseLookup: "Checking latest Release...",
     releaseAvailable: "Installer available", releaseMissing: "No published release found or GitHub unavailable.",
     releaseDownload: "Download installer (.tar.gz)", releaseChecksum: "Download SHA-256",

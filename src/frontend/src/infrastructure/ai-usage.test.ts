@@ -49,6 +49,9 @@ describe("provider-reported AI usage (not verified billing) #121", () => {
     expect(formatProviderReportedUsage(callback.mock.calls[0][0])).toMatch(
       /Token dichiarati dal provider \(non verificati\).*120.*30.*150.*Nessun costo monetario certificato/,
     );
+    expect(formatProviderReportedUsage(callback.mock.calls[0][0], "en")).toMatch(
+      /Provider-reported tokens \(unverified\).*input 120.*output 30.*total 150.*No certified monetary cost/,
+    );
   });
 
   it("does not fabricate counts if response usage is absent", async () => {
@@ -86,7 +89,7 @@ describe("provider-reported AI usage (not verified billing) #121", () => {
   it("keeps exact 0 token counts, never estimates tokens from content length", async () => {
     const callback = vi.fn();
     mockResponse(answer({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }));
-    await aiComplete(profile(), "", "huge" .repeat(1000), "user", undefined,
+    await aiComplete(profile(), "", "huge".repeat(1000), "user", undefined,
       { onUsage: callback });
     expect(callback.mock.calls[0][0]).toMatchObject({
       promptTokens: 0, completionTokens: 0, totalTokens: 0,

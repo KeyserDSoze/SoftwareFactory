@@ -1,5 +1,6 @@
 import type { AiProfile } from "../domain/types";
 import type { ThinkingChoice } from "../domain/agent-roles";
+import { t, type FactoryLocale } from "../i18n";
 
 /** Values observed in a successful /chat/completions HTTP response.
  * Neither the provider's accounting nor its price is independently verified.
@@ -41,8 +42,11 @@ export function parseProviderReportedUsage(
   };
 }
 /** Label visibly distinguishes observed response fields from verified billing. */
-export function formatProviderReportedUsage(receipt: AiUsageObservation): string {
-  return `Token dichiarati dal provider (non verificati): input ${receipt.promptTokens}, output ${receipt.completionTokens}, totale ${receipt.totalTokens}. Nessun costo monetario certificato.`;
+export function formatProviderReportedUsage(
+  receipt: AiUsageObservation, locale: FactoryLocale = "it",
+): string {
+  const fmt = new Intl.NumberFormat(locale);
+  return `${t(locale, "providerUsagePrefix")}: ${t(locale, "providerUsageInput")} ${fmt.format(receipt.promptTokens)}, ${t(locale, "providerUsageOutput")} ${fmt.format(receipt.completionTokens)}, ${t(locale, "providerUsageTotal")} ${fmt.format(receipt.totalTokens)}. ${t(locale, "providerUsageNoCost")}`;
 }
 export class ProviderError extends Error {
   constructor(message: string) { super(message); this.name = "ProviderError"; }

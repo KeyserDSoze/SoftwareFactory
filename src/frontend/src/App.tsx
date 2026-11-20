@@ -398,7 +398,7 @@ export default function App() {
           if (controller.signal.aborted) return;
           setRunLog(log => [
             formatDate(new Date().toISOString()) + " · " + STAGES[i].label +
-              ": " + formatProviderReportedUsage(receipt), ...log,
+              ": " + formatProviderReportedUsage(receipt, normalizeLocale(settingsRef.current.language)), ...log,
           ].slice(0, 30));
         });
         if (controller.signal.aborted) break;
