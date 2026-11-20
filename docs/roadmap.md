@@ -1099,3 +1099,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Verificare Factory CI/Pages/Installer sullo stesso SHA main e chiudere #137 solo con prove. #92/#91 aperte per transazioni IndexedDB, veri dispositivi/provider e security acceptance.
 
 - [x] Prima Factory CI #44814795070: 192/193 unit frontend passati, fallita solo una fixture preesistente #136 che contava le letture globali dal setup. Il nuovo readback esatto dello slot aggiunge una lettura: `activeGets=0` prima di iniettare la race riattiva la simulazione sulla seconda lettura dell'operazione, senza cambiare i guard di produzione. CI completa ripetuta sul fix.
+
+
+## Fondazione IndexedDB CAS con concorrenza Chromium reale (#138 — 20/11/2026)
+
+- [x] Nuova primitiva API IDB `readCasProject` / `compareAndSwapCasProject` / `deleteCasProject`, transazione unica readwrite read+compare+put, token snapshot esatto + generazione monotona e tombstone contro ABA, inserimento `expected=null`, validazione schema/soglia 1M, fail-closed senza localStorage fallback.
+- [x] Test unitari su validazione e indisponibilità IndexedDB; aggiunto E2E Chromium con due tab stesso origin: gare di insert e update con un vincitore, stale delete rifiutato, tombstone + recreate con revisione crescente e recovery dopo nuova tab. Log `FACTORY_INDEXEDDB_CAS_E2E_PASS` richiesto.
+- [ ] Confermare Factory CI, Pages e Installer sullo stesso SHA di main, verificando il marker Chromium. Poi chiudere **solo #138**.
+- [ ] **Da fare in #92/#91:** migrazione user-controlled di progetti legacy, cutover dello store autorevole (rimozione del percorso sincrono non transazionale), integrazione di tutte le chiamate UI/app a salvataggio asincrono e prove su browser non cooperativi. Un DB per origin/profilo non equivale a CAS cross-device o sincronizzazione cloud reale.

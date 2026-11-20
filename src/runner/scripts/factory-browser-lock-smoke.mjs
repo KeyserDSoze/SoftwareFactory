@@ -62,6 +62,84 @@ if (!inside) {
   let browser;
   try {
     browser = await chromium.launch({headless:true});
+    // IndexedDB CAS primitive (#138): actual Chromium, same-origin tabs and
+    // genuine readwrite transactions. The live SPA remains on localStorage;
+    // this explicitly tests the isolated CAS protocol BEFORE any migration.
+    const casBuild = await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryProjectCas",target:"es2022",
+    });
+    const casBundle = casBuild.outputFiles[0].text;
+    const casContext = await browser.newContext();
+    try {
+      const casA=await casContext.newPage(),casB=await casContext.newPage();
+      await Promise.all([
+        casA.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        casB.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([casA.addScriptTag({content:casBundle}),
+        casB.addScriptTag({content:casBundle})]);
+      const id="11111111-1111-4111-8111-111111111111";
+      const candidate = (page,label,expected) => page.evaluate(async ({id,label,expected}) => {
+        const project={id,config:{name:label},stages:[],
+          updatedAt:"2026-11-20T20:00:00.000Z"};
+        try {return {ok:true,snapshot:await window.FactoryProjectCas
+          .compareAndSwapCasProject(project,expected)};}
+        catch(error){return {ok:false,error:String(error)};}
+      },{id,label,expected});
+      const initial=await Promise.all([
+        candidate(casA,"first insert A",null),
+        candidate(casB,"first insert B",null),
+      ]);
+      assert.equal(initial.filter(x=>x.ok).length,1,
+        "Concurrent insert-only CAS must permit exactly one winner");
+      assert.match(initial.find(x=>!x.ok).error,/Conflitto CAS/);
+      const latest=await casA.evaluate(id =>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(latest.revision,1);
+      assert.equal(latest.raw,initial.find(x=>x.ok).snapshot.raw);
+      const updates=await Promise.all([
+        candidate(casA,"stale update A",latest),
+        candidate(casB,"stale update B",latest),
+      ]);
+      assert.equal(updates.filter(x=>x.ok).length,1,
+        "Concurrent CAS with the same revision must permit only one update");
+      assert.match(updates.find(x=>!x.ok).error,/Conflitto CAS/);
+      const updated=await casB.evaluate(id =>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(updated.revision,2);
+      assert.equal(updated.raw,updates.find(x=>x.ok).snapshot.raw);
+      const staleDelete=await casA.evaluate(async ({id,latest}) => {
+        try {await window.FactoryProjectCas.deleteCasProject(id,latest);
+          return "unexpected success";}
+        catch(error){return String(error);}
+      },{id,latest});
+      assert.match(staleDelete,/Conflitto CAS/);
+      const tombstone=await casB.evaluate(async ({id,updated}) =>
+        window.FactoryProjectCas.deleteCasProject(id,updated),{id,updated});
+      assert.equal(tombstone.revision,3);
+      const afterDelete=await casA.evaluate(id =>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(afterDelete,null,"A tombstone must read as deleted");
+      // Recreating must advance generation instead of resetting to 1 (ABA).
+      const reinsert=await candidate(casA,"re-created after tombstone",null);
+      assert.equal(reinsert.ok,true);
+      assert.equal(reinsert.snapshot.revision,4);
+      const freshPage=await casContext.newPage();
+      await freshPage.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await freshPage.addScriptTag({content:casBundle});
+      const reopened=await freshPage.evaluate(id =>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(reopened.revision,4,"IndexedDB CAS must survive tab reopen");
+      assert.equal(reopened.raw,reinsert.snapshot.raw);
+      const staleAgain=await candidate(casB,"stale after reopen",updated);
+      assert.equal(staleAgain.ok,false);
+      assert.match(staleAgain.error,/Conflitto CAS/);
+      console.log("FACTORY_INDEXEDDB_CAS_E2E_PASS: Chromium two-tab insert/update races, stale delete, tombstone ABA and tab reopen");
+    } finally {
+      await casContext.close();
+    }
     const context = await browser.newContext({acceptDownloads:true});
     const first = await context.newPage();
     await first.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
