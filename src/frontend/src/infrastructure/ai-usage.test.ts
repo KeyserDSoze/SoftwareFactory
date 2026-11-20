@@ -237,8 +237,10 @@ describe("browser AI completed-envelope safety #132", () => {
       role: "assistant", content: "A partial implementation plan",
     } }], usage });
     const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.profiles[0].model = "pipeline-fixture-model";
     await expect(runStage(project, settings, "features", undefined,
       undefined, onUsage)).rejects.toThrow(/incompleta/);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(onUsage).not.toHaveBeenCalled();
     expect(project).toEqual(before);
     expect(project.stages.find(s => s.id === "features")?.status).not.toBe("complete");
@@ -259,8 +261,11 @@ describe("browser AI completed-envelope safety #132", () => {
         verdict: "pass", report: "Everything seems fine",
       }),
     } }], usage });
-    await expect(reviewCode(createProject(), structuredClone(DEFAULT_SETTINGS),
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.profiles[0].model = "review-fixture-model";
+    await expect(reviewCode(createProject(), settings,
       proposal, undefined, onUsage)).rejects.toThrow(/filtrata/);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(onUsage).not.toHaveBeenCalled();
     expect(proposal).toEqual(before);
     expect(proposal.review).toBeUndefined();
