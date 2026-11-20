@@ -1015,32 +1015,84 @@ export async function getAgentReviewSources({
   if(source?.status!=="runner_input_recorded" ||
       source.fingerprint!==permitted.sourceFingerprint)
     throw issue("HANDOFF_REVIEW_EVIDENCE");
+  const checked=await readVerifiedReviewerFiles(dataDir,record,task,states,source);
+  await reauthorize?.();
+  return {version:1,handoffId:record.id,taskId:task.id,submissionId,
+    sourceFingerprint:source.fingerprint,sourceDigest:source.digest,
+    fileCount:checked.fileCount,bytes:checked.bytes,
+    files:checked.request.files};
+}
+/** Share the same test-input proof between pre-review owner workspaces
+ * and post-submission review-approver inspection. This never looks at the
+ * agent's report as a source of truth about tested code.
+ */
+async function readVerifiedReviewerFiles(dataDir,record,task,states,source) {
+  if(source?.status!=="runner_input_recorded" ||
+      !SHA.test(source.digest) || !SHA.test(source.fingerprint))
+    throw issue("HANDOFF_REVIEW_EVIDENCE");
   const tested=task.dependsOn.filter(id=>states.get(id)?.testVerified);
   if(!tested.length) throw issue("HANDOFF_REVIEW_EVIDENCE");
-  // Different job labels/steps may use the same files, but all direct Tester
-  // dependencies must independently match the exact source file digest.
   for(const id of tested)
     if(record[SOURCE_SNAPSHOTS]?.get(id)!==source.digest)
       throw issue("HANDOFF_REVIEW_EVIDENCE");
   const proof=states.get(tested[0]).testVerified;
-  let checked;
   try {
     const input=await readRunnerInput(dataDir,proof.jobId);
     if(!exact(input,["schemaVersion","label","files","steps"]))
       throw Error("noncanonical runner input");
-    checked=validateRequest(input);
+    const checked=validateRequest(input);
     const digest=hash({scope:"runner-input-files-v1",
       files:checked.request.files});
     if(JSON.stringify(checked.request)!==JSON.stringify(input) ||
         checked.digest!==proof.jobDigest || digest!==source.digest ||
         !checked.request.steps.includes(proof.step))
       throw Error("tester source no longer matches");
+    return checked;
   } catch { throw issue("HANDOFF_REVIEW_EVIDENCE"); }
-  await reauthorize?.();
-  return {version:1,handoffId:record.id,taskId:task.id,submissionId,
-    sourceFingerprint:source.fingerprint,sourceDigest:source.digest,
-    fileCount:checked.fileCount,bytes:checked.bytes,
-    files:checked.request.files};
+}
+/** The Reviewer must be able to inspect real tested code BEFORE authoring a
+ * report. Unlike the post-submit approver view, this author-only GET is
+ * fenced by an active lease under the same admission lock as claim/release.
+ * It is a source delivery capability, NOT proof of reading or AI execution.
+ */
+export async function getAgentReviewWorkspace({
+  dataDir,handoffId,taskId,actor,reauthorize,waitMs=1500,nowMs=Date.now,
+}) {
+  if(!UUID.test(handoffId) || !TASK.test(taskId) || !actor ||
+      actor.role!=="code_reviewer" || !ACTOR.test(actor.id) ||
+      !(actor.tenantId===null || typeof actor.tenantId==="string" &&
+        TENANT.test(actor.tenantId)))
+    throw issue("HANDOFF_NOT_FOUND");
+  return withAdmissionLock(dataDir,async()=>{
+    await reauthorize?.();
+    await trustedDirectory(directory(dataDir));
+    let record;
+    try {record=await readManifest(dataDir,handoffId);}
+    catch(e) {if(e.code==="ENOENT") throw issue("HANDOFF_NOT_FOUND");throw e;}
+    const task=record.tasks.find(t=>t.id===taskId);
+    if(record.tenantId!==actor.tenantId || !task ||
+        task.role!=="code_reviewer" || task.owner!==actor.id)
+      throw issue("HANDOFF_NOT_FOUND");
+    const states=verifyLeaseHistory(record),lease=states.get(task.id);
+    const active=()=>lease.active && lease.actorId===actor.id &&
+      lease.generation>=1 && nowMs()<Date.parse(lease.expiresAt) &&
+      !lease.reviewSubmission && !lease.reviewApproved &&
+      !lease.reviewRejected && !lease.approved && !lease.testVerified;
+    if(!active()) throw issue("HANDOFF_NOT_FOUND");
+    const source=reviewSourceSnapshot(record,states,task,
+      reviewDependencyContext(record,states,task));
+    const checked=await readVerifiedReviewerFiles(
+      dataDir,record,task,states,source);
+    // A key rotation while the source is reopened must not authorize a
+    // disclosure, and a lease expiry during I/O must fail closed too.
+    await reauthorize?.();
+    if(!active()) throw issue("HANDOFF_NOT_FOUND");
+    return {version:1,handoffId:record.id,taskId:task.id,
+      generation:lease.generation,
+      sourceFingerprint:source.fingerprint,sourceDigest:source.digest,
+      fileCount:checked.fileCount,bytes:checked.bytes,
+      files:checked.request.files};
+  },waitMs);
 }
 function reviewRequest(input) {
   const base=["action","handoffId","taskId","submissionId",
