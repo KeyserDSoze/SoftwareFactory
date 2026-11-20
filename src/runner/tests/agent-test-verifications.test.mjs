@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { mkdtemp, mkdir, readFile, writeFile, rm, rename, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +13,8 @@ import { executeJob } from "../worker.mjs";
 import { verifyAgentTestTask, mutateAgentTaskReview,
   getAgentReviewWorkspace } from "../agent-handoffs.mjs";
 import { verifyJobEvidenceForRead } from "../evidence.mjs";
+import {reviewInspectionStatement,signReviewInspectionBundle,
+  verifySignedReviewInspection} from "../review-attest.mjs";
 
 const rootKey="journal-test-root-key-abcdefghijklmnopqrstuvwxyz";
 const actorKey="agent.tester-one."+"T".repeat(48);
@@ -1349,4 +1351,53 @@ test("pre-review workspace serves one source when multiple real Tester jobs agre
     assert.equal(read.body.fileCount,1);
     assert.equal(read.body.generation,1);
   }finally {await f.close();}
+});
+
+
+test("off-host review receipt binds actual GET document and tested files across API replicas",async()=>{
+  const f=await fixture({multiTenant:true});
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{tenants:true});
+    const pending=await f.call(1,"GET",
+      "/v1/agent-review-artifacts/"+submissionId,undefined,tenantApproverKey);
+    assert.equal(pending.status,404);
+    const request=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,request,owner)).status,201);
+    const artifact=await f.call(1,"GET",
+      "/v1/agent-review-artifacts/"+submissionId,undefined,tenantApproverKey);
+    const sources=await f.call(0,"GET",
+      "/v1/agent-review-sources/"+submissionId,undefined,tenantApproverKey);
+    assert.equal(artifact.status,200,JSON.stringify(artifact.body));
+    assert.equal(sources.status,200,JSON.stringify(sources.body));
+    assert.equal(artifact.body.tenantId,"alpha");
+    assert.equal(artifact.body.owner,"reviewer-one");
+    assert.equal(artifact.body.generation,1);
+    assert.equal(artifact.body.artifactDigest,artifactDigest);
+    const pkg={version:1,artifact:artifact.body,sources:sources.body};
+    const statement=reviewInspectionStatement(pkg);
+    assert.equal(statement.handoffId,id);
+    assert.equal(statement.tenantId,"alpha");
+    assert.equal(statement.sourceDigest,source.digest);
+    assert.equal(statement.sourceFingerprint,source.fingerprint);
+    const {privateKey,publicKey}=generateKeyPairSync("ed25519");
+    const receipt=signReviewInspectionBundle(pkg,privateKey);
+    assert.equal(verifySignedReviewInspection(pkg,receipt,publicKey).verified,true);
+    const altered=structuredClone(pkg);
+    altered.sources.files["src/backend/domain/X.cs"]=
+      "namespace X; public class Forged {}";
+    assert.throws(()=>verifySignedReviewInspection(altered,receipt,publicKey),
+      {code:"REVIEW_INSPECTION_INVALID"});
+    assert.equal((await f.call(1,"GET",
+      "/v1/agent-review-artifacts/"+submissionId,undefined,reviewApproverKey)).status,404);
+    assert.equal((await f.call(0,"GET",
+      "/v1/agent-review-artifacts/"+submissionId,undefined,rootKey)).status,401);
+    // The receipt is never submitted as an authorization credential; the
+    // independent on-runner actor signoff remains a separate manual event.
+    assert.equal((await f.view(0,id)).body.tasks[1].state,"review_submitted");
+    assert.equal((await postReview(f,1,reviewApprovalBody(request),tenantApproverKey)).status,201);
+    assert.equal((await f.view(0,id)).body.tasks[1].state,"human_approved_review");
+    assert.equal(verifySignedReviewInspection(pkg,receipt,publicKey).verified,true);
+  }finally{await f.close();}
 });
