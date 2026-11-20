@@ -136,6 +136,7 @@ describe("provider-reported AI usage (not verified billing) #121", () => {
     const receipt = vi.fn<(observed: AiUsageObservation) => void>();
     const project = createProject();
     const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.profiles[0].model = "pipeline-model";
     const result = await runStage(project, settings, "features", undefined,
       undefined, receipt);
     expect(result.output).toBe("Answer from a real HTTP response.");
