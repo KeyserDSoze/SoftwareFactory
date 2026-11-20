@@ -12,7 +12,7 @@ import { generateFiles } from "./scaffold";
  * Never log the entire environment or generated Compose config (credentials).
  */
 function dockerComposeFailure(step: string, result: SpawnSyncReturns<string>,
-  durationMs: number): string {
+  durationMs: number, timeoutMs: number | null = null): string {
   const error = result.error as NodeJS.ErrnoException | undefined;
   return JSON.stringify({
     step,
@@ -22,11 +22,50 @@ function dockerComposeFailure(step: string, result: SpawnSyncReturns<string>,
     errorErrno: error?.errno ?? null,
     errorMessage: error?.message?.slice(0, 400) ?? null,
     durationMs,
+    timeoutMs,
     stdout: (result.stdout ?? "").slice(0, 1200),
     stderr: (result.stderr ?? "").slice(0, 1200),
     // Only operational flags; never expose HOME, PATH, tokens or env values.
     ci: process.env.CI === "true",
   }, null, 2);
+}
+
+
+// Compose version is an ENVIRONMENT preflight, not a generated-template test.
+// Two tests used to spawn this independently with a 6s cap: a cold/loaded
+// GitHub-hosted worker could time out on the second invocation even though
+// the generated Compose was valid. Cache only the preflight verdict, NEVER the
+// actual generated per-environment `docker compose config` results.
+const COMPOSE_VERSION_TIMEOUT_MS = 15_000;
+const COMPOSE_CONFIG_TIMEOUT_MS = 12_000;
+const composeProcessEnv = {
+  PATH: process.env.PATH || "/usr/bin:/bin",
+  HOME: process.env.HOME || "/tmp",
+};
+let composeProbe: { status: number | null; missing: boolean; details: string } | undefined;
+function dockerComposeAvailable(): boolean {
+  if (!composeProbe) {
+    const startedAt = Date.now();
+    const result = spawnSync("docker", ["compose", "version"], {
+      encoding: "utf8", timeout: COMPOSE_VERSION_TIMEOUT_MS,
+      maxBuffer: 65_536, env: composeProcessEnv,
+    });
+    const error = result.error as NodeJS.ErrnoException | undefined;
+    composeProbe = {
+      status: result.status,
+      missing: error?.code === "ENOENT",
+      details: dockerComposeFailure("docker compose version", result,
+        Date.now() - startedAt, COMPOSE_VERSION_TIMEOUT_MS),
+    };
+  }
+  if (composeProbe.missing) {
+    if (process.env.CI === "true")
+      throw Error("Docker Compose required by CI: " + composeProbe.details);
+    return false; // Local frontend-only contributor without Docker.
+  }
+  // Error, timeout, nonzero exit and plugin failures MUST fail the CI gate.
+  expect(composeProbe.status, composeProbe.details).toBe(0);
+  return true;
 }
 
 describe("application scaffold", () => {
@@ -38,15 +77,29 @@ describe("application scaffold", () => {
         code: "EACCES", errno: -13,
       }),
     } as SpawnSyncReturns<string>;
-    const message = dockerComposeFailure("compose version", fake, 123);
+    const message = dockerComposeFailure("compose version", fake, 123, 15_000);
     const details = JSON.parse(message) as Record<string, unknown>;
     expect(details).toMatchObject({
       status: 255, signal: null, errorCode: "EACCES", errorErrno: -13,
-      durationMs: 123, stderr: "plugin lookup failure",
+      durationMs: 123, timeoutMs: 15_000,
+      stderr: "plugin lookup failure",
     });
     expect(message).not.toContain("PATH=");
     expect(message).not.toContain("HOME=");
     expect(message).not.toContain("TOKEN=");
+    // Timeout failure remains visible as a hard failure, not an unavailable
+    // Docker condition that could skip contract validation on CI.
+    const timeout = { ...fake, status: null,
+      error: Object.assign(new Error("spawnSync docker ETIMEDOUT"), {
+        code: "ETIMEDOUT", errno: -110,
+      }),
+    } as SpawnSyncReturns<string>;
+    const timedOut = JSON.parse(dockerComposeFailure("docker compose version",
+      timeout, 15_102, COMPOSE_VERSION_TIMEOUT_MS)) as Record<string, unknown>;
+    expect(timedOut).toMatchObject({
+      status: null, errorCode: "ETIMEDOUT",
+      durationMs: 15_102, timeoutMs: 15_000,
+    });
   });
   function example() {
     const p = createProject();
@@ -505,21 +558,7 @@ describe("application scaffold", () => {
     // Render the actual generated Compose with the Docker CLI where installed.
     // Do not contact Docker daemon or run any service; local frontend-only
     // developers without Docker can still run the pure template assertions.
-    const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
-      HOME: process.env.HOME || "/tmp" };
-    const startedAt = Date.now();
-    const available = spawnSync("docker", ["compose", "version"], {
-      encoding: "utf8", timeout: 6000, maxBuffer: 65536, env: processEnv,
-    });
-    const probeDetails = dockerComposeFailure("docker compose version", available,
-      Date.now() - startedAt);
-    if (available.error &&
-        (available.error as NodeJS.ErrnoException).code === "ENOENT") {
-      if (process.env.CI === "true")
-        throw Error("Docker Compose required by CI: " + probeDetails);
-      return;
-    }
-    expect(available.status, probeDetails).toBe(0);
+    if (!dockerComposeAvailable()) return;
     const directory = mkdtempSync(path.join(tmpdir(), "sf-composed-oidc-"));
     const dockerDir = path.join(directory, "docker");
     mkdirSync(dockerDir);
@@ -532,10 +571,11 @@ describe("application scaffold", () => {
       const output = spawnSync("docker", [
         "compose", "-f", composeFile, "--env-file", envFile,
         "config", "--format", "json",
-      ], { encoding: "utf8", timeout: 12000,
-        maxBuffer: 1_000_000, env: processEnv });
+      ], { encoding: "utf8", timeout: COMPOSE_CONFIG_TIMEOUT_MS,
+        maxBuffer: 1_000_000, env: composeProcessEnv });
       const details = dockerComposeFailure("docker compose config",
-        { ...output, stdout: "" }, Date.now() - startedConfigAt);
+        { ...output, stdout: "" }, Date.now() - startedConfigAt,
+        COMPOSE_CONFIG_TIMEOUT_MS);
       // Deliberately redact the full rendered config: it may contain secrets.
       expect(output.status, details).toBe(0);
       return JSON.parse(output.stdout) as {
@@ -585,16 +625,11 @@ describe("application scaffold", () => {
       expect(production.services.web.ports[0].host_ip).toBe("127.0.0.1");
       expect(String(production.services.web.ports[0].published)).toBe("3000");
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  }, 30000); // Docker Compose CLI can be slow under parallel CI workloads.
+  }, 55000); // 15s shared preflight + two real 12s configs, with CI headroom.
   it("renders optional services before top-level volumes across all database variants", () => {
-    const processEnv = { PATH: process.env.PATH || "/usr/bin:/bin",
-      HOME: process.env.HOME || "/tmp" };
-    const available = spawnSync("docker", ["compose", "version"], {
-      encoding: "utf8", timeout: 6000, maxBuffer: 65536, env: processEnv,
-    });
-    const hasCompose = available.status === 0;
-    if (!hasCompose && process.env.CI === "true")
-      throw Error("Docker Compose is mandatory for the CI schema check");
+    // Reuse the successful CLI preflight only; every generated variant is
+    // still checked by a fresh, mandatory 'docker compose config' invocation.
+    const hasCompose = dockerComposeAvailable();
     const directory = mkdtempSync(path.join(tmpdir(), "sf-compose-services-"));
     const dockerDir = path.join(directory, "docker");
     mkdirSync(dockerDir);
@@ -638,12 +673,18 @@ describe("application scaffold", () => {
         }
         if (!hasCompose) continue;
         writeFileSync(composeFile, compose, { mode: 0o600 });
+        const startedConfigAt = Date.now();
         const out = spawnSync("docker", [
           "compose", "-f", composeFile, "--env-file", envFile,
           "config", "--format", "json",
-        ], { encoding: "utf8", timeout: 12000,
-          maxBuffer: 1_000_000, env: processEnv });
-        expect(out.status, database + ": " + out.stderr).toBe(0);
+        ], { encoding: "utf8", timeout: COMPOSE_CONFIG_TIMEOUT_MS,
+          maxBuffer: 1_000_000, env: composeProcessEnv });
+        // Redact complete config; print bounded process diagnostics even on
+        // timeout, rather than a raw stderr that may reveal substitutions.
+        const details = dockerComposeFailure("docker compose config " + database,
+          { ...out, stdout: "" }, Date.now() - startedConfigAt,
+          COMPOSE_CONFIG_TIMEOUT_MS);
+        expect(out.status, details).toBe(0);
         const rendered = JSON.parse(out.stdout) as {
           services: Record<string, {
             ports?: Array<{ host_ip: string; published: string }>;
@@ -661,7 +702,7 @@ describe("application scaffold", () => {
         }
       }
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  });
+  }, 75000); // Four genuine configs: no disabled checks or retries.
   it("generates strict production OIDC CORS allowlist without wildcard or credentials", () => {
     const files = generateFiles(example());
     const program = files["src/backend/applications/Api/Program.cs"];

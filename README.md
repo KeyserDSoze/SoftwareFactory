@@ -835,3 +835,8 @@ La Factory legge ora le risposte HTTP dei provider AI con limiti in byte **prima
 ### Libreria locale resiliente agli aggiornamenti concorrenti di schede diverse (#134)
 
 Se due schede modificano progetti distinti, entrambe possono legittimamente detenere i rispettivi Web Locks. Per evitare che una scrittura tardiva dell'indice condiviso nasconda una voce, il selettore locale ricostruisce ora l'elenco dalle copie per-progetto effettivamente salvate; non considera più l'indice globale l'unica fonte di verità. Inoltre ogni scheda conserva in `sessionStorage` soltanto l'ID del progetto selezionato: dopo un reload non apre inavvertitamente il progetto che un'altra scheda ha attivato. Resta possibile aprire i progetti storici con il vecchio puntatore. Non è una transazione tra dispositivi né un merge automatico; i conflitti di salvataggio continuano a richiedere backup e decisione umana. [ADR 0088](adr/0088-per-tab-local-project-selection-and-library-index-reconstruction.md), #92/#91 ancora aperte.
+
+
+### Robustezza dei controlli Docker Compose in CI (#135)
+
+I test dello scaffold generato validano sempre la configurazione reale con Docker Compose quando la CLI è presente, e **obbligatoriamente in GitHub Actions**. Il preflight `docker compose version` è ora condiviso tra i due gruppi di test, con un margine di 15 secondi per l'avvio della CLI sugli host GitHub; tutti i comandi `docker compose config` rimangono eseguiti per ciascuna configurazione generata, senza retry automatici e senza salti/false green. Un timeout produce diagnostica delimitata che non include il file Compose completo o segreti. [ADR 0089](adr/0089-docker-compose-cli-preflight-isolation.md). La variabilità dell'host CI non sostituisce l'acceptance su VM Docker rootless.

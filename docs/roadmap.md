@@ -1075,3 +1075,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Indice locale trattato come cache ricostruibile da slot per-progetto su Storage enumerabile: tab distinti che lavorano su ID diversi non nascondono copie valide anche se l'ultimo writer perde una voce della cache; scarta entry corrotte, ghost e >1MB, limite 40 derivato dagli slot.
 - [x] `sessionStorage` per-tab conserva **solo ID** attivo dopo scrittura completa; ricarica indipendente dal puntatore legacy globale che un altro writer può cambiare. Fallback legacy e regression dual-tab, cap, ghost, running->pending, progetto sparito.
 - [ ] Verificare Factory CI/Pages/Installer sullo SHA finale e chiudere #134 solo dopo prove. #92/#91 restano aperte: niente CAS IndexedDB o Google Drive multi-device realmente attestato; backup e intervento umano necessari. ADR 0088.
+
+
+## Stabilizzazione del preflight Docker Compose negli scaffold test (#135 — 20/11/2026)
+
+- [x] Ridotto da due a uno il numero dei lanci `docker compose version` per suite scaffold; timeout di preflight da 6s a 15s per tollerare cold-start intermittente, senza auto-retry o skip su CI. `docker compose config` ancora eseguito per dev/prod e ogni variante database (6 configurazioni reali).
+- [x] Error reporting JSON bounded e redatto con elapsed+budget, stato/signal/codice del processo. Test ETIMEDOUT sintetico; timeout dei test aumentato coerentemente con i subprocess obbligatori, senza cambiare la correttezza delle asserzioni.
+- [ ] Validare Factory CI, Pages, Installer sullo SHA finale, possibilmente doppia esecuzione indipendente della CI; chiudere #135 soltanto con prove e indicando che la causa esatta host GitHub potrebbe restare sconosciuta. ADR 0089; non chiudere #93 per questo fix.
