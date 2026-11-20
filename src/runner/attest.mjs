@@ -17,7 +17,7 @@ const invalid = () => Object.assign(new Error("Offline runner attestation verifi
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 
 /** Sort object keys recursively so reformatting an export does not change its identity. */
-function canonical(value) {
+export function canonical(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean" ||
       typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
@@ -100,7 +100,7 @@ export function isSafeAttestationFile(stat, kind, effectiveUid = process.geteuid
  * bypass the initial size limit, and an unlinked or modified fd must not be
  * silently accepted as the file the operator approved.
  */
-async function readAttestationFile(filename, kind) {
+export async function readAttestationFile(filename, kind) {
   if (typeof constants.O_NOFOLLOW !== "number") throw invalid();
   let fd;
   try {
@@ -128,7 +128,7 @@ async function readAttestationFile(filename, kind) {
   } catch { throw invalid(); }
   finally { await fd?.close().catch(() => {}); }
 }
-async function readBoundedJson(filename, kind) {
+export async function readBoundedJson(filename, kind) {
   try { return JSON.parse((await readAttestationFile(filename, kind)).toString("utf8")); }
   catch { throw invalid(); }
 }

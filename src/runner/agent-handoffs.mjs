@@ -984,6 +984,8 @@ export async function getAgentReviewArtifact({
   });
   await reauthorize?.();
   return {version:1,handoffId:record.id,taskId:task.id,submissionId,
+    tenantId:artifact.tenantId,owner:artifact.owner,
+    generation:artifact.generation,
     artifactDigest:artifact.digest,sourceFingerprint:artifact.sourceFingerprint,
     artifactMode:REVIEW_ARTIFACT_MODE,document:artifact.document};
 }
