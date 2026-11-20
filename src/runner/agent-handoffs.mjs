@@ -987,6 +987,61 @@ export async function getAgentReviewArtifact({
     artifactDigest:artifact.digest,sourceFingerprint:artifact.sourceFingerprint,
     artifactMode:REVIEW_ARTIFACT_MODE,document:artifact.document};
 }
+/** Read-only source inspection for a submitted, artifact-backed review.
+ * This is the exact canonical file map accepted by a verified Tester job,
+ * never a repository checkout or a claim that a human actually inspected it.
+ * Access is delegated to the existing independent actor/tenant guard.
+ */
+export async function getAgentReviewSources({
+  dataDir,submissionId,actor,reauthorize,
+}) {
+  const permitted=await getAgentReviewArtifact({
+    dataDir,submissionId,actor,reauthorize,
+  });
+  // Re-open the manifest and technical proof after actor authorization; the
+  // source is not stored in the handoff or duplicated in a review artifact.
+  const record=await readManifest(dataDir,permitted.handoffId);
+  if(record.tenantId!==actor.tenantId)
+    throw issue("HANDOFF_NOT_FOUND");
+  const task=record.tasks.find(t=>t.id===permitted.taskId);
+  const states=verifyLeaseHistory(record);
+  const state=states.get(task?.id);
+  if(!task || task.role!=="code_reviewer" ||
+      state?.reviewSubmission?.id!==submissionId ||
+      state.reviewSubmission.mode!==REVIEW_ARTIFACT_MODE)
+    throw issue("HANDOFF_NOT_FOUND");
+  const context=reviewDependencyContext(record,states,task);
+  const source=reviewSourceSnapshot(record,states,task,context);
+  if(source?.status!=="runner_input_recorded" ||
+      source.fingerprint!==permitted.sourceFingerprint)
+    throw issue("HANDOFF_REVIEW_EVIDENCE");
+  const tested=task.dependsOn.filter(id=>states.get(id)?.testVerified);
+  if(!tested.length) throw issue("HANDOFF_REVIEW_EVIDENCE");
+  // Different job labels/steps may use the same files, but all direct Tester
+  // dependencies must independently match the exact source file digest.
+  for(const id of tested)
+    if(record[SOURCE_SNAPSHOTS]?.get(id)!==source.digest)
+      throw issue("HANDOFF_REVIEW_EVIDENCE");
+  const proof=states.get(tested[0]).testVerified;
+  let checked;
+  try {
+    const input=await readRunnerInput(dataDir,proof.jobId);
+    if(!exact(input,["schemaVersion","label","files","steps"]))
+      throw Error("noncanonical runner input");
+    checked=validateRequest(input);
+    const digest=hash({scope:"runner-input-files-v1",
+      files:checked.request.files});
+    if(JSON.stringify(checked.request)!==JSON.stringify(input) ||
+        checked.digest!==proof.jobDigest || digest!==source.digest ||
+        !checked.request.steps.includes(proof.step))
+      throw Error("tester source no longer matches");
+  } catch { throw issue("HANDOFF_REVIEW_EVIDENCE"); }
+  await reauthorize?.();
+  return {version:1,handoffId:record.id,taskId:task.id,submissionId,
+    sourceFingerprint:source.fingerprint,sourceDigest:source.digest,
+    fileCount:checked.fileCount,bytes:checked.bytes,
+    files:checked.request.files};
+}
 function reviewRequest(input) {
   const base=["action","handoffId","taskId","submissionId",
     "artifactDigest","sourceFingerprint"];
