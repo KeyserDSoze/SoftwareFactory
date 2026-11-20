@@ -1082,3 +1082,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Ridotto da due a uno il numero dei lanci `docker compose version` per suite scaffold; timeout di preflight da 6s a 15s per tollerare cold-start intermittente, senza auto-retry o skip su CI. `docker compose config` ancora eseguito per dev/prod e ogni variante database (6 configurazioni reali).
 - [x] Error reporting JSON bounded e redatto con elapsed+budget, stato/signal/codice del processo. Test ETIMEDOUT sintetico; timeout dei test aumentato coerentemente con i subprocess obbligatori, senza cambiare la correttezza delle asserzioni.
 - [ ] Validare Factory CI, Pages, Installer sullo SHA finale, possibilmente doppia esecuzione indipendente della CI; chiudere #135 soltanto con prove e indicando che la causa esatta host GitHub potrebbe restare sconosciuta. ADR 0089; non chiudere #93 per questo fix.
+
+
+## Cambio progetto locale con snapshot pre-consenso e re-read under lease (#136 — 20/11/2026)
+
+- [x] Corretta la race: in precedenza il target veniva letto prima della conferma, ma la baseline veniva catturata soltanto dopo; un'altra scheda poteva aggiornare il target durante il prompt, e la vecchia copia veniva sovrascritta usando baseline nuova. Ticket pre-prompt, doppio controllo sotto lock e ri-lettura del progetto da usare.
+- [x] Import GitHub/restore cloud: baseline `localProjectSnapshot` fissata prima di attendere il lock e ricontrollata dopo; ripristino vecchio lease e release del nuovo in qualunque conflitto. Test Vitest di mutazioni durante lettura/conferma, target creato durante lease, running->pending e fallback invalido.
+- [ ] Verificare Factory CI/Pages/Installer stesso SHA prima di chiudere #136; #92/#91 continuano aperte per CAS reale, provider live e multi-device. ADR 0090.

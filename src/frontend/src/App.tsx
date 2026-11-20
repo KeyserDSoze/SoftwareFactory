@@ -30,6 +30,8 @@ import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
+import { assertLocalProjectUnchanged, prepareLocalProjectSwitch,
+  readConfirmedLocalProjectSwitch } from "./infrastructure/local-project-switch";
 
 type Tab = "workspace" | "pipeline" | "code" | "stack" | "connections";
 const NAV: { id: Tab; title: string; detail: string; icon: typeof Layers3 }[] = [
@@ -320,17 +322,31 @@ export default function App() {
     const old = writerLeaseRef.current;
     try {
       if (old?.projectId === nextProject.id) return changeProject(nextProject);
+      // Capture target baseline BEFORE waiting for its lock. Otherwise a tab
+      // can modify (or create) that target while we await the lease, and
+      // changeProject() would read the newer value as its own baseline before
+      // saving a stale import/restore payload over it.
+      const expectedTarget = localProjectSnapshot(nextProject.id);
       setWriterLeaseReady(false);
       const lease = await acquireProjectWriterLease(nextProject.id);
-      writerLeaseRef.current = lease;
-      if (!changeProject(nextProject)) {
+      try {
+        assertLocalProjectUnchanged(nextProject.id, expectedTarget);
+        writerLeaseRef.current = lease;
+        if (!changeProject(nextProject)) {
+          writerLeaseRef.current = old;
+          return false;
+        }
+        old?.release();
+        if (writerContended) { setLocalConflict(""); setWriterContended(false); }
+        return true;
+      } catch (error) {
         writerLeaseRef.current = old;
-        lease.release();
-        return false;
+        throw error;
+      } finally {
+        // On conflict, return to the previous writer instead of stranding the
+        // application on an unowned destination lock.
+        if (writerLeaseRef.current !== lease) lease.release();
       }
-      old?.release();
-      if (writerContended) { setLocalConflict(""); setWriterContended(false); }
-      return true;
     } finally {
       projectSwitchRef.current = false;
       setWriterLeaseReady(Boolean(writerLeaseRef.current));
@@ -443,26 +459,25 @@ export default function App() {
     projectSwitchRef.current = true;
     setWriterLeaseReady(false);
     try {
-      const selected = loadLocalProject(id);
-      if (!confirm("Passare a «" + selected.config.name + "»? " +
+      // Ticket MUST precede the human confirmation: a confirmation modal
+      // can be left open while a rival editor updates the destination.
+      const ticket = prepareLocalProjectSwitch(id);
+      if (!confirm("Passare a «" + ticket.displayName + "»? " +
         "Le modifiche attuali restano nella libreria locale. Nessun push automatico in questa operazione.")) return;
-      // Acquire the destination's exclusive writer lease before trusting or
-      // persisting the selected snapshot (another tab may have changed it).
-      const selectedOnRequest = localProjectSnapshot(id);
       const lease = await acquireProjectWriterLease(id);
       const previousLease = writerLeaseRef.current;
+      let selected: FactoryProject | null = null;
       try {
-        const selectedNow = localProjectSnapshot(id);
-        if (selectedNow !== selectedOnRequest)
-          throw Error("Il progetto è cambiato durante il cambio scheda: rileggi la libreria.");
-        localBaselineRef.current.set(id, selectedNow);
+        const verified = readConfirmedLocalProjectSwitch(ticket);
+        // This is the *original* snapshot from before confirmation, not a
+        // newer baseline adopted silently after the writer lease is granted.
+        localBaselineRef.current.set(id, verified.snapshot);
         writerLeaseRef.current = lease;
-        if (!changeProject(selected)) {
-          // A failed guarded write must not strand the app on the old project
-          // while accidentally holding the destination lease as its active lock.
+        if (!changeProject(verified.project)) {
           writerLeaseRef.current = previousLease;
           return;
         }
+        selected = verified.project;
         previousLease?.release();
         if (writerContended) { setLocalConflict(""); setWriterContended(false); }
       } catch (error) {
@@ -471,6 +486,7 @@ export default function App() {
       } finally {
         if (writerLeaseRef.current !== lease) lease.release();
       }
+      if (!selected) return;
       editSettings(s => {
         s.git = selected.githubDestination ? { ...selected.githubDestination } :
           selected.githubSync ? { ...s.git, owner: selected.githubSync.owner,

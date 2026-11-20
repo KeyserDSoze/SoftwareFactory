@@ -840,3 +840,8 @@ Se due schede modificano progetti distinti, entrambe possono legittimamente dete
 ### Robustezza dei controlli Docker Compose in CI (#135)
 
 I test dello scaffold generato validano sempre la configurazione reale con Docker Compose quando la CLI è presente, e **obbligatoriamente in GitHub Actions**. Il preflight `docker compose version` è ora condiviso tra i due gruppi di test, con un margine di 15 secondi per l'avvio della CLI sugli host GitHub; tutti i comandi `docker compose config` rimangono eseguiti per ciascuna configurazione generata, senza retry automatici e senza salti/false green. Un timeout produce diagnostica delimitata che non include il file Compose completo o segreti. [ADR 0089](adr/0089-docker-compose-cli-preflight-isolation.md). La variabilità dell'host CI non sostituisce l'acceptance su VM Docker rootless.
+
+
+### Protezione contro il cambio su copie obsolete della libreria locale (#136)
+
+Quando apri un altro progetto dalla libreria, la Factory registra la **versione esatta prima di chiederti conferma**. Dopo aver ottenuto il lock esclusivo verifica che nessun'altra scheda abbia modificato quel progetto durante il messaggio di conferma; lo rilegge prima di applicarlo e blocca il passaggio in caso di conflitto. La stessa verifica prima/dopo l'attesa del lock è applicata ai cambi ID dovuti a import GitHub e restore cloud. La copia aggiornata non viene sovrascritta silenziosamente: torna al progetto precedente e richiede una nuova scelta umana. Rimangono necessari Web Locks, backup e guard della snapshot. [ADR 0090](adr/0090-local-project-switch-pre-consent-snapshot-fencing.md). Non equivale a CAS globale fra dispositivi.
