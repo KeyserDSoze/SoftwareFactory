@@ -1066,3 +1066,5 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Confermare Factory CI/Pages/Installer sullo SHA finale prima di chiudere #133. ADR 0087; #109/#113 restano aperte per vendor identity, billing e completamento effettivo.
 
 - [x] Prima CI #44743313679 interrotta da TS2345 nella fixture degli header per un union type inferito (possibile proprietà `undefined`); test corretto con oggetti `Headers` reali e ripetizione CI sul commit definitivo, senza alterare il parser streaming di produzione.
+
+- [x] Seconda CI #44743553091: 169/170 Vitest passati, ultima fixture attendeva `cancel()` su stream già `closed` dal prefetch; aggiunto chunk successivo non consumato per verificare la reale cancellazione sullo stream ancora aperto dopo overflow. Parser di produzione rimasto invariato, ripetere CI completa.

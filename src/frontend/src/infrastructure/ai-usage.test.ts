@@ -338,6 +338,9 @@ describe("bounded provider HTTP JSON streaming #133", () => {
       const stream = streaming([
         bytes(JSON.stringify(answer(usage))),
         large(4 * 1024 * 1024),
+        // Keep the transport open after the overflowing chunk: a closed
+        // ReadableStream cannot report a subsequent cancel callback.
+        bytes("trailing-data-must-not-be-read"),
       ], headers);
       vi.stubGlobal("fetch", vi.fn(async () => stream.response));
       await expect(aiComplete(profile(), "key", "sensitive system",
