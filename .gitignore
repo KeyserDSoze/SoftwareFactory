@@ -8,3 +8,12 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 src/frontend/generated-fixture/
+
+
+# Operator-only AI review snapshots, private keys and provider receipts (#123).
+# Prefer storing these OUTSIDE the repository; ignore local names as a backup.
+review-workspace*.json
+ai-review-receipt*.json
+review-private*.pem
+review-trusted*.pub
+provider.key

@@ -785,3 +785,8 @@ La Factory legge, quando forniti dalla risposta reale `/chat/completions`, i tok
 ## Verifica offline di review e sorgenti (#122)
 
 Dopo la submission di un rapporto Code Reviewer, un `review_approver` autorizzato può esportare separatamente il documento custodito e i file esattamente testati dalle API `/v1/agent-review-artifacts/:submissionId` e `/v1/agent-review-sources/:submissionId`. Su un **PC indipendente**, può formare un bundle JSON e firmarlo con `node src/runner/review-attest.mjs sign`. La verifica Ed25519 vincola il testo del rapporto, il digest del record e tutti i byte del file set al public key che l'operatore ha installato come trust anchor. È una firma dell'artefatto presentato, **non prova che il codice sia stato realmente letto** e non sblocca automaticamente task, review o billing. [Istruzioni e rischi](docs/runner.md).
+
+
+## Code Reviewer AI off-host, con consenso esplicito (#123)
+
+È disponibile l'esecutore opzionale `src/runner/ai-review-execute.mjs`: il Code Reviewer esporta la **snapshot realmente passata ai test** dalla GET actor-only pre-submit (#120), poi può far eseguire a un provider OpenAI-compatible una revisione tramite HTTPS da una macchina esterna, **solo se autorizza esplicitamente l'invio dei file**. La risposta JSON è validata come rapporto strutturato #116 e associata a una ricevuta Ed25519 **firmata dall'operatore** e verificabile offline, non dal provider. Nessun segreto, prompt completo o sorgente è inserito nella ricevuta. Non modifica il DAG né approva la review automaticamente; il proprietario e l'approvatore indipendente continuano a usare i gate esistenti. I token restituiti sono `provider_reported_unverified`, senza importi certi. Vedere [guida runner](docs/runner.md) e ADR 0077.

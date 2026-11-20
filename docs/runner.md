@@ -1288,3 +1288,40 @@ node src/runner/review-attest.mjs verify --bundle=review-bundle.json --receipt=r
 Il CLI accetta solo `sign` o `verify` con esattamente tre path, usa FD `O_NOFOLLOW` e controlla owner, nlink, dimensioni e permessi delle chiavi; `sign` crea una receipt `0600` **senza sovrascrivere**. L'esito di successo è rispettivamente `REVIEW_INSPECTION_SIGNED` / `REVIEW_INSPECTION_VERIFIED`; ogni errore usa un messaggio generico senza sorgenti/chiavi. Il verificatore deve **distribuire e verificare in modo indipendente** la chiave pubblica (non fidarsi di un PEM fornito insieme alla ricevuta da un server non attendibile). Richiede sia la ricevuta sia lo stesso pacchetto originale; cambiare una singola riga del rapporto o un file, anche ricalcolando tutti gli SHA lato server, rende inutilizzabile la firma precedente.
 
 **Limitazione di trust:** la firma prova soltanto l'impegno del titolare della chiave sui byte presentati, non l'origine autentica del server prima della firma, la lettura effettiva, la qualità della review, l'esecuzione AI né un costo/billing certificato. Il server non importa la receipt e **non** la usa per `review_approve` o per sbloccare release: i gate manuali continuano separatamente. Non spedire il bundle o la private key a provider AI; #113/#109/#105 ancora da completare.
+
+
+## Eseguire una AI Code Review prima della submission (off-host, #123)
+
+**Prerequisiti:** un job Tester già passato con prova verificata, una lease attiva per l'actor `code_reviewer` (#120), un provider esterno esplicitamente autorizzato a ricevere **il codice sorgente** e un dispositivo operativo separato dal runner. La Factory non invia autonomamente codice a provider terzi. Il documento generato **non** sblocca release: il flusso manuale successivo #116/#115 rimane obbligatorio.
+
+1. Usare l'API `GET /v1/agent-review-workspaces/<handoffId>/<taskId>` con la propria actor key (mai root/tenant Bearer), durante la lease corrente. Salvare la **risposta JSON integrale** in `review-workspace.json` su dispositivo off-host, con permessi 0600. Non usare la GET *post-submit* #119 come input: ha schema diverso.
+2. Verificare che i file non contengano segreti e che il provider scelto possa legalmente ricevere il codice. La CLI rifiuta la rete senza un flag di consenso esplicito. Si consiglia di tenere tutti i file seguenti **fuori dal repository**.
+3. Preparare su quel dispositivo `provider.key` con la sola API key (unica riga, 0600, non come argomento shell). Preparare una chiave Ed25519 **privata off-host** `review-private.pem` e la pubblica `review-trusted.pub`, separata da runner/Compose/GitHub. Esempio:
+
+```sh
+umask 077
+openssl genpkey -algorithm Ed25519 -out review-private.pem
+openssl pkey -in review-private.pem -pubout -out review-trusted.pub
+chmod 600 review-private.pem provider.key review-workspace.json
+chmod 644 review-trusted.pub
+node src/runner/ai-review-execute.mjs execute \
+  --workspace=review-workspace.json \
+  --provider-url=https://api.example.com/v1/chat/completions \
+  --model=your-review-model \
+  --api-key-file=provider.key \
+  --private-key=review-private.pem \
+  --out=ai-review-receipt.json \
+  --consent=send-source-to-provider
+node src/runner/ai-review-execute.mjs verify \
+  --workspace=review-workspace.json \
+  --receipt=ai-review-receipt.json \
+  --public-key=review-trusted.pub
+```
+
+I nomi `api.example.com` e `your-review-model` sono segnaposto: inserire il proprio **reale** endpoint HTTPS OpenAI-compatible e modello; il provider deve supportare `response_format:{type:"json_object"}`. Non includere password o query nella URL. `--consent=send-source-to-provider` autorizza l'invio del *mapping completo dei file* e richiede che l'operatore abbia valutato la privacy del provider. Il file di receipt viene **riservato con O_EXCL 0600 prima** della chiamata a pagamento per evitare doppie esecuzioni involontarie sul medesimo path. Se il processo si interrompe, il file può rimanere vuoto o incompleto: verificarlo e decidere **manualmente** se e come tentare nuovamente (il provider potrebbe aver addebitato la prima richiesta). Nessun retry automatico.
+
+Il prompt richiesto include il fingerprint e il digest della snapshot originale più i byte dei file. La risposta HTTPS viene accettata solo se 2xx, non rediretta, entro 64 KiB, con `choices[0].message.content` stringa che è JSON valido `{version:1,summary,recommendation,findings}` compatibile con la validazione di #116 (un massimo di 8 finding). La CLI imposta timeout 30s, non mostra nei log prompt, sorgenti, header/token o risposta grezza. Un campo `usage` assente/incoerente diventa `null`, non una stima.
+
+La receipt firmata contiene `statement.document` (il rapporto da **esaminare** e, se accettato, depositare separatamente nell'API `POST /v1/agent-review-artifacts` dal Reviewer in lease attiva), `sourceDigest`, `sourceFingerprint`, `generation`, SHA256 del workspace/request/response, modello richiesto e host dichiarato. **Non** contiene codice sorgente completo, chiavi API o request/response raw; il testo di review potrebbe tuttavia menzionare frammenti del codice, quindi resta materiale riservato. `verify` usa un public key PEM già riconosciuto indipendentemente, la snapshot originale e il documento firmato. Restituisce soltanto il marker `AI_REVIEW_OPERATOR_RECEIPT_VERIFIED` se firma e vincoli interni corrispondono.
+
+**Confine di fiducia:** la firma è di un **operatore locale**, non del provider API. Attesta che l'operatore ha prodotto e firmato una *dichiarazione di risposta HTTP osservata*; non prova crittograficamente che il provider abbia eseguito il modello né fornisce fattura o consumi riconciliati. La risposta mockata in CI verifica la logica, **non** un provider live o addebiti. Il report non approva automaticamente nulla: il Reviewer deve stage/submit e l'approvatore indipendente deve ispezionare e decidere secondo #115/#116/#118. Né `executions` né `budgetUnits` vengono modificati. #113/#109/#105 restano aperte per prove provider e accounting riconciliato.

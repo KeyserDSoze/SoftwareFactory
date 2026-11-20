@@ -1,0 +1,21 @@
+# ADR 0077 — Code Reviewer off-host con consenso e receipt firmata dall'operatore
+
+**Data:** 2026-11-20  
+**Issue:** #123 (sottoissue #113/#109)  
+**Stato:** accepted come esecuzione HTTP opt-in lato operatore; NON come attestazione del provider.
+
+## Problema
+
+Il Code Reviewer di SoftwareFactory dispone da #120 di file realmente testati consultabili nella lease e da #122 di una firma offline del rapporto dopo submit. Manca tuttavia un percorso *eseguibile* per proporre davvero una review via modello esterno, con consenso alla diffusione del codice, report strutturato che rispetti la custodia #116, e un artefatto che vincoli le osservazioni di trasporto senza dichiarare un'inesistente esecuzione certificata dal provider.
+
+## Decisione
+
+Introdurre \`src/runner/ai-review-execute.mjs\` per l'**host separato dell'operatore**, non importato dalla API runner e senza Docker socket. Prende il JSON **pre-submit** di \`GET /v1/agent-review-workspaces/:handoffId/:taskId\`. Verifica schema rigoroso, file canonici su allowlist, byte count e source-only SHA256 di #114, context fingerprint sintattico e generation valida; **questo non verifica da solo la veridicità originaria della fonte**. Il consenso \`--consent=send-source-to-provider\` è obbligatorio prima di chiamare il provider HTTPS OpenAI-compatible esplicitamente scelto; niente URL HTTP, IP/localhost, secret/query/fragment, redirect o porte non standard, timeout 30s e massimo 64 KiB risposta. Le credenziali provider e chiave Ed25519 operatore vengono aperte con gli stessi FD sicuri e owner-only di \`attest.mjs\`. Si avverte che DNS e operatore restano parti del trust boundary; URL non costituisce un'allowlist provider indipendente.
+
+Il modello vede i file come dati non attendibili e deve restituire un documento JSON \`validateReviewDocument\` #116 con raccomandazione \`approve\` o \`changes_requested\`. Qualsiasi errore di rete, schema o dimensione genera failure **senza un falso output o attestazione**. L'osservazione \`softwarefactory.ai-review.observed.v1\` vincola, con firma Ed25519 dell'operatore esterno, \`handoffId/taskId/generation/sourceFingerprint/sourceDigest/workspaceSha256\`, SHA della richiesta completa (contenente il codice), SHA dei bytes JSON ricevuti, hash endpoint, host, modello richiesto e documento revisionabile. I soli contatori usage coerenti sono marcati \`provider_reported_unverified\` oppure null. Non includere codice in chiaro, full prompt, raw provider response, API key, prezzo o quota monetaria nella receipt. Il testo del documento può contenere citazioni, da trattare come riservate. \`verify\` controlla la firma contro una chiave pubblica **pinned indipendentemente** e ricalcola SHA della richiesta da workspace+modello. Il file out è O_EXCL 0600 **riservato prima della chiamata** e mantenuto in caso di crash/errore per non nascondere un possibile consumo fatturabile; nessun retry automatico.
+
+Il CLI **non** chiama \`review_submit\`, \`review_approve\`, \`release\` o \`apply\`; per completare il workflow l'actor owner deve depositare il documento con la sua lease live, e un approvatore indipendente deve controllare i file e decidere manualmente. La receipt non entra nel journal DAG e non altera \`executions\`, budget o billing.
+
+## Tradeoff e limiti di trust
+
+L'esecutore effettua davvero un POST HTTPS quando l'utente lo avvia con credenziali e consenso; i test CI usano un trasporto simulato e **non dimostrano alcuna interazione live** con OpenAI o provider terzi. La firma è un'**attestazione di osservazione dell'operatore**, non una risposta autenticata o firmata dal provider: un operatore compromesso/malevolo può costruire autonomamente un documento credibile e firmarlo. Provider hostname e modelli presenti nella receipt sono dichiarazioni dell'operatore; TLS non è una invoice. Il provider può fatturare chiamate che timeout/failure rendono incompleti per il CLI; non effettuare retry automatici o addebitare budget consuntivo da \`usage\` non verificata. Per #113/#109/#105 servono ancora attestation del provider indipendente, controllo anti-replay e policy che leghi exection autenticata e reviewer indipendente. La privacy del codice inviato non è garantita dalla firma e richiede autorizzazione esplicita.

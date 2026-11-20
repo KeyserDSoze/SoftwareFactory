@@ -978,3 +978,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] CLI `review-attest.mjs` off-host con firma/validazione Ed25519 di bundle report + source file map verificata: recompute di digest stored report, source-only SHA, ids/fingerprint, dimensioni e contenuto completo canonico. PEM privato mai sul runner, trust anchor pubblico pinned; file FD nofollow/UID/nlink/mode/size, ricevuta write-once.
 - [x] Test Node su due API e tenant segregati, signature tamper source/doc/recomputed hashes, chiavi false/non-Ed25519, CLI symlink/hardlink/writable-key e receipt già esistente. ADR 0076.
 - [ ] Una firma del pacchetto presentato **non** prova che signer abbia davvero letto i file, che l'host runner fosse onesto quando li ha prodotti, né che un LLM li abbia recensiti. Integrare attestazione di esecuzione e binding provider receipt/off-host nel gate #113/#109/#105. Non chiudere quelle epic.
+
+
+## Esecuzione Code Reviewer off-host con osservazione firmata (#123 — 20 novembre 2026)
+
+- [x] CLI `ai-review-execute.mjs` su macchina operatore, snapshot Tester pre-review #120 con SHA/fileCount/bytes/canonical path ricontrollati, consenso esplicito `--consent=send-source-to-provider` **prima** di un HTTP POST. TLS only, no IP/localhost/plain HTTP/redirect/query/credenziali URL, timeout/body bounded, secret da FD owner-only.
+- [x] JSON di review validato tramite la custodia #116, risposta modellistica non promossa automaticamente; receipt `operator_observed_http_response_unverified` Ed25519 off-host con digest request/response e workspace, source fingerprint, generation/modello/host, usage dichiarata nullable e nessun costo. Output write-once 0600/nessun retry automatico; `verify` con trust key pinned non fa rete.
+- [x] Test Node con fetch simulato (nessuna chiamata pagata in CI), consenso/invalid snapshot/response, tamper/replay, usage non verificata e file-permission checks; ADR 0077 e docs.
+- [ ] Provider che esegue davvero il modello, billing certificato, firma del **provider** e integrazione dell'attestazione remota nel gate della review rimangono non verificati: #113/#109/#105 continuano aperte. La firma certifica solo **la dichiarazione dell'operatore**.
