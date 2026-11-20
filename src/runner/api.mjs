@@ -10,6 +10,7 @@ import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
 import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, mutateAgentTaskCheckpoint, mutateAgentTaskReview,
   stageAgentReviewArtifact, getAgentReviewArtifact, getAgentReviewSources,
+  getAgentReviewWorkspace,
   verifyAgentTestTask, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
 import { loadAgentActorsFile, authenticateAgentActor, reauthorizeAgentActor } from "./agent-actors.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
@@ -128,10 +129,11 @@ export function createRunnerServer({
     const agentArtifactStageRoute = req.url === "/v1/agent-review-artifacts";
     const agentArtifactFetchRoute = /^\/v1\/agent-review-artifacts\/([a-f0-9-]{36})$/.exec(req.url || "");
     const agentSourceFetchRoute = /^\/v1\/agent-review-sources\/([a-f0-9-]{36})$/.exec(req.url || "");
+    const agentWorkspaceRoute = /^\/v1\/agent-review-workspaces\/([a-f0-9-]{36})\/([a-z][a-z0-9-]{1,31})$/.exec(req.url || "");
     const agentMutationRoute = agentLeaseRoute || agentCheckpointRoute ||
       agentTestRoute || agentReviewRoute ||
       agentArtifactStageRoute || Boolean(agentArtifactFetchRoute) ||
-      Boolean(agentSourceFetchRoute);
+      Boolean(agentSourceFetchRoute) || Boolean(agentWorkspaceRoute);
     if (agentMutationRoute && !agentActorsFile) {
       send(503, { error: "agent_auth_unconfigured" }); return;
     }
@@ -518,6 +520,32 @@ export function createRunnerServer({
         else if(error.code==="ACTOR_AUTH_UNAVAILABLE")
           send(503,{error:"agent_auth_unavailable"});
         else send(500,{error:"internal_error"});
+      }
+      return;
+    }
+    // Pre-submission source workspace: only the Code Reviewer holding a
+    // live fenced task lease, never an approver or the runner/tenant bearer.
+    if(req.method==="GET" && agentWorkspaceRoute) {
+      try {
+        const result=await getAgentReviewWorkspace({
+          dataDir,handoffId:agentWorkspaceRoute[1],
+          taskId:agentWorkspaceRoute[2],actor:actorPrincipal,
+          reauthorize:reauthorizeActorMutation,waitMs:admissionWaitMs,
+        });
+        send(200,result);
+      } catch(error) {
+        if(["HANDOFF_NOT_FOUND","HANDOFF_INTEGRITY","HANDOFF_REVIEW_EVIDENCE",
+          "HANDOFF_TEST_EVIDENCE","REVIEW_ARTIFACT_MISSING",
+          "REVIEW_ARTIFACT_INTEGRITY","ENOENT"].includes(error.code))
+          send(404,{error:"not_found"});
+        else if(error.code==="ACTOR_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if(error.code==="ACTOR_AUTH_UNAVAILABLE")
+          send(503,{error:"agent_auth_unavailable"});
+        else if(error.code==="ADMISSION_BUSY") {
+          res.writeHead(503,{...headers,"Retry-After":"2"});
+          res.end(JSON.stringify({error:"admission_busy"}));
+        } else send(500,{error:"internal_error"});
       }
       return;
     }
