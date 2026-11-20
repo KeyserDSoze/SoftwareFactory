@@ -101,7 +101,13 @@ export async function publicProviderHttpsPost({
         !Number.isInteger(deadlineMs) || deadlineMs<1 ||
         deadlineMs>DEADLINE_MS)
       throw fail();
-    const signal=AbortSignal.timeout(deadlineMs);
+    // A ref'ed timer is needed for a DNS resolver that never settles:
+    // AbortSignal.timeout() is unref'ed, so Node might otherwise exit with
+    // an uncompleted promise instead of enforcing the promised deadline.
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),deadlineMs);
+    const signal=controller.signal;
+    try {
     const answers=await beforeDeadline(
       Promise.resolve().then(()=>resolveA(url.hostname)),signal);
     if(!Array.isArray(answers) || answers.length<1 ||
@@ -130,5 +136,6 @@ export async function publicProviderHttpsPost({
     }),signal);
     if(signal.aborted)throw fail();
     return response;
+    } finally {clearTimeout(timer);}
   }catch {throw fail();}
 }
