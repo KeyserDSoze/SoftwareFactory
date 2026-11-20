@@ -334,7 +334,7 @@ describe("bounded provider HTTP JSON streaming #133", () => {
 
   it("counts actual decoded completion bytes when Content-Length is missing or lies", async () => {
     const onUsage = vi.fn();
-    for (const headers of [{}, { "content-length": "3" }]) {
+    for (const headers of [new Headers(), new Headers({ "content-length": "3" })]) {
       const stream = streaming([
         bytes(JSON.stringify(answer(usage))),
         large(4 * 1024 * 1024),

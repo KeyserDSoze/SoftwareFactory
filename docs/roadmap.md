@@ -1064,3 +1064,5 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Soglie byte prima del JSON parse per /chat/completions (4 MiB) e /models (512 KiB), con Content-Length solo precheck e stream length effettiva decisiva, annullamento read e no callback usage su errore. Mantenuti mock legacy `json()` con guard post-serializzazione.
 - [x] Regression Vitest su risposta streaming corretta, header >limite/invalido, stream chunked oversized senza/con header mendace, catalogo oversize, JSON/UTF8/stream error e no secret in errore. Nessun provider reale contattato.
 - [ ] Confermare Factory CI/Pages/Installer sullo SHA finale prima di chiudere #133. ADR 0087; #109/#113 restano aperte per vendor identity, billing e completamento effettivo.
+
+- [x] Prima CI #44743313679 interrotta da TS2345 nella fixture degli header per un union type inferito (possibile proprietà `undefined`); test corretto con oggetti `Headers` reali e ripetizione CI sul commit definitivo, senza alterare il parser streaming di produzione.
