@@ -259,13 +259,19 @@ test("HTTP evidence read retries only transient journal/report skew and always r
     assert.equal(reads, 2, "the first invalid read must be retried");
     assert.equal(retried.report.state, "running");
 
-    // Both HTTP GET routes use the same bounded retry on each API replica.
+    // Both HTTP GET routes must fail closed on a *lasting* journal/report
+    // skew and succeed after an actual worker-style atomic report rename.
+    // A 15ms setTimeout race used to restore the report in-place, which could
+    // exceed the bounded retry window on a busy CI host and cause false
+    // flakes without exercising the worker's actual atomicWrite contract.
+    // The unit-level retry test above already proves first-failure retries.
     for (let index = 0; index < 2; index++) {
-      await writeFile(reportPath, queued);
-      const restore = new Promise((resolve, reject) =>
-        setTimeout(() => writeFile(reportPath, running).then(resolve, reject), 15));
-      const response = await get(index, "/v1/jobs/" + id + (index === 0 ? "" : "/evidence"));
-      await restore;
+      await atomicWrite(reportPath, JSON.parse(queued));
+      const route = "/v1/jobs/" + id + (index === 0 ? "" : "/evidence");
+      assert.equal((await get(index, route)).status, 409,
+        "a persistently stale report must not yield a false success");
+      await atomicWrite(reportPath, JSON.parse(running));
+      const response = await get(index, route);
       assert.equal(response.status, 200);
       const body = await response.json();
       if (index === 0) assert.equal(body.state, "running");
