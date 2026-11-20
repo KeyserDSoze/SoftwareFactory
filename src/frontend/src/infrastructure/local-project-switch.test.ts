@@ -57,6 +57,10 @@ describe("project switch pre-consent snapshot pinning #136", () => {
   it("detects mutation between the initial snapshot and initial validation read", () => {
     const original = project("Before first read");
     persistProject(original);
+    // The authoritative slot commit now includes an exact getItem readback.
+    // Reset the read counter BEFORE injecting the concurrent edit, so read
+    // #2 still means the second read of prepareLocalProjectSwitch().
+    activeGets = 0;
     const updated = otherVersion(original, "Concurrent first read");
     const key = PREFIX + original.id;
     let didChange = false;

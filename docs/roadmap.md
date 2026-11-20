@@ -1097,3 +1097,5 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Il commit dello slot per-progetto è confermato da readback prima di aggiornare indice/legacy pointer/session pointer. Quota del vero slot e silent adapter falliscono chiusi; quota di metadati ricostruibili non trasforma un salvataggio confermato in errore, e la selezione per-tab viene tentata sempre.
 - [x] Test Vitest simulati di overflow esatto, quota, silent-write, invalid shape, cache separate/bloccate e CAS stale; niente profili cloud/PAT live. ADR 0091.
 - [ ] Verificare Factory CI/Pages/Installer sullo stesso SHA main e chiudere #137 solo con prove. #92/#91 aperte per transazioni IndexedDB, veri dispositivi/provider e security acceptance.
+
+- [x] Prima Factory CI #44814795070: 192/193 unit frontend passati, fallita solo una fixture preesistente #136 che contava le letture globali dal setup. Il nuovo readback esatto dello slot aggiunge una lettura: `activeGets=0` prima di iniettare la race riattiva la simulazione sulla seconda lettura dell'operazione, senza cambiare i guard di produzione. CI completa ripetuta sul fix.
