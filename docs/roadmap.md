@@ -1007,3 +1007,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Riprodurre e correggere il gap di cleanup per status non-2xx e `Content-Length` invalido/oltre 64KiB: chiamare `IncomingMessage.destroy()` anche prima di leggere il body, continuando a negare overflow, troncamenti e fallimenti TLS senza retry.
 - [x] Aggiungere test Node con risposta ostile che resta in attesa e verifica esplicita che lo stream sia distrutto, senza traffico verso provider reali; conservare DNS A pinned e deadline unica della #125.
 - [ ] Registrare esiti Factory CI, Pages e Installer sullo SHA finale di main prima di chiudere #126. La firma operatore non equivale a provider attestation; #113/#109/#105 rimangono aperte. ADR 0080.
+
+
+## Completion envelope strettamente verificata per l'AI Reviewer (#127 — 20/11/2026)
+
+- [x] Nel client off-host, accettare solo una scelta `assistant` con `finish_reason:"stop"`; il JSON in `content` non deve bastare per una risposta che dichiara truncation/content filtering/rifiuto/tool call. Nessuna firma o replay automatico per risposta invalida.
+- [x] Regression Node con HTTP mockato su finish reason, ruolo, refusal, tool calls e cardinalità, senza chiamate live; preservare v1 delle ricevute storiche e gate manuale.
+- [ ] Verificare Factory CI/Pages/Installer sul commit finale di `main`, registrare risultato nella #127 prima della chiusura. ADR 0081. #113/#109/#105 rimangono aperte.

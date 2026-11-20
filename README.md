@@ -795,3 +795,8 @@ Dopo la submission di un rapporto Code Reviewer, un `review_approver` autorizzat
 ### Protezione DNS del Code Reviewer off-host (#125)
 
 La CLI con consenso `ai-review-execute` ora risolve il nome del provider **prima di aprire la connessione**, nega tutti gli indirizzi IPv4 special-use/non pubblici (inclusi insiemi misti DNS pubblico/privato) e **fissa un IPv4 validato alla stessa socket TLS** con verifica del certificato sul nome originario. Non segue redirect e non fa un secondo DNS lookup non verificato. Per questa fase richiede che il provider abbia un record A IPv4 pubblico; provider IPv6-only non sono supportati. Non è un certificato dell'identità commerciale del provider né una prova della sua fatturazione: verificare sempre provider/contratto prima di autorizzare il trasferimento di codice. [ADR 0079](adr/0079-public-ipv4-pinned-ai-review-egress.md).
+
+
+### Gate di completamento della risposta AI Reviewer (#127)
+
+Prima di firmare l'osservazione HTTP, la CLI `ai-review-execute` richiede una sola risposta `choices[0]` da un messaggio `assistant` e `finish_reason: "stop"`, senza rifiuto o chiamata a tool. Anche un JSON valido con `finish_reason:"length"` o `"content_filter"` è rifiutato senza retry. La ricevuta precedente mantiene lo stesso formato ed è solo un'osservazione firmata dall'operatore, non una garanzia del provider o un'approvazione della review. [ADR 0081](adr/0081-ai-review-completion-envelope-gate.md).

@@ -985,3 +985,8 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 ## Rifiuto HTTPS con chiusura stream (#126)
 
 - In `provider-egress.mjs`, rifiutare status non-2xx, header di lunghezza invalidi/eccessivi e body non conforme **dentro una catch che chiama `IncomingMessage.destroy()`**. Non lasciare una socket viva quando viene cancellato il timer deadline dopo un rifiuto precoce. Errore pubblico generico, niente retry automatici né logging dei contenuti. Testare anche il peer che non chiude lo stream. ADR 0080, #113/#109/#105 restano aperte.
+
+
+## Risposte complete della AI review (#127)
+
+- `ai-review-execute.mjs` deve firmare solo una choice OpenAI-compatible con `finish_reason:"stop"`, `message.role:"assistant"`, `content` JSON valido e nessun rifiuto/tool-call attivo. JSON sintatticamente valido con `finish_reason:"length"` o `"content_filter"` non è una review conclusa. Controllare anche cardinalità della choice, ruoli, refusal, tool_calls e function_call; errore pubblico generico, zero retry automatici. Non riscrivere ricevute v1 precedenti né trasformare il flag del provider in prova crittografica. ADR 0081, issue #127; #113/#109/#105 restano aperte.

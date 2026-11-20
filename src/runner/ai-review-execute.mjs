@@ -95,6 +95,31 @@ export function buildReviewRequest(workspace,model) {
   };
   return {requestBody:JSON.stringify(body),checked};
 }
+/** A well-formed JSON document is NOT sufficient when the server itself
+ * reports a truncated, filtered, refused or tool-routed completion.
+ * This checks only the declared HTTP envelope; it does not attest a vendor.
+ */
+function completedReviewContent(envelope) {
+  if(!envelope || typeof envelope!=="object" ||
+      Array.isArray(envelope) || !Array.isArray(envelope.choices) ||
+      envelope.choices.length!==1)
+    throw fail();
+  const choice=envelope.choices[0],message=choice?.message;
+  if(!choice || typeof choice!=="object" || Array.isArray(choice) ||
+      choice.finish_reason!=="stop" ||
+      !message || typeof message!=="object" || Array.isArray(message) ||
+      message.role!=="assistant" ||
+      message.refusal!==undefined && message.refusal!==null ||
+      message.tool_calls!==undefined && message.tool_calls!==null ||
+      message.function_call!==undefined && message.function_call!==null)
+    throw fail();
+  const content=message.content;
+  if(typeof content!=="string" || content.length<2 ||
+      Buffer.byteLength(content,"utf8")>8192 ||
+      content.trim()!==content)
+    throw fail();
+  return content;
+}
 function usageFromResponse(usage) {
   if(!exact(usage,["prompt_tokens","completion_tokens","total_tokens"]) &&
       !(usage && typeof usage==="object" && !Array.isArray(usage) &&
@@ -224,9 +249,7 @@ export async function executeAiReview({
     });
     const raw=await readLimitedResponse(response);
     const envelope=JSON.parse(raw);
-    const content=envelope?.choices?.[0]?.message?.content;
-    if(typeof content!=="string" || content.length>8192 ||
-        content.trim()!==content) throw fail();
+    const content=completedReviewContent(envelope);
     const document=JSON.parse(content);
     validateReviewDocument(document);
     const statement={version:1,context:CONTEXT,assurance:ASSURANCE,

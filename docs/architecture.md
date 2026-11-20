@@ -601,3 +601,8 @@ Il read HTTP del journal e del report runner usa `verifyJobEvidenceForRead`: ric
 ### Egress HTTPS source-aware con DNS A pinned (#125)
 
 Il processo Code Reviewer off-host #123 non usa più `fetch` per le sue chiamate reali. `provider-egress.mjs` compone: endpoint HTTPS valido senza token/redirect, record A risolti e **tutti** verificati come IPv4 pubblico, selezione di un indirizzo A, `https.request` con callback `lookup` che restituisce **esattamente l'IP convalidato**, TLS SNI e hostname verification obbligatori, `agent:false` per non condividere socket, timeout dall'inizio del lookup, corpo risposta limitato. Se qualunque record DNS è privato/reserved o se il provider dispone solo di AAAA, fallisce prima dell'invio di sorgenti o Bearer. Questo riduce il rischio di DNS rebinding/SSRF, non autentica l'azienda provider, non esegue DNSSEC e non attesta costi o review AI. `fetchImpl` è rimasto solo per il test di trasporto mockato della libreria, non è un flag CLI. ADR 0079.
+
+
+### Gate di completamento nel trasporto off-host del Code Reviewer (#127)
+
+Prima di emettere la receipt Ed25519 dell'operatore, `ai-review-execute.mjs` verifica la struttura minima dell'envelope `/chat/completions`: `choices` deve contenere esattamente una entry con `finish_reason:"stop"`, il messaggio deve essere `assistant`, `content` deve contenere un `ReviewDocument` strutturato validato e non devono esserci `refusal`/tool calls. Rifiutare in particolare un JSON sintatticamente valido ma dichiarato troncato/filtrato. Il server remoto può sempre mentire sui metadata: questo è un controllo di coerenza, non una provider attestation, un consuntivo economico o una decisione di approvazione. Nessun cambio al v1 dei digest/receipt. ADR 0081.

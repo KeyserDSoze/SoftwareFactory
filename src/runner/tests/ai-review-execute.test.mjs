@@ -34,7 +34,8 @@ const workspace=()=>{
 };
 const responsePayload=(doc=document(),usage={
   prompt_tokens:123,completion_tokens:45,total_tokens:168,
-})=>({choices:[{message:{content:JSON.stringify(doc)}}],
+})=>({choices:[{finish_reason:"stop",
+    message:{role:"assistant",content:JSON.stringify(doc)}}],
   usage,model:"provider-self-reported-model"});
 const mockFetch=(payload=responsePayload(),status=200,tracker={})=>
   async (url,options)=>{
@@ -159,6 +160,50 @@ test("HTTP failures, redirect, timeout, oversized response and invalid model con
     })}}]}),
   ])await assert.rejects(execute(ws,{fetchImpl}),
     {code:"AI_REVIEW_INVALID"});
+});
+
+test("only a single normally finished assistant answer can be signed",async()=>{
+  const ws=workspace(),{privateKey,publicKey}=pair(),good=responsePayload();
+  const receipt=await execute(ws,{privateKey,fetchImpl:mockFetch(good)});
+  assert.equal(verifyAiReviewReceipt(ws,receipt,publicKey).verified,true);
+  // A document can be syntactically complete even when the remote server
+  // declares it was cut off or filtered. Never sign it as a completed review.
+  for(const alter of [
+    x=>{x.choices[0].finish_reason="length";},
+    x=>{x.choices[0].finish_reason="content_filter";},
+    x=>{x.choices[0].finish_reason="tool_calls";},
+    x=>{x.choices[0].finish_reason=null;},
+    x=>{delete x.choices[0].finish_reason;},
+    x=>{x.choices[0].finish_reason="function_call";},
+    x=>{x.choices[0].message.role="tool";},
+    x=>{x.choices[0].message.role="user";},
+    x=>{delete x.choices[0].message.role;},
+    x=>{x.choices[0].message.refusal="I cannot review this code";},
+    x=>{x.choices[0].message.tool_calls=[{id:"call_1"}];},
+    x=>{x.choices[0].message.function_call={name:"review"};},
+    x=>{x.choices.push(structuredClone(x.choices[0]));},
+    x=>{x.choices=[];},
+    x=>{delete x.choices;},
+    x=>{x.choices[0].message.content=[{type:"text",text:"forged"}];},
+    x=>{x.choices[0].message.content=null;},
+  ]){
+    let calls=0;
+    const payload=mutate(good,alter);
+    const mock=mockFetch(payload,200,{});
+    await assert.rejects(execute(ws,{privateKey,fetchImpl:async (...args)=>{
+      calls++;
+      return mock(...args);
+    }}),{code:"AI_REVIEW_INVALID"});
+    assert.equal(calls,1,"do not retry a possibly paid completion");
+  }
+  // Some OpenAI-compatible backends include null (not active) tool fields.
+  const withNulls=mutate(good,p=>{
+    p.choices[0].message.refusal=null;
+    p.choices[0].message.tool_calls=null;
+    p.choices[0].message.function_call=null;
+  });
+  const valid=await execute(ws,{privateKey,fetchImpl:mockFetch(withNulls)});
+  assert.equal(verifyAiReviewReceipt(ws,valid,publicKey).verified,true);
 });
 
 test("missing, inconsistent, false or extreme usage is never estimated as cost",async()=>{
