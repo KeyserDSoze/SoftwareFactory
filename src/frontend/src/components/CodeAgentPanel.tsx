@@ -15,6 +15,8 @@ import type { RunnerReport } from "../infrastructure/runner";
 import { fetchRunnerJob, verifyCurrentRunnerReport } from "../infrastructure/runner";
 import { beginOrResumeRepair, recordVerifiedRepairApproval, repairPaths, operatorRepairKey } from "../infrastructure/repair-coordinator";
 import { readSecret } from "../infrastructure/store";
+import { formatProviderReportedUsage } from "../infrastructure/ai";
+import type { AiUsageListener, AiUsageObservation } from "../infrastructure/ai";
 
 type Props = {
   project: FactoryProject;
@@ -31,6 +33,12 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
   const [activePath, setActivePath] = useState("");
   const [view, setView] = useState<"diff" | "old" | "new">("diff");
   const [phase, setPhase] = useState("");
+  // Volatile UI only: last provider-reported counters are not billable proof.
+  const [usage, setUsage] = useState<{
+    task: string; receipt: AiUsageObservation;
+  } | null>(null);
+  const observeUsage = (task: string): AiUsageListener =>
+    receipt => setUsage({ task, receipt });
   const [testBackend, setTestBackend] = useState<"server" | "actions">("server");
   const abortRef = useRef<AbortController | null>(null);
   const projectRef = useRef(project);
@@ -55,9 +63,11 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
   async function generate() {
     if (busy || !ready || !request.trim()) return;
     const starting = projectRef.current, controller = new AbortController();
-    abortRef.current = controller; setPhase("Generazione della patch"); onBusy(true, "Code Agent: generazione");
+    abortRef.current = controller; setUsage(null);
+    setPhase("Generazione della patch"); onBusy(true, "Code Agent: generazione");
     try {
-      const raw = await proposeCode(starting, settings, request.trim(), controller.signal);
+      const raw = await proposeCode(starting, settings, request.trim(), controller.signal,
+        observeUsage("Generazione"));
       if (controller.signal.aborted) return;
       if (projectRef.current.updatedAt !== starting.updatedAt)
         throw new Error("Il progetto è cambiato durante la generazione. Riprova.");
@@ -69,7 +79,9 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
       setPhase("Adversarial review indipendente");
       onBusy(true, "Code Agent: adversarial review");
       try {
-        const review = await reviewCode(staged, settings, proposal, controller.signal);
+        setUsage(null);
+        const review = await reviewCode(staged, settings, proposal, controller.signal,
+          observeUsage("Review"));
         if (controller.signal.aborted) return;
         update(saveReview(projectRef.current, proposal.id, review));
         onNotice(review.verdict === "pass"
@@ -84,9 +96,11 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
   async function reviewAgain() {
     if (!pending || busy) return;
     const controller = new AbortController();
-    abortRef.current = controller; onBusy(true, "Code Agent: review"); setPhase("Adversarial review");
+    abortRef.current = controller; setUsage(null);
+    onBusy(true, "Code Agent: review"); setPhase("Adversarial review");
     try {
-      const review = await reviewCode(projectRef.current, settings, pending, controller.signal);
+      const review = await reviewCode(projectRef.current, settings, pending, controller.signal,
+        observeUsage("Review"));
       if (!controller.signal.aborted) {
         update(saveReview(projectRef.current, pending.id, review));
         onNotice(review.verdict === "pass" ? "Review superata: applica solo dopo aver verificato i file." : "Review bloccante: correggi la richiesta e rigenera.");
@@ -115,6 +129,7 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
     }
     const controller = new AbortController();
     abortRef.current = controller;
+    setUsage(null);
     setPhase("Rivalidazione delle evidenze fallite sul runner");
     onBusy(true, "Code Agent: repair supervisionato");
     try {
@@ -136,7 +151,8 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
           projectRef.current.development?.pending?.id !== original.id)
         throw new Error("Workspace modificato durante la sincronizzazione dei checkpoint.");
       setPhase("Correzione AI guidata da errori reali del test");
-      const raw = await proposeCodeRepair(originalProject, settings, original, latest, controller.signal);
+      const raw = await proposeCodeRepair(originalProject, settings, original, latest,
+        controller.signal, observeUsage("Repair"));
       if (controller.signal.aborted) return;
       if (projectRef.current.updatedAt !== originalProject.updatedAt ||
           projectRef.current.development?.pending?.id !== original.id)
@@ -150,7 +166,9 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
       setPhase("Adversarial review indipendente dopo il repair");
       try {
         const patch = revised.development!.pending!;
-        const review = await reviewCode(revised, settings, patch, controller.signal);
+        setUsage(null);
+        const review = await reviewCode(revised, settings, patch,
+          controller.signal, observeUsage("Review post-repair"));
         if (controller.signal.aborted) return;
         if (projectRef.current.development?.pending?.id !== patch.id)
           throw new Error("Patch modificata durante la review: esito rifiutato.");
@@ -251,6 +269,10 @@ export default function CodeAgentPanel({ project, settings, busy, onBusy, onProj
         </div></div>
       {remoteRepairId && <p className="helper">Checkpoint repair persistente: <code>{remoteRepairId.slice(0, 8)}…</code>. Le dichiarazioni di review e l'esito dei test vengono registrati sul runner al re-test e all'approvazione; nessuna modifica viene applicata automaticamente.</p>}
     {phase && <div className="code-agent-phase"><RefreshCw size={15} className="spinning" /> {phase}</div>}
+    {usage && <p className="helper" role="status">
+      {usage.task}: {formatProviderReportedUsage(usage.receipt)}
+      <span> Solo sessione browser; non è una fattura né una prova di esecuzione sul runner.</span>
+    </p>}
     </section>
     {pending && <section className="panel">
       <div className="panel-title"><div><div className="eyebrow">02 / PROPOSAL · NOT APPLIED</div><h3>{pending.summary}</h3></div>

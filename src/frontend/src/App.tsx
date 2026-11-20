@@ -21,7 +21,7 @@ import { commitStage, invalidateStages, runStage, stageReady } from "./applicati
 import { generateFiles } from "./application/scaffold";
 import { backupCloud, finishCloudLogin, restoreCloud, startCloudLogin,
   saveEncryptedRunnerVault, restoreEncryptedRunnerVault } from "./infrastructure/cloud";
-import { discoverAiModels } from "./infrastructure/ai";
+import { discoverAiModels, formatProviderReportedUsage } from "./infrastructure/ai";
 import { resolveGithubToken, readGithubHeadSha } from "./infrastructure/github";
 import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, assertGithubImportHead, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
@@ -392,6 +392,14 @@ export default function App() {
         const result = await runStage(working, settingsRef.current, id, controller.signal, sources => {
           // Sources are shown only once the stage completes; we do not publish intermediate unsourced claims.
           void sources;
+        }, receipt => {
+          // Session-only UI observation. Never count as an invoice or persist
+          // usage in the project, cloud backup, or GitHub exports.
+          if (controller.signal.aborted) return;
+          setRunLog(log => [
+            formatDate(new Date().toISOString()) + " · " + STAGES[i].label +
+              ": " + formatProviderReportedUsage(receipt), ...log,
+          ].slice(0, 30));
         });
         if (controller.signal.aborted) break;
         working = commitStage(working, id, result.output, result.sources);

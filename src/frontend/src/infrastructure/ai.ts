@@ -1,6 +1,49 @@
 import type { AiProfile } from "../domain/types";
 import type { ThinkingChoice } from "../domain/agent-roles";
 
+/** Values observed in a successful /chat/completions HTTP response.
+ * Neither the provider's accounting nor its price is independently verified.
+ * This object never contains prompts, secrets, response bodies or URLs.
+ */
+export interface AiUsageObservation {
+  readonly assurance: "provider_reported_unverified";
+  readonly profileId: string;
+  readonly requestedModel: string;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
+}
+export type AiUsageListener = (observation: AiUsageObservation) => void;
+const MAX_REPORTED_TOKENS = 1_000_000_000;
+function validTokens(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value >= 0 && value <= MAX_REPORTED_TOKENS;
+}
+/** No estimates if usage is absent, incomplete, inconsistent or oversized.
+ * Ignore extra provider-specific fields and arbitrary provider identifiers.
+ */
+export function parseProviderReportedUsage(
+  raw: unknown, profileId: string, requestedModel: string,
+): AiUsageObservation | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const usage = (raw as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const fields = usage as Record<string, unknown>;
+  const prompt = fields.prompt_tokens;
+  const completion = fields.completion_tokens;
+  const total = fields.total_tokens;
+  if (!validTokens(prompt) || !validTokens(completion) || !validTokens(total) ||
+      prompt + completion !== total) return null;
+  return {
+    assurance: "provider_reported_unverified",
+    profileId, requestedModel,
+    promptTokens: prompt, completionTokens: completion, totalTokens: total,
+  };
+}
+/** Label visibly distinguishes observed response fields from verified billing. */
+export function formatProviderReportedUsage(receipt: AiUsageObservation): string {
+  return `Token dichiarati dal provider (non verificati): input ${receipt.promptTokens}, output ${receipt.completionTokens}, totale ${receipt.totalTokens}. Nessun costo monetario certificato.`;
+}
 export class ProviderError extends Error {
   constructor(message: string) { super(message); this.name = "ProviderError"; }
 }
@@ -12,7 +55,9 @@ export function validateAiEndpoint(input: string): string {
   return url.href.replace(/\/$/, "");
 }
 export async function aiComplete(profile: AiProfile, apiKey: string, system: string, user: string,
-  signal?: AbortSignal, options?: { model?: string; thinking?: ThinkingChoice }): Promise<string> {
+  signal?: AbortSignal, options?: {
+    model?: string; thinking?: ThinkingChoice; onUsage?: AiUsageListener;
+  }): Promise<string> {
   const model = (options?.model ?? profile.model).trim();
   if (!model) throw new ProviderError("Configura il modello AI nelle Impostazioni.");
   const thinking = options?.thinking ?? profile.reasoningEffort;
@@ -33,6 +78,13 @@ export async function aiComplete(profile: AiProfile, apiKey: string, system: str
     throw new ProviderError("Il provider non ha restituito una risposta compatibile.");
   const text = (body.choices as Array<{ message?: { content?: unknown } }>)[0]?.message?.content;
   if (typeof text !== "string" || !text.trim()) throw new ProviderError("Il provider ha restituito una risposta vuota.");
+  // An optional in-memory observation follows only a successful, non-empty
+  // response. Third-party usage is a claim, not a signed bill or runner proof.
+  const observed = parseProviderReportedUsage(body, profile.id, model);
+  if (observed && !signal?.aborted) {
+    try { options?.onUsage?.(observed); }
+    catch { /* UI observers must never invalidate a completed AI response. */ }
+  }
   return text.trim();
 }
 

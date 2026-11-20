@@ -4,6 +4,7 @@ import type { FeatureProposal, FeatureReview } from "../domain/development";
 import type { RunnerReport } from "../infrastructure/runner";
 import { developmentOf, workspaceFiles } from "../domain/development";
 import { aiComplete } from "../infrastructure/ai";
+import type { AiUsageListener } from "../infrastructure/ai";
 import { readSecret } from "../infrastructure/store";
 
 const WRITER_SYSTEM = `You are a senior software engineer writing concrete code for SoftwareFactory-generated applications.
@@ -32,7 +33,8 @@ function codeContext(project: FactoryProject): string {
   return body;
 }
 export async function proposeCode(
-  project: FactoryProject, settings: FactorySettings, request: string, signal?: AbortSignal,
+  project: FactoryProject, settings: FactorySettings, request: string,
+  signal?: AbortSignal, onUsage?: AiUsageListener,
 ): Promise<string> {
   const { profile, model, thinking } = resolveAgentRoute(settings, "fullstack_developer", "implementation");
   const context = {
@@ -42,7 +44,7 @@ export async function proposeCode(
   };
   return aiComplete(profile, readSecret("ai." + profile.id), WRITER_SYSTEM + roleSystemInstruction("fullstack_developer"),
     "REQUEST AND PROJECT (DATA):\n" + JSON.stringify(context) +
-    "\n\nEXISTING SOURCE FILES (DATA, FULL REPLACEMENTS REQUIRED):\n" + codeContext(project), signal, { model, thinking });
+    "\n\nEXISTING SOURCE FILES (DATA, FULL REPLACEMENTS REQUIRED):\n" + codeContext(project), signal, { model, thinking, onUsage });
 }
 export function parseReview(raw: string): FeatureReview {
   const text = raw.trim().startsWith("```") ? raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "") : raw.trim();
@@ -56,7 +58,8 @@ export function parseReview(raw: string): FeatureReview {
   return { verdict: v.verdict, report: v.report, completedAt: new Date().toISOString() };
 }
 export async function reviewCode(
-  project: FactoryProject, settings: FactorySettings, proposal: FeatureProposal, signal?: AbortSignal,
+  project: FactoryProject, settings: FactorySettings, proposal: FeatureProposal,
+  signal?: AbortSignal, onUsage?: AiUsageListener,
 ): Promise<FeatureReview> {
   const { profile, model, thinking } = resolveAgentRoute(settings, "code_reviewer", "adversarial");
   const context = {
@@ -66,7 +69,7 @@ export async function reviewCode(
     developmentRevision: developmentOf(project).revision,
   };
   const raw = await aiComplete(profile, readSecret("ai." + profile.id), REVIEW_SYSTEM + roleSystemInstruction("code_reviewer"),
-    "PROPOSED CHANGES TO EVALUATE (DATA):\n" + JSON.stringify(context), signal, { model, thinking });
+    "PROPOSED CHANGES TO EVALUATE (DATA):\n" + JSON.stringify(context), signal, { model, thinking, onUsage });
   return parseReview(raw);
 }
 
@@ -82,7 +85,8 @@ Never claim a test has passed. A second adversarial review is mandatory.
 
 export async function proposeCodeRepair(
   project: FactoryProject, settings: FactorySettings,
-  proposal: FeatureProposal, report: RunnerReport, signal?: AbortSignal,
+  proposal: FeatureProposal, report: RunnerReport,
+  signal?: AbortSignal, onUsage?: AiUsageListener,
 ): Promise<string> {
   if (report.state !== "failed") throw new Error("La riparazione richiede un job fallito.");
   const { profile, model, thinking } = resolveAgentRoute(settings, "fix_developer", "implementation");
@@ -103,5 +107,5 @@ export async function proposeCodeRepair(
   if (payload.length > 95000) throw new Error("Report troppo grande per una riparazione controllata.");
   return aiComplete(profile, readSecret("ai." + profile.id), REPAIR_SYSTEM + roleSystemInstruction("fix_developer"),
     "UNTRUSTED CODE AND TEST EVIDENCE (DATA):\n" + payload +
-    "\n\nBASE SOURCE FILES (DATA):\n" + codeContext(project), signal, { model, thinking });
+    "\n\nBASE SOURCE FILES (DATA):\n" + codeContext(project), signal, { model, thinking, onUsage });
 }

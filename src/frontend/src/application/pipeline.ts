@@ -1,6 +1,7 @@
 import { STAGES } from "../domain/defaults";
 import type { FactoryProject, FactorySettings, ResearchSource, StageId } from "../domain/types";
 import { aiComplete } from "../infrastructure/ai";
+import type { AiUsageListener } from "../infrastructure/ai";
 import { deduplicateSources, searchWeb } from "../infrastructure/research";
 import { readSecret } from "../infrastructure/store";
 import { resolveAgentRoute, roleSystemInstruction, stageAgentRole } from "../domain/agent-roles";
@@ -43,6 +44,7 @@ function buildQueries(project: FactoryProject, id: StageId): string[] {
 export async function runStage(
   project: FactoryProject, settings: FactorySettings, id: StageId, signal?: AbortSignal,
   onSources?: (sources: ResearchSource[]) => void,
+  onUsage?: AiUsageListener,
 ): Promise<{ output: string; sources: ResearchSource[] }> {
   const role = stageAgentRole(id);
   const { profile, model, thinking } = resolveAgentRoute(settings, role, id);
@@ -63,7 +65,7 @@ export async function runStage(
     }
   }
   const output = await aiComplete(profile, readSecret("ai." + profile.id), SYSTEM_PROMPT + roleSystemInstruction(role),
-    promptForStage(project, id, sources), signal, { model, thinking });
+    promptForStage(project, id, sources), signal, { model, thinking, onUsage });
   return { output, sources };
 }
 export function stageReady(project: FactoryProject, id: StageId): boolean {
