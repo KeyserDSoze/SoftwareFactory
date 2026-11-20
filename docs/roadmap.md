@@ -986,3 +986,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] JSON di review validato tramite la custodia #116, risposta modellistica non promossa automaticamente; receipt `operator_observed_http_response_unverified` Ed25519 off-host con digest request/response e workspace, source fingerprint, generation/modello/host, usage dichiarata nullable e nessun costo. Output write-once 0600/nessun retry automatico; `verify` con trust key pinned non fa rete.
 - [x] Test Node con fetch simulato (nessuna chiamata pagata in CI), consenso/invalid snapshot/response, tamper/replay, usage non verificata e file-permission checks; ADR 0077 e docs.
 - [ ] Provider che esegue davvero il modello, billing certificato, firma del **provider** e integrazione dell'attestazione remota nel gate della review rimangono non verificati: #113/#109/#105 continuano aperte. La firma certifica solo **la dichiarazione dell'operatore**.
+
+
+## Stabilizzazione test journal HTTP skew con atomic rename (#124 — 20/11/2026)
+
+- [x] Riproduzione osservata nel job [Factory CI #44702451226](https://github.com/KeyserDSoze/SoftwareFactory/actions/runs/44702451226): 356/357 Node runner, preesistente test `runner.test.mjs` HTTP GET ha ricevuto 409 anziché 200 mentre un timer 15ms riscriveva il report in-place.
+- [x] Rimuovere il timer flaky e simulare il writer reale tramite `atomicWrite`: prove HTTP 409 su journal/report persistentemente discordanti, poi 200 dopo restore atomico sulle due API. La verifica `retryEvidenceRead` di retry su primo invalid e di rifiuto della corruzione permanente/missing resta obbligatoria.
+- [ ] Test CI completi sul commit definitivo #124 e due esecuzioni same SHA se necessarie; nessuna modifica della logica di integrità o quota reale. ADR 0078.
