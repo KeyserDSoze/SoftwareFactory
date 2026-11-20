@@ -1039,3 +1039,5 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Registrare prove Factory CI, Pages e Installer sullo SHA finale prima di chiudere #130. Non confondere firma con una fattura e non chiudere #113/#109/#105 senza supporto provider reale, identità certificata e reconciliation. ADR 0084.
 
 - [x] La prima Factory CI #44726315801 ha trovato il parser della CLI che respingeva il flag alfanumerico `--expected-provider-key-sha256`; correzione con regex che ammette cifre **ma mantiene l'allowlist stretta** e regressioni di flag sconosciuti/duplicati e digest invalido, da verificare sulla CI del commit definitivo. Documentare il fallimento iniziale sulla #130, niente bypass del gate.
+
+- [x] Nel run #44726726444 il test di hardlink lasciava volutamente `nlink=2` anche per i check di chmod e provider ID successivi, mascherandone la causa del rifiuto. Aggiunta prova fail-closed su entrambe le path, unlink sicuro e **readback positivo** prima degli altri casi; rieseguire tutta la CI senza indebolire `readAttestationFile`.

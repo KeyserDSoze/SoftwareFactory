@@ -174,6 +174,11 @@ test("CLI verifies only with pinned public key files, no remote calls, and rejec
     await link(fs["delivery-evidence"],hard);
     await assert.rejects(main(args.map(a=>a.startsWith("--delivery-evidence=")?
       "--delivery-evidence="+hard:a)),{code:"ATTESTATION_INVALID"});
+    // Both names point to a two-link inode; prove fail-closed, then remove
+    // the hardlink before testing other, independent security boundaries.
+    await assert.rejects(main(args),{code:"ATTESTATION_INVALID"});
+    await rm(hard);
+    assert.equal((await main(args)).verified,true);
     await chmod(fs["provider-public-key"],0o666);
     await assert.rejects(main(args),{code:"ATTESTATION_INVALID"});
     await chmod(fs["provider-public-key"],0o644);
