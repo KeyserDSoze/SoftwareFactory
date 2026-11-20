@@ -1049,3 +1049,115 @@ test("review rejection revocation while waiting for shared lock cannot commit",a
     assert.equal(view.tasks[2].state,"blocked");
   }finally {await f.close();}
 });
+
+const getReviewSource=(f,i,submissionId,token)=>
+  f.call(i,"GET","/v1/agent-review-sources/"+submissionId,undefined,token);
+
+test("reviewer and independent approver inspect only exact passed Tester files after submit",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f);
+    assert.equal((await getReviewSource(f,0,submissionId,reviewApproverKey)).status,404);
+    assert.equal((await getReviewSource(f,0,submissionId,owner)).status,404);
+    const submission=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submission,owner)).status,201);
+    const inspected=await getReviewSource(f,1,submissionId,reviewApproverKey);
+    assert.equal(inspected.status,200,JSON.stringify(inspected.body));
+    assert.deepEqual(inspected.body.files,request(["dotnet-test"]).request.files);
+    assert.equal(inspected.body.fileCount,1);
+    assert.equal(inspected.body.bytes,Buffer.byteLength(
+      "namespace X; public class X {}","utf8"));
+    assert.equal(inspected.body.sourceDigest,source.digest);
+    assert.equal(inspected.body.sourceFingerprint,source.fingerprint);
+    assert.equal(inspected.body.submissionId,submissionId);
+    assert.equal(JSON.stringify(inspected.body).includes(lease),false);
+    assert.equal(JSON.stringify(inspected.body).includes(rootKey),false);
+    assert.equal(JSON.stringify(inspected.body).includes(reviewApproverKey),false);
+    assert.equal((await getReviewSource(f,0,submissionId,owner)).status,200);
+    assert.equal((await getReviewSource(f,0,submissionId,rootKey)).status,401);
+    assert.equal((await getReviewSource(f,1,submissionId,actorKey)).status,404);
+    assert.equal((await getReviewSource(f,1,submissionId,reviewSelfKey)).status,404);
+    assert.equal((await getReviewSource(f,1,submissionId,tenantApproverKey)).status,404);
+    assert.equal((await postReview(f,0,reviewApprovalBody(submission),
+      reviewApproverKey)).status,201);
+    const after=await getReviewSource(f,0,submissionId,reviewApproverKey);
+    assert.equal(after.status,200,JSON.stringify(after.body));
+    assert.deepEqual(after.body.files,inspected.body.files);
+    assert.equal((await f.view(0,id)).body.tasks[1].state,"human_approved_review");
+  } finally {await f.close();}
+});
+
+test("review source disclosure remains tenant and actor scoped on two replicas",async()=>{
+  const f=await fixture({multiTenant:true});
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f,{tenants:true});
+    const submission=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submission,owner)).status,201);
+    const expected=await getReviewSource(f,1,submissionId,tenantApproverKey);
+    assert.equal(expected.status,200,JSON.stringify(expected.body));
+    assert.deepEqual(expected.body.files,request(["dotnet-test"]).request.files);
+    assert.equal((await getReviewSource(f,0,submissionId,owner)).status,200);
+    assert.equal((await getReviewSource(f,0,submissionId,reviewApproverKey)).status,404);
+    assert.equal((await getReviewSource(f,0,submissionId,reviewerKey)).status,404);
+    assert.equal((await getReviewSource(f,0,submissionId,f.tenantKey)).status,401);
+    assert.equal((await getReviewSource(f,0,submissionId,f.bravo)).status,401);
+  }finally {await f.close();}
+});
+
+test("review source read fails closed on modified, missing or symlinked tester input",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,job,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f);
+    const submission=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submission,owner)).status,201);
+    const before=await getReviewSource(f,0,submissionId,reviewApproverKey);
+    assert.equal(before.status,200,JSON.stringify(before.body));
+    const inputFile=path.join(f.dataDir,"jobs",job.report.id,"input.json");
+    const original=await readFile(inputFile,"utf8");
+    const modified=JSON.parse(original);
+    modified.files["src/backend/domain/X.cs"]="namespace X; public class Forged {}";
+    await writeFile(inputFile,JSON.stringify(modified),{mode:0o600});
+    assert.equal((await getReviewSource(f,1,submissionId,reviewApproverKey)).status,404);
+    await writeFile(inputFile,original,{mode:0o600});
+    assert.equal((await getReviewSource(f,0,submissionId,reviewApproverKey)).status,200);
+    await rm(inputFile);
+    await symlink(path.join(f.base,"untrusted.json"),inputFile);
+    assert.equal((await getReviewSource(f,0,submissionId,reviewApproverKey)).status,404);
+    await rm(inputFile);
+    assert.equal((await getReviewSource(f,1,submissionId,reviewApproverKey)).status,404);
+  }finally {await f.close();}
+});
+
+test("review-source GET rechecks revoked actor credentials and has no-store headers",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,source,owner,submissionId,artifactDigest}=
+      await prepareReviewer(f);
+    const submission=reviewSubmitBody(id,lease,source.fingerprint,
+      submissionId,artifactDigest);
+    assert.equal((await postReview(f,0,submission,owner)).status,201);
+    const endpoint="http://127.0.0.1:"+f.servers[0].address().port+
+      "/v1/agent-review-sources/"+submissionId;
+    const raw=await fetch(endpoint,{headers:{
+      Origin:origin,Authorization:"Bearer "+reviewApproverKey,
+    }});
+    assert.equal(raw.status,200);
+    assert.equal(raw.headers.get("cache-control"),"no-store");
+    assert.equal(raw.headers.get("x-content-type-options"),"nosniff");
+    const registry=JSON.parse(await readFile(f.actorFile,"utf8"));
+    registry.actors.find(a=>a.id==="human-review" &&
+      a.tenantId===null && a.role==="review_approver").key=
+        "agent.human-review."+"N".repeat(48);
+    await writeFile(f.actorFile+".rotated",JSON.stringify(registry),{mode:0o600});
+    await rename(f.actorFile+".rotated",f.actorFile);
+    assert.equal((await getReviewSource(f,1,submissionId,reviewApproverKey)).status,401);
+    assert.equal((await getReviewSource(f,0,submissionId,
+      "agent.human-review."+"N".repeat(48))).status,200);
+  } finally {await f.close();}
+});
