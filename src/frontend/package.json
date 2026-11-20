@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:ci-units": "vitest run --exclude '**/scaffold.test.ts'",
+    "test:ci-scaffold": "vitest run src/application/scaffold.test.ts --maxWorkers=1 --no-file-parallelism",
     "fixture": "tsx src/scripts/generate-fixture.ts"
   },
   "dependencies": {

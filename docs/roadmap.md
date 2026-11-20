@@ -963,3 +963,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Observers solo in memoria: pipeline log temporaneo e ultima chiamata Code Agent writer/reviewer/repair; etichette italiano/inglese, nessuna persistenza in progetto/cloud/GitHub, nessuna chiave/prompt/completion in receipts.
 - [x] Test frontend per usage valido, missing, bad schema/overflow/booleans/frazioni, HTTP error, response vuota, callback error/abort, forwarding della pipeline, no falso costo; ADR 0074.
 - [ ] Provider response usage non è una fattura **firmata né indipendentemente verificata**; un server executor trusted, pricing versionato per valuta e prevenzione doppio addebito richiedono ancora #109/#105/#113. Il runner non conta `executions` da questi contatori.
+
+
+## Mitigazione CI probe Compose intermittente (#117 — 20/11/2026)
+
+- [x] Mantenere `npm run test` completo per uso locale; nella GitHub Factory CI dividere i Vitest in due step **entrambi obbligatori**: suite normale senza `scaffold.test.ts` e subito dopo suite scaffold intera seriale, senza altri worker in concorrenza. Le due suite in sequenza equivalgono ai test frontend precedenti; niente test disabilitati o retry automatici.
+- [x] Diagnostica già implementata in #117 (status/signal/error/tempo/stdout/stderr bounded) continua a fallire quando la CLI Docker Compose fallisce; i successivi smoke Docker e config topology restano un gate separato. ADR 0075.
+- [ ] L'exit 255 storico è stato classificato come intermittente con same-SHA rerun, ma la **causa sistemica esatta** del runner GitHub non è ancora certificata. Validare due CI complete sulla stessa HEAD isolata e conservare issue aperta se il gate continua a flakare.

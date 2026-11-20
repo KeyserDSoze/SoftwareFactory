@@ -19,8 +19,13 @@ jobs:
       - name: Typecheck Factory
         run: npm run typecheck
         working-directory: src/frontend
-      - name: Unit tests
-        run: npm run test
+      # These two non-optional steps form ONE required frontend test gate.
+      # CLI/Compose subprocesses must not compete with parallel Vitest workers.
+      - name: Unit tests (parallel, without Docker Compose CLI)
+        run: npm run test:ci-units
+        working-directory: src/frontend
+      - name: Generated scaffold and Docker Compose contract tests (isolated, required)
+        run: npm run test:ci-scaffold
         working-directory: src/frontend
       - name: Build Factory
         run: npm run build
