@@ -49,3 +49,64 @@ describe("public Release downloads on static Pages", () => {
     expect(installerReleaseAssetLink(rc,"../../evil")).toBeNull();
   });
 });
+
+const exactRelease = (tag: string, prerelease = tag.includes("-rc.")) => {
+  const site = "https://github.com/KeyserDSoze/SoftwareFactory/releases";
+  return { ...release, tag_name: tag, prerelease, html_url: site + "/tag/" + tag,
+    assets: release.assets.map(a => ({
+      ...a, browser_download_url: site + "/download/" + tag + "/" + a.name,
+    })),
+  };
+};
+describe("installer verified-source release floor and deterministic selection #131", () => {
+  it("refuses all historical pre-manifest or malformed versions, not just rc.1", () => {
+    for (const tag of [
+      "v0.1.99", "v0.2.0-rc.1", "v0.2.0-rc.0",
+      "v0.2.0-rc.01", "v0.2.0-RC.2", "v0.2.0-rc.2-extra",
+      "v0.2.00", "v00.2.0", "v0.02.0", "v0.2.0-rc.0002",
+      "v0.2.0-rc.1000000", "v0.2.1000000", "v0.2.0+dirty",
+      "v0.2.0-beta.1", "v0.2.0/", "v0.0.0",
+    ]) {
+      const candidate = exactRelease(tag);
+      expect(installerReleaseAssetLink(candidate, "softwarefactory-runner-installer.tar.gz")).toBeNull();
+      expect(selectInstallerRelease([candidate])).toBeNull();
+    }
+    expect(selectInstallerRelease([exactRelease("v0.2.0-rc.2")])).not.toBeNull();
+    expect(selectInstallerRelease([exactRelease("v0.2.0-rc.4")])).not.toBeNull();
+    expect(selectInstallerRelease([exactRelease("v0.2.0")])).not.toBeNull();
+  });
+  it("picks numerically newest RC independent of API order, never lexicographically", () => {
+    const rc2 = exactRelease("v0.2.0-rc.2");
+    const rc3 = exactRelease("v0.2.0-rc.3");
+    const rc4 = exactRelease("v0.2.0-rc.4");
+    const rc10 = exactRelease("v0.2.0-rc.10");
+    for(const items of [
+      [rc2,rc4,rc3,rc10], [rc10,rc2,rc3,rc4],
+      [rc3,rc4,rc2,rc10],
+    ]) {
+      expect(selectInstallerRelease(items)).toEqual(rc10);
+      // Do not alter the GitHub API array passed to the selector.
+      expect(items[0]).toBe(items[0]);
+    }
+    expect(selectInstallerRelease([rc3,rc4])).toEqual(rc4);
+    expect(selectInstallerRelease([rc4,rc3])).toEqual(rc4);
+  });
+  it("prefers newest valid stable but rejects duplicate or spoofed RC records", () => {
+    const rc = exactRelease("v0.3.0-rc.5");
+    const stable = exactRelease("v0.2.0", false);
+    const laterStable = exactRelease("v0.2.1", false);
+    expect(selectInstallerRelease([stable,rc,laterStable])).toEqual(laterStable);
+    expect(selectInstallerRelease([laterStable,stable,rc])).toEqual(laterStable);
+    expect(selectInstallerRelease([rc,exactRelease("v0.2.0-rc.4")])).toEqual(rc);
+    expect(selectInstallerRelease([rc,rc])).toBeNull();
+    expect(selectInstallerRelease([
+      rc, exactRelease("v0.3.0-rc.5"),
+    ])).toBeNull();
+    expect(selectInstallerRelease([{...rc, prerelease:false}])).toBeNull();
+    expect(selectInstallerRelease([{...rc, draft:true}])).toBeNull();
+    expect(selectInstallerRelease([{...rc, assets: [
+      {...rc.assets[0], browser_download_url:"https://untrusted.example/download"},
+      rc.assets[1],
+    ]}])).toBeNull();
+  });
+});

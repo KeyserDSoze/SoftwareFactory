@@ -52,3 +52,8 @@ For a clean Git `main` checkout you may still use `host-install` with `--commit`
 ## Local verification after a real reboot (#96)
 
 On the dedicated Linux UID1000 host, after a successful installation, run node src/runner/scripts/host-reboot-audit.mjs before --env-file=/absolute/path/docker/runner/.env --require-tunnel, physically reboot the VM, then run the same command with after instead of before. BEFORE stores a 0600 witness without secrets only when the user Docker service/linger, rootless daemon, expected Compose containers and authenticated API are verified; AFTER refuses the same kernel boot ID, rootful Docker and unsafe containers. Omit --require-tunnel when not using Cloudflare; for file-key/tenant profiles pass the matching flags and private RUNNER_PROBE_BEARER. No Docker cleanup, no witness overwrite. Test Access/DNS/HTTPS/OPTIONS from another device: neither local status nor CI certifies the external tunnel.
+
+
+## Safe installer version selection in the Releases panel (#131)
+
+The app now excludes **every version older than `v0.2.0-rc.2`**, not just the original RC.1. Among packages with both matching GitHub archive/checksum assets, it selects the highest numeric SemVer stable release if one exists, otherwise the highest numeric RC, independently of GitHub API ordering. The `v0.2.0-rc.4` candidate is requested by the CI-gated marker and is available only once the [Releases page](https://github.com/KeyserDSoze/SoftwareFactory/releases) actually publishes both assets. Operators must still verify checksum, source commit, manifest and canary on their dedicated host. This is not a real-world rootless Docker/reboot/Cloudflare acceptance certificate.

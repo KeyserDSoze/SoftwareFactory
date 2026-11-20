@@ -52,3 +52,8 @@ Per una installazione manuale da checkout Git pulito `main` continua a funzionar
 ## Verifica locale dopo un vero reboot (#96)
 
 Dal server Linux UID1000 dopo un'installazione riuscita, esegui node src/runner/scripts/host-reboot-audit.mjs before --env-file=/percorso/assoluto/docker/runner/.env --require-tunnel, riavvia realmente la VM, poi ripeti con after al posto di before. La prima modalità crea una witness 0600 senza segreti solo dopo verifica Docker rootless user service/linger, container running e API Bearer; la seconda rifiuta lo stesso boot ID, il daemon rootful e i container non sicuri. Ometti --require-tunnel se non usi Cloudflare; per file-key/tenants usa i flag profilo e RUNNER_PROBE_BEARER privato. Non cancella dati o sovrascrive la witness. Controlla Access/DNS/HTTPS/OPTIONS da un altro dispositivo: il test locale e la CI NON certificano il tunnel esterno.
+
+
+## Selezione della versione consigliata nel pannello Releases (#131)
+
+L'app esclude in modo generale tutte le versioni **precedenti a `v0.2.0-rc.2`**, non soltanto la vecchia RC.1. Tra i pacchetti con entrambi gli asset con URL GitHub corretti sceglie la stable con versione SemVer maggiore, se presente, oppure la RC con numero maggiore; **non** dipende dall'ordine dell'API. La prerelease `v0.2.0-rc.4` è richiesta dal marker di CI e va considerata disponibile soltanto dopo che la [pagina Releases](https://github.com/KeyserDSoze/SoftwareFactory/releases) mostra davvero l'archivio e il suo checksum. Verificare hash, SHA del commit, manifest e canary su un host dedicato. Non confondere questo rilascio con un collaudo rootless/Cloudflare reale.

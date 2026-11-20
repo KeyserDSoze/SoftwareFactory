@@ -6,14 +6,33 @@ const repository = "https://github.com/KeyserDSoze/SoftwareFactory";
 const name = "softwarefactory-runner-installer.tar.gz";
 type Asset = { name: string; browser_download_url: string; size: number };
 type Release = { tag_name: string; html_url: string; draft: boolean; prerelease: boolean; assets: Asset[] };
+// RC.1 and all earlier SemVer releases predate mandatory source manifest
+// verification and canary-first rootless install. Versions are untrusted
+// GitHub API strings: parse numerically rather than trusting list order.
+type Version = { major: number; minor: number; patch: number; rc: number | null };
+const MIN_VERIFIED_SOURCE_RELEASE: Version = { major: 0, minor: 2, patch: 0, rc: 2 };
+const versionPattern = /^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(?:-rc\.([1-9][0-9]{0,5}))?$/;
+function compareVersions(a: Version, b: Version): number {
+  return a.major - b.major || a.minor - b.minor || a.patch - b.patch ||
+    (a.rc === null ? (b.rc === null ? 0 : 1) :
+      b.rc === null ? -1 : a.rc - b.rc);
+}
+function supportedInstallerVersion(tag: unknown): Version | null {
+  if (typeof tag !== "string" || tag.length > 48) return null;
+  const parts = versionPattern.exec(tag);
+  if (!parts) return null;
+  const version: Version = {
+    major: Number(parts[1]), minor: Number(parts[2]),
+    patch: Number(parts[3]), rc: parts[4] === undefined ? null : Number(parts[4]),
+  };
+  return compareVersions(version, MIN_VERIFIED_SOURCE_RELEASE) >= 0 ? version : null;
+}
 export function installerReleaseAssetLink(release: Release, assetName: string): string | null {
   if (!release || typeof release !== "object" ||
-      !/^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(release.tag_name) ||
+      !supportedInstallerVersion(release.tag_name) ||
       typeof release.draft !== "boolean" || typeof release.prerelease !== "boolean" ||
-      release.draft || release.prerelease !== release.tag_name.includes("-rc.") ||
-      // rc.1 predates the verified-source manifest. Never recommend the
-      // insecure direct host-setup start path from that archived release.
-      release.tag_name === "v0.2.0-rc.1" ||
+      release.draft || release.prerelease !==
+        (supportedInstallerVersion(release.tag_name)?.rc !== null) ||
       ![name, name + ".sha256"].includes(assetName) ||
       !Array.isArray(release.assets) || release.assets.length > 50) return null;
   const assets = release.assets.filter(item => item && item.name === assetName);
@@ -34,7 +53,18 @@ export function selectInstallerRelease(value: unknown): Release | null {
       installerReleaseAssetLink(release, name + ".sha256") &&
       release.html_url === repository + "/releases/tag/" + release.tag_name);
   });
-  return eligible.find(r => !r.prerelease) ?? eligible.find(r => r.prerelease) ?? null;
+  // Refuse an internally ambiguous response rather than letting the API order
+  // choose between duplicate records for the same release tag.
+  const tags = eligible.map(r => r.tag_name);
+  if (new Set(tags).size !== tags.length) return null;
+  // Preserve the existing preference for stable releases, but rank each
+  // group by numeric SemVer, not by the GitHub API response array order.
+  const newestFirst = (a: Release, b: Release) =>
+    compareVersions(supportedInstallerVersion(b.tag_name)!,
+      supportedInstallerVersion(a.tag_name)!);
+  const stable = eligible.filter(r => !r.prerelease).sort(newestFirst);
+  const experimental = eligible.filter(r => r.prerelease).sort(newestFirst);
+  return stable[0] ?? experimental[0] ?? null;
 }
 export default function InstallerReleasePanel({ locale }: { locale: FactoryLocale }) {
   const [release, setRelease] = useState<Release | null>(null);

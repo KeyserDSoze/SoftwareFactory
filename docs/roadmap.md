@@ -1041,3 +1041,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] La prima Factory CI #44726315801 ha trovato il parser della CLI che respingeva il flag alfanumerico `--expected-provider-key-sha256`; correzione con regex che ammette cifre **ma mantiene l'allowlist stretta** e regressioni di flag sconosciuti/duplicati e digest invalido, da verificare sulla CI del commit definitivo. Documentare il fallimento iniziale sulla #130, niente bypass del gate.
 
 - [x] Nel run #44726726444 il test di hardlink lasciava volutamente `nlink=2` anche per i check di chmod e provider ID successivi, mascherandone la causa del rifiuto. Aggiunta prova fail-closed su entrambe le path, unlink sicuro e **readback positivo** prima degli altri casi; rieseguire tutta la CI senza indebolire `readAttestationFile`.
+
+
+## Selezione release sicura / candidate rc.4 (#131 — 20 novembre 2026)
+
+- [x] Pannello GitHub Pages: rifiuto SemVer di tutte le versioni anteriori a `v0.2.0-rc.2`, stable/prerelease incoerenti, URL spoofed, tag malformati e tag duplicati; scelta della stable numericamente maggiore o, in assenza, della RC maggiore indipendentemente dall'ordine API. Test Vitest con release list simulate, senza rete esterna.
+- [x] Incremento marker prerelease candidate da `v0.2.0-rc.3` a `v0.2.0-rc.4`, mantenendo immutabilità tag ed esecuzione `workflow_run` solo dopo Factory CI verde su SHA esatto e successivo packaging con source manifest e checksum.
+- [ ] Verificare Factory CI/Pages/Installer sullo stesso SHA, poi **verificare la Release rc.4 e i due asset effettivamente pubblicati** prima di chiudere #131; #90/#87/#2 restano aperte fino a collaudo Docker rootless, reboot, Tunnel/Access su VM reale. ADR 0085.

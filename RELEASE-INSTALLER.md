@@ -23,3 +23,8 @@ The installer package includes `.sf-installer-source.json`, generated from the *
 ## Operator post-reboot check (experimental, #96)
 
 After rootless runner installation on the dedicated Linux UID1000 host, use node src/runner/scripts/host-reboot-audit.mjs before --env-file=/absolute/path/docker/runner/.env --require-tunnel, physically reboot, then repeat using after. The private local witness records the kernel boot ID and expected services without secrets. A result after reboot checks systemd Docker user/linger, rootless Compose containers and authenticated readiness. This is NOT proof of Cloudflare DNS/Access/TLS or a signed off-host attestation; a real host reboot and second-device browser test remain necessary.
+
+
+## RC.4 candidate: source freshness and UI downgrade prevention (#131)
+
+The CI-gated `v0.2.0-rc.4` candidate is intended to publish a new source-verified runner installer from the **exact passing Factory CI commit**, incorporating the security work after RC.3. The static UI now requires `v0.2.0-rc.2` or newer and sorts eligible SemVer tags numerically rather than accepting an arbitrary ordering of the Releases API. The build remains immutable, verified against its source manifest, and packaged with SHA-256 checksums. Neither the Release nor the checksum is an independent vendor signature or a real Docker rootless, reboot or Cloudflare Access acceptance test.
