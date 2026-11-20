@@ -626,3 +626,8 @@ Il nuovo verificatore offline `provider-delivery-attestation.mjs` confronta una 
 ### Selezione prerelease più recente e distribuzione CI-gated (#131)
 
 Il frontend statico consuma la lista pubblica GitHub Releases come dato non fidato: `InstallerReleasePanel` confronta le versioni SemVer numericamente, ammette soltanto `v0.2.0-rc.2` o successive (manifest sorgenti e canary-first), respinge duplicazioni, draft, spoofing URL/asset e mismatch prerelease/stable; preferisce l'ultima stable altrimenti l'ultima RC indipendentemente dall'ordine ricevuto. Il nuovo marker `v0.2.0-rc.4` abilita esclusivamente il workflow di pubblicazione dopo Factory CI verde, su source SHA pinned e senza mutare tag preesistenti. Il checksum asset è controllo di integrità, non firma del produttore; nessuna garanzia per VM rootless, reboot, Cloudflare Tunnel o Access dal solo workflow. ADR 0085.
+
+
+### Completion metadata del browser come dato non fidato (#132)
+
+Il contratto `aiComplete` della SPA è condiviso da pipeline, Code Agent, review e PM planning. Prima di restituire un output o notificare i token `provider_reported_unverified`, controlla la cardinalità singola di `choices`, il testo assistant non vuoto e gli eventuali `finish_reason/role` dichiarati. Rifiuta `length/content_filter/tool_calls/function_call`, esiti sconosciuti/null, altri ruoli e refusals anche con contenuto formalmente corretto. Backend legacy senza i due campi restano compatibili senza alcuna pretesa di attestazione: il client off-host #127 mantiene una policy più rigorosa perché emette una receipt Ed25519 operatore. Nessuna modifica ai formati di journal, quote o budget né autorizzazione a job/test/deploy. ADR 0086.

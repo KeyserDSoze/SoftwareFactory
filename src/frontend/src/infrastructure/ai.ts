@@ -51,6 +51,38 @@ export function formatProviderReportedUsage(
 export class ProviderError extends Error {
   constructor(message: string) { super(message); this.name = "ProviderError"; }
 }
+
+/** In the browser, OpenAI-compatible endpoints may omit role and
+ * finish_reason. Retain that legacy behavior, but NEVER accept an explicitly
+ * truncated, filtered, tool-routed or refused answer as a completed task.
+ * The provider metadata is not independently attested.
+ */
+function completedAiText(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body) ||
+      !("choices" in body) || !Array.isArray(body.choices) ||
+      body.choices.length !== 1)
+    throw new ProviderError("Il provider non ha restituito una sola risposta compatibile.");
+  const choice: unknown = body.choices[0];
+  if (!choice || typeof choice !== "object" || Array.isArray(choice))
+    throw new ProviderError("Il provider ha restituito una risposta non valida.");
+  const item = choice as Record<string, unknown>;
+  // Explicit null, unknown, length, content_filter, tool_calls and
+  // function_call finish values all mean we cannot treat this as finished.
+  if (Object.hasOwn(item, "finish_reason") && item.finish_reason !== "stop")
+    throw new ProviderError("Il provider ha dichiarato una risposta incompleta o filtrata.");
+  const message = item.message;
+  if (!message || typeof message !== "object" || Array.isArray(message))
+    throw new ProviderError("Il provider ha restituito una risposta non valida.");
+  const assistant = message as Record<string, unknown>;
+  if (Object.hasOwn(assistant, "role") && assistant.role !== "assistant" ||
+      assistant.refusal !== undefined && assistant.refusal !== null ||
+      assistant.tool_calls !== undefined && assistant.tool_calls !== null ||
+      assistant.function_call !== undefined && assistant.function_call !== null)
+    throw new ProviderError("Il provider ha restituito una risposta non utilizzabile.");
+  if (typeof assistant.content !== "string" || !assistant.content.trim())
+    throw new ProviderError("Il provider ha restituito una risposta vuota.");
+  return assistant.content.trim();
+}
 export function validateAiEndpoint(input: string): string {
   const url = new URL(input);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -78,18 +110,17 @@ export async function aiComplete(profile: AiProfile, apiKey: string, system: str
   });
   if (!response.ok) throw new ProviderError("Provider AI: HTTP " + response.status + ". Controlla endpoint, credenziali e modello.");
   const body: unknown = await response.json();
-  if (!body || typeof body !== "object" || !("choices" in body) || !Array.isArray(body.choices))
-    throw new ProviderError("Il provider non ha restituito una risposta compatibile.");
-  const text = (body.choices as Array<{ message?: { content?: unknown } }>)[0]?.message?.content;
-  if (typeof text !== "string" || !text.trim()) throw new ProviderError("Il provider ha restituito una risposta vuota.");
-  // An optional in-memory observation follows only a successful, non-empty
-  // response. Third-party usage is a claim, not a signed bill or runner proof.
+  // Validate the completion envelope before a pipeline/code-agent task
+  // can receive output or its optional provider-reported token observation.
+  const text = completedAiText(body);
+  // An optional in-memory observation follows only a usable completion.
+  // Third-party usage is a claim, not a signed bill or runner proof.
   const observed = parseProviderReportedUsage(body, profile.id, model);
   if (observed && !signal?.aborted) {
     try { options?.onUsage?.(observed); }
     catch { /* UI observers must never invalidate a completed AI response. */ }
   }
-  return text.trim();
+  return text;
 }
 
 /**

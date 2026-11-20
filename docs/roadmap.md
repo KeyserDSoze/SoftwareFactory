@@ -1048,3 +1048,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Pannello GitHub Pages: rifiuto SemVer di tutte le versioni anteriori a `v0.2.0-rc.2`, stable/prerelease incoerenti, URL spoofed, tag malformati e tag duplicati; scelta della stable numericamente maggiore o, in assenza, della RC maggiore indipendentemente dall'ordine API. Test Vitest con release list simulate, senza rete esterna.
 - [x] Incremento marker prerelease candidate da `v0.2.0-rc.3` a `v0.2.0-rc.4`, mantenendo immutabilità tag ed esecuzione `workflow_run` solo dopo Factory CI verde su SHA esatto e successivo packaging con source manifest e checksum.
 - [ ] Verificare Factory CI/Pages/Installer sullo stesso SHA, poi **verificare la Release rc.4 e i due asset effettivamente pubblicati** prima di chiudere #131; #90/#87/#2 restano aperte fino a collaudo Docker rootless, reboot, Tunnel/Access su VM reale. ADR 0085.
+
+
+## Browser AI completions fail-closed sui metadata espliciti (#132 — 20/11/2026)
+
+- [x] Respinti dal client `aiComplete` gli output esplicitamente troncati/filtrati, multi-choice, con ruolo non assistant, refusal o tool/function calls, prima di `onUsage` e di consegnare il testo al consumatore. Niente retry automatici e niente segreti in eccezione.
+- [x] Conservata compatibilità con provider OpenAI-compatible che omettono completamente `finish_reason`/`role`, senza attribuire alla loro assenza valore di attestazione. Test Vitest di successo legacy/stop e rifiuto pipeline, Code Reviewer/Code Agent e osservazione di token.
+- [ ] Documentare Factory CI, Pages e Installer sul commit finale prima della chiusura #132. ADR 0086. #109/#113/#105 ancora aperte per veri costi/provider, prove indipendenti e orchestrazione.

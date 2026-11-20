@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject, DEFAULT_SETTINGS } from "../domain/defaults";
 import { runStage } from "../application/pipeline";
+import { reviewCode } from "../application/code-agent";
+import type { FeatureProposal } from "../domain/development";
 import { aiComplete, formatProviderReportedUsage,
   parseProviderReportedUsage, type AiUsageObservation } from "./ai";
 
@@ -150,5 +152,117 @@ describe("provider-reported AI usage (not verified billing) #121", () => {
     });
     expect(JSON.stringify(project)).not.toContain("promptTokens");
     expect(JSON.stringify(settings)).not.toContain("promptTokens");
+  });
+});
+
+
+describe("browser AI completed-envelope safety #132", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("accepts a single explicit assistant stop and legacy envelopes without metadata", async () => {
+    const callback = vi.fn();
+    const valid = {
+      choices: [{ finish_reason: "stop", message: {
+        role: "assistant", content: "  A complete answer.  ",
+        refusal: null, tool_calls: null, function_call: null,
+      } }],
+      usage,
+    };
+    mockResponse(valid);
+    expect(await aiComplete(profile(), "key", "system", "user", undefined,
+      { onUsage: callback })).toBe("A complete answer.");
+    expect(callback).toHaveBeenCalledTimes(1);
+    // Compatible providers without finish_reason/role remain accepted, but
+    // absence of metadata is not an execution attestation or bill.
+    mockResponse(answer());
+    expect(await aiComplete(profile(), "", "system", "user")).toBe(
+      "Answer from a real HTTP response.");
+  });
+
+  it.each([
+    ["truncated", { finish_reason: "length" }],
+    ["filtered", { finish_reason: "content_filter" }],
+    ["tool finish", { finish_reason: "tool_calls" }],
+    ["legacy function finish", { finish_reason: "function_call" }],
+    ["unknown finish", { finish_reason: "something-else" }],
+    ["null finish", { finish_reason: null }],
+    ["undefined-but-present finish", { finish_reason: undefined }],
+    ["non assistant", { message: { role: "user" } }],
+    ["system", { message: { role: "system" } }],
+    ["null role", { message: { role: null } }],
+    ["refusal", { message: { refusal: "I cannot help with that." } }],
+    ["empty refusal", { message: { refusal: "" } }],
+    ["active tool", { message: { tool_calls: [{ id: "call_1" }] } }],
+    ["empty tool array", { message: { tool_calls: [] } }],
+    ["function call", { message: { function_call: { name: "do_work" } } }],
+  ])("rejects a %s even with nonempty text and consistent usage", async (_label, override) => {
+    const onUsage = vi.fn();
+    const original = { finish_reason: "stop", message: {
+      role: "assistant", content: "A seemingly complete output",
+    } };
+    const choice = { ...original, ...override,
+      message: { ...original.message, ...("message" in override ? override.message : {}) },
+    };
+    mockResponse({ choices: [choice], usage });
+    await expect(aiComplete(profile(), "hidden-api-key",
+      "hidden system message", "hidden user message", undefined,
+      { onUsage })).rejects.toThrow(/risposta/);
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous choices and malformed messages before emitting tokens", async () => {
+    const onUsage = vi.fn();
+    const valid = { finish_reason: "stop", message: {
+      role: "assistant", content: "Complete" },
+    };
+    for (const choices of [
+      [], [valid, valid], [null], [42], [valid, null],
+      [{ finish_reason: "stop", message: [] }],
+      [{ finish_reason: "stop", message: { role: "assistant", content: ["text"] } }],
+      [{ finish_reason: "stop", message: { role: "assistant", content: "  " } }],
+    ]) {
+      mockResponse({ choices, usage });
+      await expect(aiComplete(profile(), "", "system", "user",
+        undefined, { onUsage })).rejects.toThrow(/risposta/);
+    }
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("does not turn an explicitly truncated response into a pipeline checkpoint or token receipt", async () => {
+    vi.stubGlobal("sessionStorage", { getItem: () => null });
+    const project = createProject();
+    const before = structuredClone(project);
+    const onUsage = vi.fn();
+    mockResponse({ choices: [{ finish_reason: "length", message: {
+      role: "assistant", content: "A partial implementation plan",
+    } }], usage });
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    await expect(runStage(project, settings, "features", undefined,
+      undefined, onUsage)).rejects.toThrow(/incompleta/);
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(project).toEqual(before);
+    expect(project.stages.find(s => s.id === "features")?.status).not.toBe("complete");
+  });
+
+  it("blocks a partial Code Reviewer pass before it can become a FeatureReview", async () => {
+    vi.stubGlobal("sessionStorage", { getItem: () => null });
+    const proposal: FeatureProposal = {
+      id: "local-proposal", request: "Add validation",
+      summary: "Validation proposed", revision: 0,
+      createdAt: "2026-11-20T00:00:00.000Z", edits: [],
+      tests: [], assumptions: [],
+    };
+    const before = structuredClone(proposal);
+    const onUsage = vi.fn();
+    mockResponse({ choices: [{ finish_reason: "content_filter", message: {
+      role: "assistant", content: JSON.stringify({
+        verdict: "pass", report: "Everything seems fine",
+      }),
+    } }], usage });
+    await expect(reviewCode(createProject(), structuredClone(DEFAULT_SETTINGS),
+      proposal, undefined, onUsage)).rejects.toThrow(/filtrata/);
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(proposal).toEqual(before);
+    expect(proposal.review).toBeUndefined();
   });
 });

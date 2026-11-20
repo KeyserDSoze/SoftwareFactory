@@ -820,3 +820,8 @@ Se il proprio provider offre **esplicitamente** una dichiarazione di consegna co
 ### Versione minima dell'installer e nuova prerelease CI-gated (#131)
 
 Il pannello delle Releases nella SPA non propone versioni precedenti a `v0.2.0-rc.2`, che introduce il manifest sorgente e il canary obbligatorio, e seleziona deterministicamente la versione SemVer più alta (priorità alle **stable** quando disponibili, altrimenti alle **RC**). Richiede sempre entrambi gli asset `tar.gz` e `.sha256` con URL GitHub esatti. Il marker `v0.2.0-rc.4` richiede una nuova prerelease automatica **solo dopo Factory CI verde**; l'esistenza effettiva degli asset va verificata nella pagina [Releases](https://github.com/KeyserDSoze/SoftwareFactory/releases). Il checksum non è una firma indipendente; installazione reale rootless/Cloudflare non è attestata dalla CI. [ADR 0085](adr/0085-installer-minimum-version-and-release-rc4.md).
+
+
+### Gate delle risposte AI incomplete nella Factory browser (#132)
+
+La Factory ora rifiuta risposte HTTP 2xx che dichiarano esplicitamente una generazione `length`, `content_filter`, `tool_calls` o un altro esito diverso da `stop`, nonché risposte multiple, refusals e tool calls nel messaggio. Un testo apparentemente valido non raggiunge la pipeline, Code Agent o il contatore volatile dei token quando il provider dichiara una risposta incompleta. Per compatibilità, i backend OpenAI-compatible che omettono completamente `finish_reason`/`role` continuano a funzionare, **senza che ciò attesti una terminazione normale**. Nessun retry o costo inventato. [ADR 0086](adr/0086-browser-ai-completion-fail-closed.md).
