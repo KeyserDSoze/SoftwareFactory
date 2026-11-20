@@ -1236,3 +1236,55 @@ Risposta, solo a Reviewer owner autorizzato con lease attiva e non scaduta: `{ve
 Questa route non richiede `submissionId` né consente l'accesso dell'approvatore: serve a **preparare** la review. Il Reviewer redige quindi il documento strutturato, lo deposita su `POST /v1/agent-review-artifacts` e lo presenta con `POST /v1/agent-task-reviews submit`. Da quel momento la route pre-review rifiuta ogni lettura; la #119 resta la route separata, `GET /v1/agent-review-sources/:submissionId`, per l'approvatore indipendente **dopo** la submission. Le chiavi runner root e tenant, altri owner e ruoli diversi non sono ammessi. Una lease rilasciata, rifiutata, approvata o scaduta non autorizza un workspace; una nuova generazione deve essere nuovamente reclamata.
 
 **Sicurezza:** la response comprende **codice sorgente** (non segreti, log, job ID o leaseId), con `Cache-Control:no-store` e `X-Content-Type-Options:nosniff`. Trattarlo come materiale potenzialmente proprietario; non loggare, diffondere o inoltrare automaticamente a provider AI. La lettura è un'opportunità di ispezione, non attestazione della qualità, lettura umana, lavoro LLM o costo reale. Le issue #113/#109/#105 restano aperte per esecuzione AI/provider usage e attestazioni off-host.
+
+
+## Firma offline di un pacchetto Code Reviewer + sorgenti testati (#122)
+
+La firma non sostituisce il `review_approver` actor-only (#115), né introduce un agente AI autonomo. Dopo un `review_submit` artifact-backed (#116), un approvatore indipendente, autenticato con la propria actor key e **stessa tenant**, può consultare e raccogliere entrambe le risposte:
+
+```
+GET /v1/agent-review-artifacts/<submissionId>
+GET /v1/agent-review-sources/<submissionId>
+```
+
+La prima restituisce `{version,handoffId,taskId,submissionId,tenantId,owner,generation,artifactDigest,sourceFingerprint,artifactMode,document}`; la seconda `{version,handoffId,taskId,submissionId,sourceFingerprint,sourceDigest,fileCount,bytes,files}`. Nessuna delle due è pubblica. L'operatore, **su un dispositivo separato dal runner**, deve verificare che il token actor TLS provenga dal deployment corretto e che gli identificativi attesi coincidano; salvare le due risposte in file riservati, fuori da repository e cloud condivisi. **Il secondo file contiene il codice sorgente** del Tester e può contenere proprietà intellettuale o dati non destinati a terzi.
+
+Creare un singolo `review-bundle.json` con la seguente struttura (tutti i valori interni provengono dai due JSON, senza modificarli):
+
+```json
+{
+  "version": 1,
+  "artifact": { "version": 1, "handoffId": "...", "taskId": "...", "submissionId": "...",
+    "tenantId": null, "owner": "...", "generation": 1,
+    "artifactDigest": "...", "sourceFingerprint": "...",
+    "artifactMode": "stored_review_document_v1", "document": { "...": "..." } },
+  "sources": { "version": 1, "handoffId": "...", "taskId": "...",
+    "submissionId": "...", "sourceFingerprint": "...",
+    "sourceDigest": "...", "fileCount": 1, "bytes": 123,
+    "files": { "src/backend/domain/X.cs": "..." } }
+}
+```
+
+Il formato precedente è illustrativo: il comando richiede **un JSON reale completo** con tutte le chiavi esatte, non placeholder. Per assemblare due file JSON già raccolti in modo sicuro, sul dispositivo offline:
+
+```sh
+umask 077
+jq -n --slurpfile a review-artifact.json --slurpfile s review-sources.json '{version:1,artifact:$a[0],sources:$s[0]}' > review-bundle.json
+chmod 600 review-bundle.json
+```
+
+Generare e custodire una chiave **Ed25519 off-host** (il comando OpenSSL è illustrativo; conservare `review-private.pem` solo sul PC dell'approvatore, MAI nella VM/Compose/container Git, ZIP, cloud del progetto):
+
+```sh
+umask 077
+openssl genpkey -algorithm Ed25519 -out review-private.pem
+openssl pkey -in review-private.pem -pubout -out reviewer-trusted.pub
+chmod 600 review-private.pem
+chmod 644 reviewer-trusted.pub
+node src/runner/review-attest.mjs sign --bundle=review-bundle.json --private-key=review-private.pem --out=review-receipt.json
+node src/runner/review-attest.mjs verify --bundle=review-bundle.json --receipt=review-receipt.json --public-key=reviewer-trusted.pub
+```
+
+Il CLI accetta solo `sign` o `verify` con esattamente tre path, usa FD `O_NOFOLLOW` e controlla owner, nlink, dimensioni e permessi delle chiavi; `sign` crea una receipt `0600` **senza sovrascrivere**. L'esito di successo è rispettivamente `REVIEW_INSPECTION_SIGNED` / `REVIEW_INSPECTION_VERIFIED`; ogni errore usa un messaggio generico senza sorgenti/chiavi. Il verificatore deve **distribuire e verificare in modo indipendente** la chiave pubblica (non fidarsi di un PEM fornito insieme alla ricevuta da un server non attendibile). Richiede sia la ricevuta sia lo stesso pacchetto originale; cambiare una singola riga del rapporto o un file, anche ricalcolando tutti gli SHA lato server, rende inutilizzabile la firma precedente.
+
+**Limitazione di trust:** la firma prova soltanto l'impegno del titolare della chiave sui byte presentati, non l'origine autentica del server prima della firma, la lettura effettiva, la qualità della review, l'esecuzione AI né un costo/billing certificato. Il server non importa la receipt e **non** la usa per `review_approve` o per sbloccare release: i gate manuali continuano separatamente. Non spedire il bundle o la private key a provider AI; #113/#109/#105 ancora da completare.

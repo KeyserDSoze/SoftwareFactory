@@ -780,3 +780,8 @@ Il runner ignora qualsiasi dichiarazione di esito dell'attore: confronta \`jobId
 ## Osservazioni usage AI (non billing) — #121
 
 La Factory legge, quando forniti dalla risposta reale `/chat/completions`, i token input/output/totali dichiarati dal provider e li mostra **soltanto nella sessione browser** nei log della pipeline e nella sezione Code Agent (generazione, review, repair). I conteggi sono marcati `provider_reported_unverified`: nessuna stima quando mancano dati, nessun prezzo dedotto e nessuna fatturazione certificata. Le chiamate con risposta AI priva di `usage` continuano a funzionare. I contatori non vengono salvati nei progetti, nei backup o in GitHub. Per ricevute provider attestabili e budget consuntivo restano aperte #109/#105.
+
+
+## Verifica offline di review e sorgenti (#122)
+
+Dopo la submission di un rapporto Code Reviewer, un `review_approver` autorizzato può esportare separatamente il documento custodito e i file esattamente testati dalle API `/v1/agent-review-artifacts/:submissionId` e `/v1/agent-review-sources/:submissionId`. Su un **PC indipendente**, può formare un bundle JSON e firmarlo con `node src/runner/review-attest.mjs sign`. La verifica Ed25519 vincola il testo del rapporto, il digest del record e tutti i byte del file set al public key che l'operatore ha installato come trust anchor. È una firma dell'artefatto presentato, **non prova che il codice sia stato realmente letto** e non sblocca automaticamente task, review o billing. [Istruzioni e rischi](docs/runner.md).

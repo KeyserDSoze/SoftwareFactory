@@ -970,3 +970,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Mantenere `npm run test` completo per uso locale; nella GitHub Factory CI dividere i Vitest in due step **entrambi obbligatori**: suite normale senza `scaffold.test.ts` e subito dopo suite scaffold intera seriale, senza altri worker in concorrenza. Le due suite in sequenza equivalgono ai test frontend precedenti; niente test disabilitati o retry automatici.
 - [x] Diagnostica già implementata in #117 (status/signal/error/tempo/stdout/stderr bounded) continua a fallire quando la CLI Docker Compose fallisce; i successivi smoke Docker e config topology restano un gate separato. ADR 0075.
 - [ ] L'exit 255 storico è stato classificato come intermittente con same-SHA rerun, ma la **causa sistemica esatta** del runner GitHub non è ancora certificata. Validare due CI complete sulla stessa HEAD isolata e conservare issue aperta se il gate continua a flakare.
+
+
+## Ricevute offline indipendenti di ispezione Code Reviewer (#122 — 20 novembre 2026)
+
+- [x] GET actor-only del documento custodito espone anche `tenantId,owner,generation` non sensibili per il ricalcolo del digest #116 fuori dal server, **senza** nuovi ruoli o permessi.
+- [x] CLI `review-attest.mjs` off-host con firma/validazione Ed25519 di bundle report + source file map verificata: recompute di digest stored report, source-only SHA, ids/fingerprint, dimensioni e contenuto completo canonico. PEM privato mai sul runner, trust anchor pubblico pinned; file FD nofollow/UID/nlink/mode/size, ricevuta write-once.
+- [x] Test Node su due API e tenant segregati, signature tamper source/doc/recomputed hashes, chiavi false/non-Ed25519, CLI symlink/hardlink/writable-key e receipt già esistente. ADR 0076.
+- [ ] Una firma del pacchetto presentato **non** prova che signer abbia davvero letto i file, che l'host runner fosse onesto quando li ha prodotti, né che un LLM li abbia recensiti. Integrare attestazione di esecuzione e binding provider receipt/off-host nel gate #113/#109/#105. Non chiudere quelle epic.
