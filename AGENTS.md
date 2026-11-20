@@ -1021,3 +1021,9 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 
 - `src/frontend/src/infrastructure/ai.ts::aiComplete` deve rifiutare una risposta 2xx con `finish_reason` dichiarato e diverso da `stop`, 0/più choice, role dichiarato non assistant, refusal/tool_calls/function_call presenti non-null e contenuto non stringa o vuoto. **Prima** di rilasciare il testo alla pipeline/Code Agent e **prima** di `onUsage`; mai creare checkpoint o report da completion troncate/filtrate, anche quando il JSON pare completo. Nessun retry automatico di chiamata forse fatturabile.
 - Per compatibilità con backend OpenAI-compatible legacy che omettono `finish_reason`/`role`, il testo resta accettabile **solo come output non attestato**. Nessun provider metadata o usage è fattura o prova di esecuzione; non equiparare il client browser con l'off-host reviewer a `finish_reason:stop` obbligatorio (#127). Test Vitest anche su pipeline e review; ADR 0086, issue #132; #109/#113/#105 restano aperte.
+
+
+## Limite byte HTTP del client AI browser (#133)
+
+- `aiComplete` e `discoverAiModels` devono limitare **prima del parse** i byte effettivamente decodificati dai Response stream browser: massimo **4 MiB** per completions e **512 KiB** per catalogo; `Content-Length` non è affidabile come unica verifica. Usare reader stream e `cancel()` su overflow, errori o JSON invalido, evitando stampa di contenuto/credenziali. I mock legacy che implementano soltanto `json()` devono rimanere testabili, con controllo anche sul loro JSON serializzato; non è garanzia streaming per trasporti nonstreaming.
+- Test Vitest su chunked oversized con/senza header, header invalido/mendace, JSON/UTF-8/stream error, catalogo e usage callback solo dopo risposta completa; il limite non garantisce qualità output o provider accounting. ADR 0087, issue #133; #109/#113 restano aperte.

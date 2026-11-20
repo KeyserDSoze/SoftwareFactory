@@ -1057,3 +1057,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Documentare Factory CI, Pages e Installer sul commit finale prima della chiusura #132. ADR 0086. #109/#113/#105 ancora aperte per veri costi/provider, prove indipendenti e orchestrazione.
 
 - [x] Prima CI #44731968665: due nuovi test integrati si fermavano prima del mock HTTP per assenza di modello in `DEFAULT_SETTINGS`, mentre tutti i test diretti del filtro passavano. Le fixture adesso impostano un model sintetico e **verificano una singola chiamata fetch** per garantire che il controllo venga attraversato; rieseguire CI su SHA finale, senza cambiare i gate di produzione.
+
+
+## Risposte HTTP AI browser bounded con cancel stream (#133 — 20/11/2026)
+
+- [x] Soglie byte prima del JSON parse per /chat/completions (4 MiB) e /models (512 KiB), con Content-Length solo precheck e stream length effettiva decisiva, annullamento read e no callback usage su errore. Mantenuti mock legacy `json()` con guard post-serializzazione.
+- [x] Regression Vitest su risposta streaming corretta, header >limite/invalido, stream chunked oversized senza/con header mendace, catalogo oversize, JSON/UTF8/stream error e no secret in errore. Nessun provider reale contattato.
+- [ ] Confermare Factory CI/Pages/Installer sullo SHA finale prima di chiudere #133. ADR 0087; #109/#113 restano aperte per vendor identity, billing e completamento effettivo.

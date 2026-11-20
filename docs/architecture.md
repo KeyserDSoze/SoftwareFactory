@@ -631,3 +631,8 @@ Il frontend statico consuma la lista pubblica GitHub Releases come dato non fida
 ### Completion metadata del browser come dato non fidato (#132)
 
 Il contratto `aiComplete` della SPA è condiviso da pipeline, Code Agent, review e PM planning. Prima di restituire un output o notificare i token `provider_reported_unverified`, controlla la cardinalità singola di `choices`, il testo assistant non vuoto e gli eventuali `finish_reason/role` dichiarati. Rifiuta `length/content_filter/tool_calls/function_call`, esiti sconosciuti/null, altri ruoli e refusals anche con contenuto formalmente corretto. Backend legacy senza i due campi restano compatibili senza alcuna pretesa di attestazione: il client off-host #127 mantiene una policy più rigorosa perché emette una receipt Ed25519 operatore. Nessuna modifica ai formati di journal, quote o budget né autorizzazione a job/test/deploy. ADR 0086.
+
+
+### JSON provider browser bounded prima del parse (#133)
+
+Tutti i client della SPA che invocano `aiComplete` condividono `readBoundedProviderJson`: conteggio byte sullo stream decodificato di Response, guard preflight Content-Length, overflow fail-closed a 4 MiB su /chat/completions e 512 KiB su /models, `cancel()` e `releaseLock()` dopo eccezioni e parsing UTF-8 fatal. Nessun body o secret nei messaggi. Per mock HTTP leggeri senza stream vale solo un controllo post-serializzazione; in un browser reale Response.body è il percorso pre-parse. `onUsage` può essere emesso solo dopo guard JSON e completion envelope (#132). Il limite non trasforma usage dichiarato in billing verificato. ADR 0087.

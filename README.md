@@ -825,3 +825,8 @@ Il pannello delle Releases nella SPA non propone versioni precedenti a `v0.2.0-r
 ### Gate delle risposte AI incomplete nella Factory browser (#132)
 
 La Factory ora rifiuta risposte HTTP 2xx che dichiarano esplicitamente una generazione `length`, `content_filter`, `tool_calls` o un altro esito diverso da `stop`, nonché risposte multiple, refusals e tool calls nel messaggio. Un testo apparentemente valido non raggiunge la pipeline, Code Agent o il contatore volatile dei token quando il provider dichiara una risposta incompleta. Per compatibilità, i backend OpenAI-compatible che omettono completamente `finish_reason`/`role` continuano a funzionare, **senza che ciò attesti una terminazione normale**. Nessun retry o costo inventato. [ADR 0086](adr/0086-browser-ai-completion-fail-closed.md).
+
+
+### Protezione contro risposte AI troppo grandi nella SPA (#133)
+
+La Factory legge ora le risposte HTTP dei provider AI con limiti in byte **prima del parsing JSON**: 4 MiB per `/chat/completions`, 512 KiB per `/models`. La verifica applica sia il controllo anticipato di `Content-Length` sia il limite sui byte effettivamente ricevuti attraverso lo stream (anche senza header o quando il provider dichiara una lunghezza sbagliata). Il browser interrompe il flusso su overflow o JSON non valido e non registra il token usage di una risposta rifiutata. Provider con output oltre le soglie richiedono richieste più piccole o un backend esplicitamente progettato per risultati estesi. Questa protezione non autentica il provider né prova consumi fatturabili. [ADR 0087](adr/0087-browser-ai-bounded-response-streams.md).

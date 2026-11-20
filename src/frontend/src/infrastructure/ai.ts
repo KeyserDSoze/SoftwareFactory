@@ -83,6 +83,77 @@ function completedAiText(body: unknown): string {
     throw new ProviderError("Il provider ha restituito una risposta vuota.");
   return assistant.content.trim();
 }
+
+/** A remote OpenAI-compatible endpoint may return an enormous or malformed
+ * JSON response even with HTTP 200. Bound actual decoded stream bytes before
+ * decoding/parsing; Content-Length is advisory and never the only limit.
+ */
+const MAX_COMPLETION_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_MODELS_RESPONSE_BYTES = 512 * 1024;
+
+async function readBoundedProviderJson(response: Response, maxBytes: number): Promise<unknown> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  try {
+    if (response.body && typeof response.body.getReader === "function")
+      reader = response.body.getReader();
+    const declared = response.headers?.get?.("content-length");
+    if (declared !== undefined && declared !== null &&
+        (!/^(0|[1-9][0-9]{0,9})$/.test(declared) || Number(declared) > maxBytes))
+      throw new ProviderError("La risposta del provider dichiara una dimensione non ammessa.");
+
+    let body: unknown;
+    if (reader) {
+      let count = 0;
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!(chunk.value instanceof Uint8Array))
+          throw new ProviderError("Il provider ha restituito byte non validi.");
+        if (chunk.value.byteLength > maxBytes - count)
+          throw new ProviderError("Risposta del provider troppo grande.");
+        count += chunk.value.byteLength;
+        chunks.push(chunk.value);
+      }
+      if (count === 0) throw new ProviderError("Risposta del provider vuota.");
+      const bytes = new Uint8Array(count);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    } else if (typeof response.text === "function") {
+      // Nonstreaming transports cannot prevent the initial allocation, but
+      // still cannot feed unbounded data to JSON.parse or downstream logic.
+      const raw = await response.text();
+      if (new TextEncoder().encode(raw).byteLength > maxBytes)
+        throw new ProviderError("Risposta del provider troppo grande.");
+      body = JSON.parse(raw);
+    } else {
+      // Compatibility for minimal in-memory fetch mocks using json() only.
+      // Real browser Response objects expose body/text; never rely on this
+      // fallback for streaming network size enforcement.
+      body = await response.json();
+      const raw = JSON.stringify(body);
+      if (typeof raw !== "string" ||
+          new TextEncoder().encode(raw).byteLength > maxBytes)
+        throw new ProviderError("Risposta del provider troppo grande.");
+    }
+    return body;
+  } catch (error) {
+    // Cancel as soon as an overflow, invalid JSON or stream failure is seen.
+    // Do not leak raw provider JSON/stream errors, prompts or credentials.
+    if (reader) {
+      try { await reader.cancel(); } catch { /* best-effort network abort */ }
+    }
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError("Risposta del provider non valida o interrotta.");
+  } finally {
+    reader?.releaseLock();
+  }
+}
+
 export function validateAiEndpoint(input: string): string {
   const url = new URL(input);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -109,7 +180,7 @@ export async function aiComplete(profile: AiProfile, apiKey: string, system: str
       ...(thinking && thinking !== "automatic" ? { reasoning_effort: thinking } : { temperature: 0.3 }) }),
   });
   if (!response.ok) throw new ProviderError("Provider AI: HTTP " + response.status + ". Controlla endpoint, credenziali e modello.");
-  const body: unknown = await response.json();
+  const body: unknown = await readBoundedProviderJson(response, MAX_COMPLETION_RESPONSE_BYTES);
   // Validate the completion envelope before a pipeline/code-agent task
   // can receive output or its optional provider-reported token observation.
   const text = completedAiText(body);
@@ -144,7 +215,7 @@ export async function discoverAiModels(profile: AiProfile, apiKey: string,
     throw new ProviderError("Impossibile leggere /models: controlla URL, HTTPS e CORS.");
   }
   if (!response.ok) throw new ProviderError("Catalogo modelli: HTTP " + response.status + ".");
-  const data: unknown = await response.json();
+  const data: unknown = await readBoundedProviderJson(response, MAX_MODELS_RESPONSE_BYTES);
   if (!data || typeof data !== "object" || !("data" in data) ||
       !Array.isArray(data.data) || data.data.length > 1000)
     throw new ProviderError("Catalogo /models non valido o troppo grande.");

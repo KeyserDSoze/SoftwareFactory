@@ -3,7 +3,7 @@ import { createProject, DEFAULT_SETTINGS } from "../domain/defaults";
 import { runStage } from "../application/pipeline";
 import { reviewCode } from "../application/code-agent";
 import type { FeatureProposal } from "../domain/development";
-import { aiComplete, formatProviderReportedUsage,
+import { aiComplete, discoverAiModels, formatProviderReportedUsage,
   parseProviderReportedUsage, type AiUsageObservation } from "./ai";
 
 const profile = () => ({ ...DEFAULT_SETTINGS.profiles[0],
@@ -269,5 +269,126 @@ describe("browser AI completed-envelope safety #132", () => {
     expect(onUsage).not.toHaveBeenCalled();
     expect(proposal).toEqual(before);
     expect(proposal.review).toBeUndefined();
+  });
+});
+
+// Real streaming Response fixtures: these go through the browser codepath,
+// unlike minimal json()-only mocks retained for legacy test coverage.
+describe("bounded provider HTTP JSON streaming #133", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function streaming(parts: Uint8Array[], headers: HeadersInit = {}) {
+    let cancelled = false;
+    let next = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (next < parts.length) controller.enqueue(parts[next++]);
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    });
+    return { response: new Response(stream, { status: 200, headers }),
+      cancelled: () => cancelled };
+  }
+  const bytes = (value: string) => new TextEncoder().encode(value);
+  const large = (size: number) => new Uint8Array(size);
+
+  it("accepts genuine streamed completions and model inventory below byte limits", async () => {
+    const onUsage = vi.fn();
+    const complete = streaming([bytes(JSON.stringify({
+      choices: [{ finish_reason: "stop",
+        message: { role: "assistant", content: "Safe streamed output" } }],
+      usage,
+    }))]);
+    vi.stubGlobal("fetch", vi.fn(async () => complete.response));
+    expect(await aiComplete(profile(), "api-key", "system", "user", undefined,
+      { onUsage })).toBe("Safe streamed output");
+    expect(onUsage).toHaveBeenCalledTimes(1);
+
+    const catalog = streaming([bytes(JSON.stringify({
+      data: [{ id: "safe-model-1" }, { id: "safe-model-2" }],
+    }))]);
+    vi.stubGlobal("fetch", vi.fn(async () => catalog.response));
+    expect(await discoverAiModels(profile(), "api-key")).toEqual([
+      "safe-model-1", "safe-model-2",
+    ]);
+  });
+
+  it("rejects oversized declared Content-Length before reading JSON or reporting usage", async () => {
+    const onUsage = vi.fn();
+    const stream = streaming([bytes(JSON.stringify(answer(usage)))],
+      { "content-length": "4194305" });
+    vi.stubGlobal("fetch", vi.fn(async () => stream.response));
+    await expect(aiComplete(profile(), "key", "secret system", "secret user",
+      undefined, { onUsage })).rejects.toThrow(/dimensione/);
+    expect(onUsage).not.toHaveBeenCalled();
+    expect(stream.cancelled()).toBe(true);
+
+    const invalid = streaming([bytes("{}")],
+      { "content-length": "NaN" });
+    vi.stubGlobal("fetch", vi.fn(async () => invalid.response));
+    await expect(aiComplete(profile(), "", "system", "user")).rejects.toThrow(
+      /dimensione/);
+    expect(invalid.cancelled()).toBe(true);
+  });
+
+  it("counts actual decoded completion bytes when Content-Length is missing or lies", async () => {
+    const onUsage = vi.fn();
+    for (const headers of [{}, { "content-length": "3" }]) {
+      const stream = streaming([
+        bytes(JSON.stringify(answer(usage))),
+        large(4 * 1024 * 1024),
+      ], headers);
+      vi.stubGlobal("fetch", vi.fn(async () => stream.response));
+      await expect(aiComplete(profile(), "key", "sensitive system",
+        "sensitive user", undefined, { onUsage })).rejects.toThrow(/troppo grande/);
+      expect(stream.cancelled()).toBe(true);
+    }
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("enforces a smaller model-catalog limit, including chunked responses", async () => {
+    const stream = streaming([bytes('{"data":['),
+      large(512 * 1024), bytes("]}")]);
+    vi.stubGlobal("fetch", vi.fn(async () => stream.response));
+    await expect(discoverAiModels(profile(), "key")).rejects.toThrow(/troppo grande/);
+    expect(stream.cancelled()).toBe(true);
+  });
+
+  it("rejects malformed UTF-8, invalid JSON and stream errors without leaking contents", async () => {
+    const onUsage = vi.fn();
+    const brokenUtf8 = streaming([new Uint8Array([0xc3, 0x28])]);
+    vi.stubGlobal("fetch", vi.fn(async () => brokenUtf8.response));
+    await expect(aiComplete(profile(), "key", "secret system",
+      "secret user", undefined, { onUsage })).rejects.toThrow(/non valida/);
+    const malformed = streaming([bytes('{"secret":"NEVER_ECHO_SECRET"')]);
+    vi.stubGlobal("fetch", vi.fn(async () => malformed.response));
+    await expect(aiComplete(profile(), "key", "system", "user", undefined,
+      { onUsage })).rejects.toThrow(/non valida/);
+
+    const failing = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(Error("NEVER_ECHO_PROVIDER_BODY")); },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(failing, { status: 200 })));
+    try {
+      await aiComplete(profile(), "key", "system", "user", undefined,
+        { onUsage });
+      throw Error("Expected failure");
+    } catch (error) {
+      expect(String(error)).toMatch(/ProviderError/);
+      expect(String(error)).not.toContain("NEVER_ECHO_PROVIDER_BODY");
+      expect(String(error)).not.toContain("secret");
+    }
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+
+  it("bounds no-stream in-memory test responses without skipping the guard", async () => {
+    const onUsage = vi.fn();
+    mockResponse({ choices: [{ message: { content: "a".repeat(4 * 1024 * 1024) } }],
+      usage });
+    await expect(aiComplete(profile(), "key", "system", "user", undefined,
+      { onUsage })).rejects.toThrow(/troppo grande/);
+    expect(onUsage).not.toHaveBeenCalled();
   });
 });
