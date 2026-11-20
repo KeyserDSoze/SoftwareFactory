@@ -302,11 +302,17 @@ export function prepareAiReviewStage(workspace,receipt,trustedKeySource,{
 /** Verify the operator did not substitute a report on its way to staging.
  * This checks the local request; it NEVER calls the runner or submits it.
  */
-export function verifyAiReviewStage(workspace,receipt,trustedKeySource,stage) {
+export function verifyAiReviewStage(
+  workspace,receipt,trustedKeySource,stage,{leaseId,submissionId},
+) {
   try {
     validateReviewArtifactStage(stage);
+    // The receipt predates the UUID choices; the operator MUST provide the
+    // originally selected IDs separately to detect local stage substitution.
+    if(stage.leaseId!==leaseId || stage.submissionId!==submissionId)
+      throw fail();
     const expected=prepareAiReviewStage(workspace,receipt,trustedKeySource,{
-      leaseId:stage.leaseId,submissionId:stage.submissionId,
+      leaseId,submissionId,
     });
     if(canonical(stage)!==canonical(expected))throw fail();
     return {verified:true,
@@ -321,10 +327,14 @@ export function verifyAiReviewStage(workspace,receipt,trustedKeySource,stage) {
  * The server response is still not an independent execution attestation.
  */
 export function verifyAiReviewStoredArtifact(
-  workspace,receipt,trustedKeySource,stage,stored,{owner,tenantId},
+  workspace,receipt,trustedKeySource,stage,stored,{
+    owner,tenantId,leaseId,submissionId,
+  },
 ) {
   try {
-    verifyAiReviewStage(workspace,receipt,trustedKeySource,stage);
+    verifyAiReviewStage(workspace,receipt,trustedKeySource,stage,{
+      leaseId,submissionId,
+    });
     if(!ACTOR.test(owner) ||
         !(tenantId===null || typeof tenantId==="string" &&
           TENANT.test(tenantId)) ||
@@ -370,9 +380,11 @@ export async function main(argv=process.argv.slice(2)) {
     mode==="verify" ? ["workspace","receipt","public-key"] :
     mode==="prepare-stage" ? ["workspace","receipt","public-key",
       "lease-id","submission-id","out"] :
-    mode==="verify-stage" ? ["workspace","receipt","public-key","stage"] :
+    mode==="verify-stage" ? ["workspace","receipt","public-key",
+      "stage","lease-id","submission-id"] :
     mode==="verify-stored" ? ["workspace","receipt","public-key",
-      "stage","stored","expected-owner","expected-tenant"] : null;
+      "stage","stored","lease-id","submission-id",
+      "expected-owner","expected-tenant"] : null;
   if(!names || options.length!==names.length)throw fail();
   const flags=Object.create(null);
   for(const option of options){
@@ -411,14 +423,17 @@ export async function main(argv=process.argv.slice(2)) {
     }
     const stage=await readBoundedJson(flags.stage,"receipt");
     if(mode==="verify-stage"){
-      const result=verifyAiReviewStage(workspace,receipt,pub,stage);
+      const result=verifyAiReviewStage(workspace,receipt,pub,stage,{
+        leaseId:flags["lease-id"],submissionId:flags["submission-id"],
+      });
       process.stdout.write("AI_REVIEW_STAGE_REQUEST_VERIFIED\n");
       return result;
     }
     const stored=await readBoundedJson(flags.stored,"receipt");
     const result=verifyAiReviewStoredArtifact(workspace,receipt,pub,
       stage,stored,{owner:flags["expected-owner"],
-        tenantId:flags["expected-tenant"]==="-"?null:flags["expected-tenant"]});
+        tenantId:flags["expected-tenant"]==="-"?null:flags["expected-tenant"],
+        leaseId:flags["lease-id"],submissionId:flags["submission-id"]});
     process.stdout.write("AI_REVIEW_STORED_DOCUMENT_COMPARED\n");
     return result;
   }

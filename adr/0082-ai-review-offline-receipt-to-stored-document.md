@@ -21,3 +21,8 @@ La CLI non chiama `review_submit` o `review_approve`, non crea lease, non invia 
 ## Limiti
 
 La firma Ed25519 è dell'operatore, non del provider: può confermare solo la propria dichiarazione, non vera esecuzione AI o costi. Un server compromesso può ricostruire il proprio hash e fingere una GET consistente; per integrità off-host indipendente occorre ancorare realmente il report a un testimone/firma che il server non controlli. `verify-stored` non è una decisione umana indipendente e non sblocca automaticamente successori. Test locali con record simulati verificano il parser/digest, non la presenza del record su una macchina remota. #113/#109/#105 rimangono aperte.
+
+
+### Amendment dopo la prima CI (#44719842709)
+
+La receipt di osservazione è firmata **prima** del deposito, perciò un `leaseId` o `submissionId` che rispetta soltanto il formato UUID non è legato dalla firma originale. La prima regressione ha rilevato correttamente che `verify-stage` non poteva distinguere un UUID alternativo dal valore originale quando leggeva solo il body potenzialmente mutato. La soluzione richiede che `verify-stage` e `verify-stored` ricevano **gli UUID originariamente scelti da una fonte indipendente** (`--lease-id`, `--submission-id`) e li confrontino con quelli nel file. Non si dichiara che la chiave Ed25519 attesti la lease o renda un ID verificabile senza questa input separata. Il controllo lato API continua a verificare la lease viva con fencing e reauthorization sotto lock; i test includono la sostituzione di entrambi gli UUID.

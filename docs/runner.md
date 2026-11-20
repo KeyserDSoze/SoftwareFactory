@@ -1360,7 +1360,9 @@ node src/runner/ai-review-execute.mjs prepare-stage \
 
 node src/runner/ai-review-execute.mjs verify-stage \
   --workspace=review-workspace.json --receipt=ai-review-receipt.json \
-  --public-key=review-trusted.pub --stage=review-stage.json
+  --public-key=review-trusted.pub --stage=review-stage.json \
+  --lease-id=YOUR_ACTIVE_REVIEW_LEASE_UUID \
+  --submission-id=YOUR_NEW_SUBMISSION_UUID
 ```
 
 Dopo aver inviato manualmente il body `review-stage.json` con la credenziale del Reviewer al POST esistente, e aver eseguito `review_submit` manuale, il Reviewer/approvatore indipendente autorizzato può salvare la risposta della GET `/v1/agent-review-artifacts/{submissionId}` in un file privato `stored-review.json` (non inserire Bearer nei comandi), poi controllare che il digest `stored_review_document_v1` ricostruito, `owner` e `tenantId` attesi, generation, source e documento **coincidano** con la receipt originale:
@@ -1370,8 +1372,13 @@ node src/runner/ai-review-execute.mjs verify-stored \
   --workspace=review-workspace.json --receipt=ai-review-receipt.json \
   --public-key=review-trusted.pub --stage=review-stage.json \
   --stored=stored-review.json \
+  --lease-id=YOUR_ACTIVE_REVIEW_LEASE_UUID \
+  --submission-id=YOUR_NEW_SUBMISSION_UUID \
   --expected-owner=YOUR_REVIEWER_ACTOR_ID \
   --expected-tenant=YOUR_TENANT_ID
 ```
 
 Per handoff senza tenant usare letteralmente `--expected-tenant=-`, mentre `--expected-owner` deve essere l'ID actor del reviewer già noto dall'handoff. La CLI non recupera sorgenti o report dall'API, non conferma che il server abbia realmente scritto i byte, non verifica identità del provider e non approva nulla; legge soltanto file forniti dall'operatore e ricalcola i binding verificabili offline. Il server deve rimanere responsabile di actor ACL, review lease, journal e approval indipendente. La firma Ed25519 è **dell'operatore**, non del vendor, e un report GET falsificato da un server ostile non diventa attestazione off-host con il solo hash locale. Nessun costo/token certificato. ADR 0082; #113/#109/#105 aperte.
+
+
+**Anti-sostituzione UUID (#128):** gli identificatori di lease e submission vengono scelti *dopo* la firma del provider response, perciò **non** possono essere dedotti dalla receipt. `verify-stage` e `verify-stored` richiedono entrambi il `--lease-id` e `--submission-id` attesi **dalla scelta già confermata dall'operatore** (ad esempio dal proprio record di handoff), non ricalcolati dal JSON potenzialmente alterato. Se non si conoscono più gli UUID attesi, la verifica fail-closed; non inventare un pair e non interpretare il solo formato UUID come prova di lease corrente.

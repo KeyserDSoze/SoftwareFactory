@@ -312,7 +312,9 @@ test("signed operator receipt creates exact actor-scoped staged document and mat
   assert.equal(stage.document,receipt.statement.document);
   assert.equal(stage.submissionId,submissionId);
   assert.ok(Buffer.byteLength(JSON.stringify(stage))+1<=8192);
-  assert.equal(verifyAiReviewStage(ws,receipt,publicKey,stage).verified,true);
+  assert.equal(verifyAiReviewStage(ws,receipt,publicKey,stage,{
+    leaseId,submissionId,
+  }).verified,true);
   const owner="reviewer-one",tenantId="tenant-one";
   const record=makeReviewArtifactRecord({
     handoffId:ws.handoffId,taskId:ws.taskId,submissionId,tenantId,owner,
@@ -324,7 +326,7 @@ test("signed operator receipt creates exact actor-scoped staged document and mat
     sourceFingerprint:ws.sourceFingerprint,
     artifactDigest:record.digest,artifactMode:REVIEW_ARTIFACT_MODE,
     document:record.document};
-  const opts={owner,tenantId};
+  const opts={owner,tenantId,leaseId,submissionId};
   const verified=verifyAiReviewStoredArtifact(ws,receipt,publicKey,stage,stored,opts);
   assert.equal(verified.verified,true);
   assert.equal(verified.artifactDigest,record.digest);
@@ -351,15 +353,17 @@ test("signed operator receipt creates exact actor-scoped staged document and mat
     mutate(stage,x=>{x.taskId="different-review";}),
     mutate(stage,x=>{x.leaseId=randomUUID();}),
     mutate(stage,x=>{x.extra="passed";}),
-  ]) {
-    // A different lease is a different legitimate request, so only its
-    // chosen lease holder can know that ID; check remaining identity bindings.
-    if(altered.leaseId!==stage.leaseId && 
-        altered.submissionId===stage.submissionId &&
-        altered.document.summary===stage.document.summary)continue;
-    assert.throws(()=>verifyAiReviewStage(ws,receipt,publicKey,altered),
-      {code:"AI_REVIEW_INVALID"});
-  }
+  ])assert.throws(()=>verifyAiReviewStage(
+    ws,receipt,publicKey,altered,{leaseId,submissionId}),
+  {code:"AI_REVIEW_INVALID"});
+  // A receipt cannot itself fix an ID chosen after signing. The separate
+  // expected pair makes substitutions detectable by an operator.
+  assert.throws(()=>verifyAiReviewStage(ws,receipt,publicKey,stage,{
+    leaseId:randomUUID(),submissionId,
+  }),{code:"AI_REVIEW_INVALID"});
+  assert.throws(()=>verifyAiReviewStage(ws,receipt,publicKey,stage,{
+    leaseId,submissionId:randomUUID(),
+  }),{code:"AI_REVIEW_INVALID"});
   for(const altered of [
     mutate(stored,x=>{x.document.summary="Swapped document";}),
     mutate(stored,x=>{x.document.recommendation="approve";}),
@@ -374,10 +378,10 @@ test("signed operator receipt creates exact actor-scoped staged document and mat
   ])assert.throws(()=>verifyAiReviewStoredArtifact(
     ws,receipt,publicKey,stage,altered,opts),{code:"AI_REVIEW_INVALID"});
   assert.throws(()=>verifyAiReviewStoredArtifact(
-    ws,receipt,publicKey,stage,stored,{owner:"other",tenantId}),
+    ws,receipt,publicKey,stage,stored,{...opts,owner:"other"}),
   {code:"AI_REVIEW_INVALID"});
   assert.throws(()=>verifyAiReviewStoredArtifact(
-    ws,receipt,publicKey,stage,stored,{owner,tenantId:"wrong-tenant"}),
+    ws,receipt,publicKey,stage,stored,{...opts,tenantId:"wrong-tenant"}),
   {code:"AI_REVIEW_INVALID"});
   assert.throws(()=>verifyAiReviewStoredArtifact(
     ws,receipt,pair().publicKey,stage,stored,opts),
@@ -385,7 +389,7 @@ test("signed operator receipt creates exact actor-scoped staged document and mat
   const noTenantRecord=makeReviewArtifactRecord({...record,tenantId:null});
   const unscoped={...stored,tenantId:null,artifactDigest:noTenantRecord.digest};
   assert.equal(verifyAiReviewStoredArtifact(ws,receipt,publicKey,
-    stage,unscoped,{owner,tenantId:null}).verified,true);
+    stage,unscoped,{...opts,tenantId:null}).verified,true);
 });
 
 test("offline stage CLI is write-once, side-effect free and verifies server readback",async()=>{
@@ -415,8 +419,9 @@ test("offline stage CLI is write-once, side-effect free and verifies server read
     assert.equal(contents.includes(sourceCode),false);
     assert.equal(contents.includes(apiKey),false);
     assert.ok(Buffer.byteLength(contents)<=8192);
+    const boundIds=["--lease-id="+leaseId,"--submission-id="+submissionId];
     assert.equal((await main(["verify-stage",...shared,
-      "--stage="+stagePath])).verified,true);
+      "--stage="+stagePath,...boundIds])).verified,true);
     await assert.rejects(main(createArgs),{code:"AI_REVIEW_INVALID"});
     const markerPath=path.join(dir,"marker.json");
     await symlink(stagePath,markerPath);
@@ -436,9 +441,13 @@ test("offline stage CLI is write-once, side-effect free and verifies server read
       artifactDigest:storedRecord.digest,document:stage.document};
     await writeFile(storedPath,JSON.stringify(stored),{mode:0o600});
     const checkArgs=["verify-stored",...shared,"--stage="+stagePath,
-      "--stored="+storedPath,"--expected-owner="+owner,
+      "--stored="+storedPath,...boundIds,"--expected-owner="+owner,
       "--expected-tenant="+tenantId];
     assert.equal((await main(checkArgs)).verified,true);
+    await assert.rejects(main(checkArgs.map(x=>x.startsWith("--lease-id=")?
+      "--lease-id="+randomUUID():x)),{code:"AI_REVIEW_INVALID"});
+    await assert.rejects(main(checkArgs.map(x=>x.startsWith("--submission-id=")?
+      "--submission-id="+randomUUID():x)),{code:"AI_REVIEW_INVALID"});
     await writeFile(storedPath,JSON.stringify({...stored,
       document:{...stored.document,recommendation:"approve"}}),{mode:0o600});
     await assert.rejects(main(checkArgs),{code:"AI_REVIEW_INVALID"});
