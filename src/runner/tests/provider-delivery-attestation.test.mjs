@@ -156,6 +156,16 @@ test("CLI verifies only with pinned public key files, no remote calls, and rejec
       "--expected-provider-host="+providerHost,
       "--expected-provider-key-sha256="+publicKeyFingerprint(x.provider.publicKey)];
     assert.equal((await main(args)).verified,true);
+    // The independent trust pin includes digits in --expected-provider-key-sha256;
+    // malformed/unknown/duplicate options must still fail before any I/O.
+    await assert.rejects(main([...args,"--untrusted=true"]),
+      {code:"PROVIDER_DELIVERY_INVALID"});
+    await assert.rejects(main([...args,"--expected-provider-id=duplicate"]),
+      {code:"PROVIDER_DELIVERY_INVALID"});
+    await assert.rejects(main(args.map(a=>
+      a.startsWith("--expected-provider-key-sha256=")?
+        "--expected-provider-key-sha256=not-a-digest":a)),
+      {code:"PROVIDER_DELIVERY_INVALID"});
     const linked=path.join(dir,"linked-public.pem");
     await symlink(fs["provider-public-key"],linked);
     await assert.rejects(main(args.map(a=>a.startsWith("--provider-public-key=")?

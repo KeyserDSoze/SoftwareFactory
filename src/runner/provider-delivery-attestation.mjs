@@ -96,7 +96,9 @@ export async function main(argv=process.argv.slice(2)) {
   if(mode!=="verify" || options.length!==expected.length)throw fail();
   const flags=Object.create(null);
   for(const option of options){
-    const match=/^--([a-z-]+)=(.+)$/.exec(option);
+    // The fixed allowlist contains sha256 (digits); do not relax the
+    // vocabulary itself when accepting alphanumeric flag names.
+    const match=/^--([a-z0-9-]+)=(.+)$/.exec(option);
     if(!match || !expected.includes(match[1]) || flags[match[1]])
       throw fail();
     flags[match[1]]=match[2];
