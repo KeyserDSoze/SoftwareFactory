@@ -1068,3 +1068,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Prima CI #44743313679 interrotta da TS2345 nella fixture degli header per un union type inferito (possibile proprietà `undefined`); test corretto con oggetti `Headers` reali e ripetizione CI sul commit definitivo, senza alterare il parser streaming di produzione.
 
 - [x] Seconda CI #44743553091: 169/170 Vitest passati, ultima fixture attendeva `cancel()` su stream già `closed` dal prefetch; aggiunto chunk successivo non consumato per verificare la reale cancellazione sullo stream ancora aperto dopo overflow. Parser di produzione rimasto invariato, ripetere CI completa.
+
+
+## Recupero indice libreria e selezione progetto per scheda (#134 — 20/11/2026)
+
+- [x] Indice locale trattato come cache ricostruibile da slot per-progetto su Storage enumerabile: tab distinti che lavorano su ID diversi non nascondono copie valide anche se l'ultimo writer perde una voce della cache; scarta entry corrotte, ghost e >1MB, limite 40 derivato dagli slot.
+- [x] `sessionStorage` per-tab conserva **solo ID** attivo dopo scrittura completa; ricarica indipendente dal puntatore legacy globale che un altro writer può cambiare. Fallback legacy e regression dual-tab, cap, ghost, running->pending, progetto sparito.
+- [ ] Verificare Factory CI/Pages/Installer sullo SHA finale e chiudere #134 solo dopo prove. #92/#91 restano aperte: niente CAS IndexedDB o Google Drive multi-device realmente attestato; backup e intervento umano necessari. ADR 0088.

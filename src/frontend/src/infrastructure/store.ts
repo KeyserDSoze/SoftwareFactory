@@ -5,9 +5,25 @@ const PROJECT_KEY = "softwarefactory.project.v1";
 const SETTINGS_KEY = "softwarefactory.settings.v1";
 const PROJECT_LIBRARY_PREFIX = "softwarefactory.project.library.v1.";
 const PROJECT_INDEX = "softwarefactory.project.index.v1";
+// Each editor tab remembers its selected project independently. The
+// localStorage PROJECT_KEY remains as a backwards-compatible pointer only.
+const TAB_ACTIVE_PROJECT = "softwarefactory.project.active-tab.v1";
+const PROJECT_ID = /^[0-9a-f-]{36}$/i;
+const MAX_LIBRARY_PROJECTS = 40;
+const MAX_PROJECT_BYTES = 1_000_000;
 const SECRET_PREFIX = "softwarefactory.secret.";
 
 export function loadProject(): FactoryProject {
+  // sessionStorage is scoped to the tab and survives reload. Prefer it to
+  // the global active pointer, which another valid per-project writer may
+  // update concurrently when working on a DIFFERENT project.
+  try {
+    const selected = sessionStorage.getItem(TAB_ACTIVE_PROJECT);
+    if (selected && PROJECT_ID.test(selected)) {
+      try { return loadLocalProject(selected); }
+      catch { return createProject(); } // Never silently open another tab's ID.
+    }
+  } catch { /* legacy localStorage pointer remains available */ }
   try {
     const value = localStorage.getItem(PROJECT_KEY);
     if (value) {
@@ -32,13 +48,51 @@ function index(): LocalProjectChoice[] {
       typeof (x as LocalProjectChoice).repository === "string").slice(0, 40);
   } catch { return []; }
 }
+/** The global PROJECT_INDEX is only a legacy display cache. Different
+ * project-ID writer locks allow concurrent tabs A and B, so their global
+ * read-modify-write index updates may overwrite one another. Enumerate the
+ * actual authoritative per-project slots when Storage.key/length is present,
+ * without touching or rewriting them. This is NOT a distributed CAS.
+ */
 export function listLocalProjects(): LocalProjectChoice[] {
-  return index().sort((a,b) => b.updatedAt.localeCompare(a.updatedAt));
+  const byNewest = (a: LocalProjectChoice, b: LocalProjectChoice) =>
+    b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
+  try {
+    if (typeof localStorage.key !== "function" ||
+        !Number.isSafeInteger(localStorage.length) ||
+        localStorage.length < 0 || localStorage.length > 10000)
+      return index().sort(byNewest);
+    const projects = new Map<string, LocalProjectChoice>();
+    // Read the key names first so that synchronous changes during validation
+    // cannot produce duplicate indices from the shifting Storage.key() order.
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (typeof key === "string" &&
+          key.startsWith(PROJECT_LIBRARY_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) {
+      const id = key.slice(PROJECT_LIBRARY_PREFIX.length);
+      if (!PROJECT_ID.test(id)) continue;
+      let project: FactoryProject;
+      try { project = loadLocalProject(id); } catch { continue; }
+      if (typeof project.updatedAt !== "string" ||
+          project.updatedAt.length > 64 ||
+          !Number.isFinite(Date.parse(project.updatedAt))) continue;
+      projects.set(id, {
+        id, name: project.config.name, updatedAt: project.updatedAt,
+        repository: project.githubDestination?.owner &&
+          project.githubDestination?.repo ?
+          project.githubDestination.owner + "/" + project.githubDestination.repo : "",
+      });
+    }
+    return [...projects.values()].sort(byNewest).slice(0, MAX_LIBRARY_PROJECTS);
+  } catch { return index().sort(byNewest); }
 }
 export function loadLocalProject(id: string): FactoryProject {
-  if (!/^[0-9a-f-]{36}$/i.test(id)) throw Error("ID progetto locale non valido.");
+  if (!PROJECT_ID.test(id)) throw Error("ID progetto locale non valido.");
   const data = localStorage.getItem(PROJECT_LIBRARY_PREFIX + id);
-  if (!data || data.length > 1_000_000) throw Error("Progetto non trovato o troppo grande.");
+  if (!data || data.length > MAX_PROJECT_BYTES) throw Error("Progetto non trovato o troppo grande.");
   let project: FactoryProject;
   try { project = JSON.parse(data) as FactoryProject; }
   catch { throw Error("Progetto locale non valido."); }
@@ -72,8 +126,10 @@ export function persistProject(project: FactoryProject): void {
   // The per-project copy is the concurrency authority. It MUST persist before
   // advancing the active-project pointer, otherwise a quota error could leave
   // a seemingly saved project that vanished from the recoverable library.
-  const all = index();
-  if (!all.some(x => x.id === project.id) && all.length >= 40)
+  // Capacity is calculated from recoverable project slots rather than the
+  // cache index (which can lose an entry when A and B save simultaneously).
+  const all = listLocalProjects();
+  if (!all.some(x => x.id === project.id) && all.length >= MAX_LIBRARY_PROJECTS)
     throw Error("Libreria locale piena (40 progetti): esporta e archivia un progetto prima di aggiungerne altri.");
   localStorage.setItem(PROJECT_LIBRARY_PREFIX + project.id, raw);
   localStorage.setItem(PROJECT_KEY, raw);
@@ -83,6 +139,11 @@ export function persistProject(project: FactoryProject): void {
       project.githubDestination.owner + "/" + project.githubDestination.repo : "" };
   const selected = [current, ...all.filter(x => x.id !== project.id)].slice(0, 40);
   localStorage.setItem(PROJECT_INDEX, JSON.stringify(selected));
+  // The tab pointer is advanced only AFTER the project slot, legacy pointer
+  // and index writes returned successfully. Missing sessionStorage support
+  // must never roll back a confirmed localStorage project write.
+  try { sessionStorage.setItem(TAB_ACTIVE_PROJECT, project.id); }
+  catch { /* fall back to the legacy global pointer in restricted contexts */ }
 }
 export function loadSettings(): FactorySettings {
   try {

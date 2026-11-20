@@ -636,3 +636,8 @@ Il contratto `aiComplete` della SPA è condiviso da pipeline, Code Agent, review
 ### JSON provider browser bounded prima del parse (#133)
 
 Tutti i client della SPA che invocano `aiComplete` condividono `readBoundedProviderJson`: conteggio byte sullo stream decodificato di Response, guard preflight Content-Length, overflow fail-closed a 4 MiB su /chat/completions e 512 KiB su /models, `cancel()` e `releaseLock()` dopo eccezioni e parsing UTF-8 fatal. Nessun body o secret nei messaggi. Per mock HTTP leggeri senza stream vale solo un controllo post-serializzazione; in un browser reale Response.body è il percorso pre-parse. `onUsage` può essere emesso solo dopo guard JSON e completion envelope (#132). Il limite non trasforma usage dichiarato in billing verificato. ADR 0087.
+
+
+### Ricostruzione dell'indice per-progetto e puntatore per scheda (#134)
+
+La libreria `localStorage` dispone di copie persistenti `softwarefactory.project.library.v1.<id>` protette da Web Locks per *ID*, mentre l'indice globale e il puntatore attivo legacy non sono serializzabili fra schede che editano ID diversi. `listLocalProjects` enumera quindi le chiavi effettive con `Storage.key/length`, valida gli snapshot `loadLocalProject` e ricostruisce dinamicamente una vista ordinata, con limite 40; `PROJECT_INDEX` resta solo cache/fallback per API Storage ridotte. La scheda mantiene il progetto selezionato in un semplice `sessionStorage` ID, aggiornato solo dopo commit locale completo; `loadProject` carica l'ID atteso dalla libreria autorevole. Nessuna idoneità di evidenze runner trasferibile, nessun PAT/secret nel puntatore e nessuna falsa promessa di CAS/atomicità `localStorage` tra profili/dispositivi. ADR 0088.
