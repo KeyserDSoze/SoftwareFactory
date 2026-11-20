@@ -566,3 +566,8 @@ Il coordinatore handoff introduce eventi \`test_verified\` soltanto per task \`t
 ### Source inspection actor-scoped per Code Reviewer (#119)
 
 La GET `/v1/agent-review-sources/:submissionId` restituisce i **byte canonici dei file** conservati in `jobs/<jobId>/input.json` *solo* a Reviewer owner / `review_approver` indipendente same-tenant dopo un report artifact-backed presentato. Riutilizza la verifica di manifest, journal Tester e rapporto custodito, riapre l'input con FD sicuro e ne confronta digest di job e source-only. Eroga file sotto limiti/allowlist già imposti al runner, con `no-store`. La route non cambia lo stato della review, non persiste una seconda copia, non prova visualizzazione effettiva e non esegue agenti AI. I file possono essere proprietari: accesso actor-only, mai dump nei log. ADR 0072.
+
+
+### Flusso corretto di lettura per Code Reviewer (#120)
+
+Con una lease `code_reviewer` attiva, `GET /v1/agent-review-workspaces/:handoffId/:taskId` rende accessibile al **solo owner del task** il file set verificato del Tester, *prima* della creazione del rapporto. La GET è serializzata nel lock admission POSIX come `claim/renew/release`, controlla prima/dopo actor credential e lease expiry; riusa le funzioni di verifica sorgenti di #119. Dopo `review_submit` l'endpoint pre-review non è più accessibile; l'approvatore separato usa il read-only #119 legato a `submissionId`. I file originali non vengono duplicati nei manifest, non sono inoltrati a un LLM senza consenso e non incrementano né completion né contabilità provider. ADR 0073.

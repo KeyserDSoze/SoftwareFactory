@@ -948,3 +948,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Endpoint read-only actor-only di sorgenti Tester validati, disponibile solo a Reviewer owner o approvatore indipendente same-tenant dopo submit di rapporto staged; validazione ripetuta dei file originari, journal e source fingerprint, no cache/secret/leaseId in risposta.
 - [x] Test Node 2 API su fedeltà file/digest, accesso pre-submit, ACL ruolo/tenant, token revocati, symlink/tamper e dopo approvazione.
 - [ ] Il fatto che un file venga restituito all'approvatore **non dimostra** che sia stato letto o che una AI abbia svolto il Code Review; per prove off-host e contabilizzazione provider restano #113/#109/#105.
+
+
+## Pre-review Reviewer workspace sotto lease (#120 — 20/11/2026)
+
+- [x] Un Reviewer con lease attiva può ottenere il file set originale del Tester **prima** di produrre il rapporto, dal nuovo `GET /v1/agent-review-workspaces/:handoffId/:taskId`. Source integrity = input/journal e digest verificati #114; no source copiato nel manifest, `no-store`.
+- [x] Differente canale post-submit per l'approvatore #119, separazione dei ruoli/tenant, deny su release/expiry e source tamper, actor token revocato; due API, fencing lock e regressioni multi-Tester stessi file.
+- [ ] Prova di reale lettura/comprensione, agent executor LLM e costi attestati da provider indipendente **non** risolti: #113/#109/#105.

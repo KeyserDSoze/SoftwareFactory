@@ -1220,3 +1220,19 @@ La GET risponde con `{version,handoffId,taskId,submissionId,sourceFingerprint,so
 La lettura avviene solo dopo `review_submit` verificata: prima, `404`; Bearer root/tenant, altri ruoli, actor non proprietari e approver di tenant diversa non possono accedere. Il server re-verifica gli eventi SHA-chain, il report/journal tecnico, l'input originale da FD protetto con `O_NOFOLLOW` e stat stabile, il digest pieno del job e quello file-only, e controlla nuovamente la credenziale actor prima della risposta. Rimozione o modifica di `input.json` => fail closed senza output parziale. Anche dopo l'approvazione manuale, l'accesso resta vincolato al record corrente. Gli header sono `Cache-Control: no-store` e `X-Content-Type-Options: nosniff`.
 
 **Sicurezza:** non è un endpoint pubblico e **restituisce codice sorgente** (max 160 file e 1,1 MB di testo secondo lo schema runner), che può essere proprietario. Non salvare in log, strumenti di analytics, cache o servizi di terzi, e non inviare segreti al job. Il consenso esplicito dell'handoff/runner non costituisce permesso per inviare il codice a nuovi provider AI. Non è una prova che l'attore abbia effettivamente letto o compreso i file e non registra esecuzioni o costi di modelli. Per una attestazione esterna occorrono ancora #113/#109/#105.
+
+
+## Workspace di sorgenti pre-review per il Reviewer con lease (#120)
+
+**Ordine corretto del flusso:** dopo aver completato un job Tester e verificato la sua prova `test_verified` (#111/#114), il Code Reviewer ottiene una lease con `POST /v1/agent-task-leases` (`action:"claim"`). **Prima** di scrivere o depositare il rapporto #116, può usare:
+
+```http
+GET /v1/agent-review-workspaces/<handoffId>/<taskId>
+Authorization: Bearer <code-reviewer-actor-key>
+```
+
+Risposta, solo a Reviewer owner autorizzato con lease attiva e non scaduta: `{version,handoffId,taskId,generation,sourceFingerprint,sourceDigest,fileCount,bytes,files}`. Il mapping `files` è l'input originale dei test, letto e canonizzato nuovamente con le stesse verifiche di `input.json`, digest job, source file-only e review context. Se due Tester diretti hanno file set diversi, manca una fonte verificabile o il file/journal è alterato, il server non consegna nessun file. Una seconda istanza API usa lo stesso lock POSIX per impedire una release/claim in parallelo alla lettura; il token viene rivalidato dentro il lock **prima e dopo** il read, insieme alla scadenza della lease.
+
+Questa route non richiede `submissionId` né consente l'accesso dell'approvatore: serve a **preparare** la review. Il Reviewer redige quindi il documento strutturato, lo deposita su `POST /v1/agent-review-artifacts` e lo presenta con `POST /v1/agent-task-reviews submit`. Da quel momento la route pre-review rifiuta ogni lettura; la #119 resta la route separata, `GET /v1/agent-review-sources/:submissionId`, per l'approvatore indipendente **dopo** la submission. Le chiavi runner root e tenant, altri owner e ruoli diversi non sono ammessi. Una lease rilasciata, rifiutata, approvata o scaduta non autorizza un workspace; una nuova generazione deve essere nuovamente reclamata.
+
+**Sicurezza:** la response comprende **codice sorgente** (non segreti, log, job ID o leaseId), con `Cache-Control:no-store` e `X-Content-Type-Options:nosniff`. Trattarlo come materiale potenzialmente proprietario; non loggare, diffondere o inoltrare automaticamente a provider AI. La lettura è un'opportunità di ispezione, non attestazione della qualità, lettura umana, lavoro LLM o costo reale. Le issue #113/#109/#105 restano aperte per esecuzione AI/provider usage e attestazioni off-host.
