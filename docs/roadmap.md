@@ -1000,3 +1000,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] `provider-egress.mjs` risolve record A IPv4 **prima** del POST e blocca **qualsiasi** record special-use (anche in risposte DNS miste). La TLS socket viene creata direttamente dall'IP già verificato via `lookup` pinned, `servername` hostname e certificato verificato, nessuna seconda risoluzione non validata o redirect/pooling/HTTP fallback.
 - [x] Deadline end-to-end da DNS a body (30s), risposta <=64KiB, errori generici e nessuna retry automatica; CLI con consenso esplicito e receipt operatore invariata. Regressioni `provider-egress.test.mjs` con DNS/HTTPS socket fake, nessuna fatturazione in CI.
 - [ ] L'operatore deve ancora verificare il provider e autorizzare l'invio del codice; IPv6-only non supportato per ora, no DNSSEC/proxy allowlist/attestation firmata da vendor: #113/#109/#105 aperte. ADR 0079.
+
+
+## Teardown su rifiuto del provider HTTPS (#126 — 20/11/2026)
+
+- [x] Riprodurre e correggere il gap di cleanup per status non-2xx e `Content-Length` invalido/oltre 64KiB: chiamare `IncomingMessage.destroy()` anche prima di leggere il body, continuando a negare overflow, troncamenti e fallimenti TLS senza retry.
+- [x] Aggiungere test Node con risposta ostile che resta in attesa e verifica esplicita che lo stream sia distrutto, senza traffico verso provider reali; conservare DNS A pinned e deadline unica della #125.
+- [ ] Registrare esiti Factory CI, Pages e Installer sullo SHA finale di main prima di chiudere #126. La firma operatore non equivale a provider attestation; #113/#109/#105 rimangono aperte. ADR 0080.

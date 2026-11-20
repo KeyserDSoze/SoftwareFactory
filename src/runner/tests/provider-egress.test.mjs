@@ -188,3 +188,46 @@ test("TLS/socket failures, redirects, oversized or partial responses fail withou
     neverRespond,{deadlineMs:30})),{code:"AI_REVIEW_INVALID"});
   assert.equal(called,2);
 });
+
+test("non-2xx, rejected headers and body limits actively close hostile response streams",async()=>{
+  for(const fixture of [
+    {status:302},
+    {status:401},
+    {status:503},
+    {status:200,headers:{"content-length":"65537"}},
+    {status:200,headers:{"content-length":"invalid"}},
+    {status:200,headers:{"content-length":["2","3"]}},
+    {status:200,chunks:[Buffer.alloc(65_537)]},
+    {status:200,headers:{"content-length":"4"},
+      chunks:[Buffer.from("abc")],ended:true},
+  ]){
+    let requests=0,teardowns=0,seen;
+    const requestImpl=(_url,options,onResponse)=>{
+      requests++;
+      assert.equal(options.agent,false);
+      assert.equal(options.rejectUnauthorized,true);
+      const req=new EventEmitter();
+      req.end=()=>queueMicrotask(()=>{
+        const incoming=new Readable({read(){}});
+        incoming.statusCode=fixture.status;
+        incoming.headers=fixture.headers||{};
+        const originalDestroy=incoming.destroy.bind(incoming);
+        incoming.destroy=(...args)=>{
+          teardowns++;
+          return originalDestroy(...args);
+        };
+        for(const chunk of fixture.chunks||[])incoming.push(chunk);
+        if(fixture.ended)incoming.push(null);
+        seen=incoming;
+        onResponse(incoming);
+      });
+      return req;
+    };
+    await assert.rejects(publicProviderHttpsPost(
+      opts(["8.8.8.8"],requestImpl,{deadlineMs:1000})),
+    {code:"AI_REVIEW_INVALID"});
+    assert.equal(requests,1,"a rejected response must not retry");
+    assert.equal(seen.destroyed,true,"reject must destroy the live stream");
+    assert.ok(teardowns>=1,"reject must call stream teardown");
+  }
+});

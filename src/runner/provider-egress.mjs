@@ -60,16 +60,19 @@ async function beforeDeadline(value,signal){
   finally {signal.removeEventListener("abort",onAbort);}
 }
 async function readTransportResponse(response){
-  if(!Number.isInteger(response?.statusCode) ||
-      response.statusCode<200 || response.statusCode>=300)
-    throw fail();
-  const len=response.headers?.["content-length"];
-  if(len!==undefined && (typeof len!=="string" ||
-      !/^[0-9]+$/.test(len) || Number(len)>MAX_RESPONSE_BYTES))
-    throw fail();
-  const chunks=[];
-  let bytes=0;
+  // Rejecting a status or header must also tear down its live HTTPS socket.
+  // Without this, a malicious keep-open peer could outlive the deadline timer
+  // which is removed when the rejected promise settles.
   try {
+    if(!Number.isInteger(response?.statusCode) ||
+        response.statusCode<200 || response.statusCode>=300)
+      throw fail();
+    const len=response.headers?.["content-length"];
+    if(len!==undefined && (typeof len!=="string" ||
+        !/^[0-9]+$/.test(len) || Number(len)>MAX_RESPONSE_BYTES))
+      throw fail();
+    const chunks=[];
+    let bytes=0;
     for await(const chunk of response){
       if(!Buffer.isBuffer(chunk) && !(chunk instanceof Uint8Array))
         throw fail();
@@ -77,12 +80,17 @@ async function readTransportResponse(response){
       if(bytes>MAX_RESPONSE_BYTES)throw fail();
       chunks.push(Buffer.from(chunk));
     }
-  }catch {response.destroy?.();throw fail();}
-  if(bytes<2 || len!==undefined && Number(len)!==bytes)throw fail();
-  return new Response(Buffer.concat(chunks,bytes),{
-    status:response.statusCode,
-    headers:{"content-length":String(bytes)},
-  });
+    if(bytes<2 || len!==undefined && Number(len)!==bytes)throw fail();
+    return new Response(Buffer.concat(chunks,bytes),{
+      status:response.statusCode,
+      headers:{"content-length":String(bytes)},
+    });
+  }catch {
+    // Also destroy before consuming the body (3xx/4xx, invalid headers).
+    // Never leak provider error messages or try again after a paid request.
+    try {response?.destroy?.();}catch {}
+    throw fail();
+  }
 }
 /** The default client uses DNS A records only (IPv6-only providers fail
  * closed for this first iteration). DNS answers are used once, explicitly
