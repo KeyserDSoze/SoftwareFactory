@@ -1089,3 +1089,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Corretta la race: in precedenza il target veniva letto prima della conferma, ma la baseline veniva catturata soltanto dopo; un'altra scheda poteva aggiornare il target durante il prompt, e la vecchia copia veniva sovrascritta usando baseline nuova. Ticket pre-prompt, doppio controllo sotto lock e ri-lettura del progetto da usare.
 - [x] Import GitHub/restore cloud: baseline `localProjectSnapshot` fissata prima di attendere il lock e ricontrollata dopo; ripristino vecchio lease e release del nuovo in qualunque conflitto. Test Vitest di mutazioni durante lettura/conferma, target creato durante lease, running->pending e fallback invalido.
 - [ ] Verificare Factory CI/Pages/Installer stesso SHA prima di chiudere #136; #92/#91 continuano aperte per CAS reale, provider live e multi-device. ADR 0090.
+
+
+## Preflight riapribilità e commit slot su quota locale (#137 — 20/11/2026)
+
+- [x] Bloccati prima di qualsiasi modifica snapshot invalidi, non serializzabili o oltre 1.000.000 caratteri JSON, uguali al guard di lettura. La versione precedente resta intatta e il caso non crea un progetto fantasma irrecuperabile; lettura legacy globale bounded.
+- [x] Il commit dello slot per-progetto è confermato da readback prima di aggiornare indice/legacy pointer/session pointer. Quota del vero slot e silent adapter falliscono chiusi; quota di metadati ricostruibili non trasforma un salvataggio confermato in errore, e la selezione per-tab viene tentata sempre.
+- [x] Test Vitest simulati di overflow esatto, quota, silent-write, invalid shape, cache separate/bloccate e CAS stale; niente profili cloud/PAT live. ADR 0091.
+- [ ] Verificare Factory CI/Pages/Installer sullo stesso SHA main e chiudere #137 solo con prove. #92/#91 aperte per transazioni IndexedDB, veri dispositivi/provider e security acceptance.

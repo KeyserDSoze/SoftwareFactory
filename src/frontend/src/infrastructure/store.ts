@@ -26,7 +26,9 @@ export function loadProject(): FactoryProject {
   } catch { /* legacy localStorage pointer remains available */ }
   try {
     const value = localStorage.getItem(PROJECT_KEY);
-    if (value) {
+    // The legacy global pointer is untrusted and no more authoritative than
+    // a per-project slot. Bound it before parsing, including on old installs.
+    if (value && value.length <= MAX_PROJECT_BYTES) {
       const project = JSON.parse(value) as FactoryProject;
       if (project && project.id && project.config && Array.isArray(project.stages)) {
         return { ...project, stages: project.stages.map(s => s.status === "running" ? { ...s, status: "pending" as const } : s) };
@@ -122,28 +124,53 @@ export function persistProjectIfUnchanged(project: FactoryProject, expected: str
   return confirmed;
 }
 export function persistProject(project: FactoryProject): void {
-  const raw = JSON.stringify(project);
-  // The per-project copy is the concurrency authority. It MUST persist before
-  // advancing the active-project pointer, otherwise a quota error could leave
-  // a seemingly saved project that vanished from the recoverable library.
-  // Capacity is calculated from recoverable project slots rather than the
-  // cache index (which can lose an entry when A and B save simultaneously).
+  // Never acknowledge a project the reader/list library will immediately
+  // reject. Validate BEFORE touching the authoritative slot OR any pointer.
+  // The bound is intentionally the same 1M-character JSON bound used by
+  // loadLocalProject (not a claim about browser-specific storage quota bytes).
+  if (!project || !PROJECT_ID.test(project.id) || !project.config ||
+      typeof project.config.name !== "string" || !Array.isArray(project.stages) ||
+      typeof project.updatedAt !== "string" || project.updatedAt.length > 64 ||
+      !Number.isFinite(Date.parse(project.updatedAt)))
+    throw Error("Progetto locale non valido: salvataggio annullato.");
+  let raw: string;
+  try { raw = JSON.stringify(project); }
+  catch { throw Error("Progetto locale non serializzabile: salvataggio annullato."); }
+  if (typeof raw !== "string" || raw.length > MAX_PROJECT_BYTES)
+    throw Error("Progetto locale troppo grande (limite 1 MB): salva un backup e riduci gli artefatti prima di riprovare.");
+  // Capacity comes from recoverable slots, not the non-atomic shared index.
   const all = listLocalProjects();
   if (!all.some(x => x.id === project.id) && all.length >= MAX_LIBRARY_PROJECTS)
     throw Error("Libreria locale piena (40 progetti): esporta e archivia un progetto prima di aggiungerne altri.");
-  localStorage.setItem(PROJECT_LIBRARY_PREFIX + project.id, raw);
-  localStorage.setItem(PROJECT_KEY, raw);
+
+  const slot = PROJECT_LIBRARY_PREFIX + project.id;
+  try { localStorage.setItem(slot, raw); }
+  catch { throw Error("Spazio locale insufficiente: progetto non salvato. Esporta un backup JSON."); }
+  // A no-op/faulty adapter must not make a save look successful. This also
+  // covers direct callers of persistProject, not just the outer CAS helper.
+  let confirmed = false;
+  try { confirmed = localStorage.getItem(slot) === raw; }
+  catch { /* treat unreadable slot as unconfirmed */ }
+  if (!confirmed)
+    throw Error("Scrittura progetto locale non confermata: verifica la libreria prima di continuare.");
+
+  // The slot is the durable authority. The global last-project pointer and
+  // library index are *replaceable caches*: they can hit QuotaExceededError
+  // after the slot was committed. Never report a false failed save or retry
+  // a write to a slot already confirmed just because a cache write failed.
+  try { localStorage.setItem(PROJECT_KEY, raw); }
+  catch { /* selected tab still reads the verified slot below */ }
   const current = { id: project.id, name: project.config.name,
     updatedAt: project.updatedAt,
     repository: project.githubDestination?.owner && project.githubDestination.repo ?
       project.githubDestination.owner + "/" + project.githubDestination.repo : "" };
-  const selected = [current, ...all.filter(x => x.id !== project.id)].slice(0, 40);
-  localStorage.setItem(PROJECT_INDEX, JSON.stringify(selected));
-  // The tab pointer is advanced only AFTER the project slot, legacy pointer
-  // and index writes returned successfully. Missing sessionStorage support
-  // must never roll back a confirmed localStorage project write.
+  const selected = [current, ...all.filter(x => x.id !== project.id)].slice(0, MAX_LIBRARY_PROJECTS);
+  try { localStorage.setItem(PROJECT_INDEX, JSON.stringify(selected)); }
+  catch { /* Storage.key/length reconstruct this cache from valid slots */ }
+  // Per-tab selection is independent of the two shared caches. If denied,
+  // the slot remains discoverable in the library for manual selection.
   try { sessionStorage.setItem(TAB_ACTIVE_PROJECT, project.id); }
-  catch { /* fall back to the legacy global pointer in restricted contexts */ }
+  catch { /* storage-restricted tabs may need manual library recovery */ }
 }
 export function loadSettings(): FactorySettings {
   try {
