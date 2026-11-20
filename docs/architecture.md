@@ -596,3 +596,8 @@ Lo schema #120 `GET /v1/agent-review-workspaces/:handoffId/:taskId` è utilizzab
 ### Retry delle prove journal e test non basati su timer (#124)
 
 Il read HTTP del journal e del report runner usa `verifyJobEvidenceForRead`: riconcilia temporaneamente una rename del report mentre un journal più recente è già stato fsyncato, ma non accetta un report ancora discordante dopo il budget massimo di retry. I test esercitano il retry unitario con callback controllata e, distintamente, verificano HTTP **409 finché** la prova è discordante e **200 solo dopo** `atomicWrite` del report con il medesimo modello di scrittura del worker. La fixture precedente usava `setTimeout(15)` e `writeFile` diretto, quindi poteva fallire per jitter del runner GitHub e non simulava la rename atomica. ADR 0078; prova non sostituisce stress interleavings su host reali.
+
+
+### Egress HTTPS source-aware con DNS A pinned (#125)
+
+Il processo Code Reviewer off-host #123 non usa più `fetch` per le sue chiamate reali. `provider-egress.mjs` compone: endpoint HTTPS valido senza token/redirect, record A risolti e **tutti** verificati come IPv4 pubblico, selezione di un indirizzo A, `https.request` con callback `lookup` che restituisce **esattamente l'IP convalidato**, TLS SNI e hostname verification obbligatori, `agent:false` per non condividere socket, timeout dall'inizio del lookup, corpo risposta limitato. Se qualunque record DNS è privato/reserved o se il provider dispone solo di AAAA, fallisce prima dell'invio di sorgenti o Bearer. Questo riduce il rischio di DNS rebinding/SSRF, non autentica l'azienda provider, non esegue DNSSEC e non attesta costi o review AI. `fetchImpl` è rimasto solo per il test di trasporto mockato della libreria, non è un flag CLI. ADR 0079.

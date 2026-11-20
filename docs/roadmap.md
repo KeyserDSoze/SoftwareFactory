@@ -993,3 +993,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Riproduzione osservata nel job [Factory CI #44702451226](https://github.com/KeyserDSoze/SoftwareFactory/actions/runs/44702451226): 356/357 Node runner, preesistente test `runner.test.mjs` HTTP GET ha ricevuto 409 anziché 200 mentre un timer 15ms riscriveva il report in-place.
 - [x] Rimuovere il timer flaky e simulare il writer reale tramite `atomicWrite`: prove HTTP 409 su journal/report persistentemente discordanti, poi 200 dopo restore atomico sulle due API. La verifica `retryEvidenceRead` di retry su primo invalid e di rifiuto della corruzione permanente/missing resta obbligatoria.
 - [ ] Test CI completi sul commit definitivo #124 e due esecuzioni same SHA se necessarie; nessuna modifica della logica di integrità o quota reale. ADR 0078.
+
+
+## Egress HTTPS con pinning di DNS pubblici per AI Reviewer (#125 — 20/11/2026)
+
+- [x] `provider-egress.mjs` risolve record A IPv4 **prima** del POST e blocca **qualsiasi** record special-use (anche in risposte DNS miste). La TLS socket viene creata direttamente dall'IP già verificato via `lookup` pinned, `servername` hostname e certificato verificato, nessuna seconda risoluzione non validata o redirect/pooling/HTTP fallback.
+- [x] Deadline end-to-end da DNS a body (30s), risposta <=64KiB, errori generici e nessuna retry automatica; CLI con consenso esplicito e receipt operatore invariata. Regressioni `provider-egress.test.mjs` con DNS/HTTPS socket fake, nessuna fatturazione in CI.
+- [ ] L'operatore deve ancora verificare il provider e autorizzare l'invio del codice; IPv6-only non supportato per ora, no DNSSEC/proxy allowlist/attestation firmata da vendor: #113/#109/#105 aperte. ADR 0079.
