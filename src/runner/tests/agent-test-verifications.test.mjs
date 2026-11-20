@@ -10,7 +10,8 @@ import { createRunnerServer } from "../api.mjs";
 import { validateRequest } from "../common.mjs";
 import { admitRunnerJob, withAdmissionLock } from "../admission.mjs";
 import { executeJob } from "../worker.mjs";
-import { verifyAgentTestTask, mutateAgentTaskReview } from "../agent-handoffs.mjs";
+import { verifyAgentTestTask, mutateAgentTaskReview,
+  getAgentReviewWorkspace } from "../agent-handoffs.mjs";
 import { verifyJobEvidenceForRead } from "../evidence.mjs";
 
 const rootKey="journal-test-root-key-abcdefghijklmnopqrstuvwxyz";
@@ -1160,4 +1161,192 @@ test("review-source GET rechecks revoked actor credentials and has no-store head
     assert.equal((await getReviewSource(f,0,submissionId,
       "agent.human-review."+"N".repeat(48))).status,200);
   } finally {await f.close();}
+});
+
+
+const workspace=(f,i,id,token,taskId="review")=>
+  f.call(i,"GET","/v1/agent-review-workspaces/"+id+"/"+taskId,
+    undefined,token);
+
+test("review owner can read the actual Tester input before staging or submission, not before claim",async()=>{
+  const f=await fixture();
+  try {
+    const id=await f.create(reviewerTaskManifest());
+    assert.equal((await workspace(f,0,id,reviewerKey)).status,404);
+    assert.equal((await workspace(f,0,id,reviewApproverKey)).status,404);
+    const tLease=await f.claim(0,id);
+    assert.equal(tLease.status,200);
+    await sleep(20);
+    const job=await f.run();
+    const proof=await f.verify(1,id,tLease.body.leaseId,job);
+    assert.equal(proof.status,201,JSON.stringify(proof.body));
+    assert.equal((await workspace(f,1,id,reviewerKey)).status,404);
+    const rLease=await f.claim(0,id,"review",reviewerKey);
+    assert.equal(rLease.status,200,JSON.stringify(rLease.body));
+    const read=await workspace(f,1,id,reviewerKey);
+    assert.equal(read.status,200,JSON.stringify(read.body));
+    assert.deepEqual(read.body.files,request(["dotnet-test"]).request.files);
+    assert.equal(read.body.fileCount,1);
+    assert.equal(read.body.bytes,Buffer.byteLength(
+      "namespace X; public class X {}","utf8"));
+    assert.equal(read.body.generation,1);
+    assert.match(read.body.sourceDigest,/^[a-f0-9]{64}$/);
+    const view=(await f.view(0,id)).body;
+    assert.equal(read.body.sourceFingerprint,view.tasks[1].reviewSource.fingerprint);
+    assert.equal(read.body.sourceDigest,view.tasks[1].reviewSource.digest);
+    assert.equal(JSON.stringify(read.body).includes(rLease.body.leaseId),false);
+    assert.equal(JSON.stringify(read.body).includes(job.report.id),false);
+    assert.equal(JSON.stringify(read.body).includes(rootKey),false);
+    const inputManifest=await readFile(path.join(f.dataDir,"agent-handoffs",
+      id+".json"),"utf8");
+    assert.equal(inputManifest.includes("namespace X;"),false);
+    const staged=await stageReport(f,0,{
+      id,source:view.tasks[1].reviewSource,lease:rLease.body.leaseId,
+      owner:reviewerKey,
+    });
+    assert.equal(staged.status,201,JSON.stringify(staged.body));
+    assert.equal((await workspace(f,1,id,reviewerKey)).status,200);
+    const submit=reviewSubmitBody(id,rLease.body.leaseId,
+      view.tasks[1].reviewSource.fingerprint,
+      staged.body.submissionId,staged.body.artifactDigest);
+    assert.equal((await postReview(f,0,submit,reviewerKey)).status,201);
+    assert.equal((await workspace(f,1,id,reviewerKey)).status,404);
+    const approver=await getReviewSource(f,1,staged.body.submissionId,
+      reviewApproverKey);
+    assert.equal(approver.status,200,JSON.stringify(approver.body));
+    assert.deepEqual(approver.body.files,read.body.files);
+    assert.equal((await postReview(f,0,reviewApprovalBody(submit),
+      reviewApproverKey)).status,201);
+    assert.equal((await workspace(f,0,id,reviewerKey)).status,404);
+  } finally {await f.close();}
+});
+
+test("pre-review workspace is actor/owner/tenant scoped across API replicas",async()=>{
+  const f=await fixture({multiTenant:true});
+  try {
+    const {id,source,owner}=await prepareReviewer(f,{tenants:true});
+    const read=await workspace(f,0,id,owner);
+    assert.equal(read.status,200,JSON.stringify(read.body));
+    assert.deepEqual(read.body.files,request(["dotnet-test"]).request.files);
+    assert.equal(read.body.sourceFingerprint,source.fingerprint);
+    assert.equal((await workspace(f,1,id,reviewerKey)).status,404);
+    assert.equal((await workspace(f,0,id,reviewApproverKey)).status,404);
+    assert.equal((await workspace(f,1,id,tenantApproverKey)).status,404);
+    assert.equal((await workspace(f,0,id,foreignKey)).status,404);
+    assert.equal((await workspace(f,0,id,f.tenantKey)).status,401);
+    assert.equal((await workspace(f,0,id,f.bravo)).status,401);
+    assert.equal((await workspace(f,0,id,rootKey)).status,401);
+    assert.equal((await workspace(f,0,id,owner,"another-task")).status,404);
+    assert.equal((await workspace(f,0,randomUUID(),owner)).status,404);
+  }finally {await f.close();}
+});
+
+test("pre-review workspace is fenced by live claim, release, expiry and generation",async()=>{
+  const f=await fixture();
+  try {
+    const {id,lease,owner}=await prepareReviewer(f);
+    const initial=await workspace(f,0,id,owner);
+    assert.equal(initial.status,200,JSON.stringify(initial.body));
+    await assert.rejects(getAgentReviewWorkspace({
+      dataDir:f.dataDir,handoffId:id,taskId:"review",
+      actor:{id:"reviewer-one",role:"code_reviewer",tenantId:null},
+      nowMs:()=>Date.now()+180000,
+    }),{code:"HANDOFF_NOT_FOUND"});
+    const release=await f.call(0,"POST","/v1/agent-task-leases",{
+      action:"release",handoffId:id,taskId:"review",leaseId:lease,
+    },owner);
+    assert.equal(release.status,200,JSON.stringify(release.body));
+    assert.equal((await workspace(f,1,id,owner)).status,404);
+    const newClaim=await f.claim(1,id,"review",owner);
+    assert.equal(newClaim.status,200,JSON.stringify(newClaim.body));
+    assert.notEqual(newClaim.body.leaseId,lease);
+    const next=await workspace(f,0,id,owner);
+    assert.equal(next.status,200,JSON.stringify(next.body));
+    assert.equal(next.body.generation,2);
+    assert.equal(next.body.sourceDigest,initial.body.sourceDigest);
+    assert.equal(next.body.sourceFingerprint,initial.body.sourceFingerprint);
+  }finally {await f.close();}
+});
+
+test("pre-review workspace fails closed on source input tamper, symlink and retention",async()=>{
+  const f=await fixture();
+  try {
+    const {id,owner,job}=await prepareReviewer(f);
+    assert.equal((await workspace(f,0,id,owner)).status,200);
+    const inputFile=path.join(f.dataDir,"jobs",job.report.id,"input.json");
+    const original=await readFile(inputFile,"utf8");
+    const modified=JSON.parse(original);
+    modified.files["src/backend/domain/X.cs"]="namespace X; public class Forged {}";
+    await writeFile(inputFile,JSON.stringify(modified),{mode:0o600});
+    assert.equal((await workspace(f,1,id,owner)).status,404);
+    await writeFile(inputFile,original,{mode:0o600});
+    assert.equal((await workspace(f,1,id,owner)).status,200);
+    await rm(inputFile);
+    await symlink(path.join(f.base,"untrusted.json"),inputFile);
+    assert.equal((await workspace(f,0,id,owner)).status,404);
+    await rm(inputFile);
+    assert.equal((await workspace(f,0,id,owner)).status,404);
+  }finally {await f.close();}
+});
+
+test("pre-review workspace reauthorizes after actor registry key rotation inside lock",async()=>{
+  const f=await fixture();
+  try {
+    const {id,owner}=await prepareReviewer(f);
+    assert.equal((await workspace(f,0,id,owner)).status,200);
+    let entered;
+    const acquired=new Promise(resolve=>entered=resolve);
+    let release;
+    const held=new Promise(resolve=>release=resolve);
+    const blocker=withAdmissionLock(f.dataDir,async()=>{
+      entered();await held;
+    },4000);
+    await acquired;
+    const pending=workspace(f,1,id,owner);
+    await sleep(35);
+    const registry=JSON.parse(await readFile(f.actorFile,"utf8"));
+    registry.actors.find(a=>a.id==="reviewer-one" &&
+      a.tenantId===null && a.role==="code_reviewer").key=
+        "agent.reviewer-one."+"N".repeat(48);
+    await writeFile(f.actorFile+".rotated",JSON.stringify(registry),{mode:0o600});
+    await rename(f.actorFile+".rotated",f.actorFile);
+    release();await blocker;
+    const denied=await pending;
+    assert.equal(denied.status,401,JSON.stringify(denied.body));
+    const accepted=await workspace(f,0,id,
+      "agent.reviewer-one."+"N".repeat(48));
+    assert.equal(accepted.status,200,JSON.stringify(accepted.body));
+  }finally {await f.close();}
+});
+
+test("pre-review workspace serves one source when multiple real Tester jobs agree",async()=>{
+  const f=await fixture();
+  try {
+    const id=await f.create({
+      consent:true,label:"Two independently verified identical file snapshots",
+      budgetUnits:6,tasks:[
+        {id:"test-a",role:"tester",owner:"tester-one",dependsOn:[],
+          estimatedUnits:2,maxAttempts:1},
+        {id:"test-b",role:"tester",owner:"tester-one",dependsOn:[],
+          estimatedUnits:2,maxAttempts:1},
+        {id:"review",role:"code_reviewer",owner:"reviewer-one",
+          dependsOn:["test-a","test-b"],estimatedUnits:2,maxAttempts:1},
+      ],
+    });
+    for(const taskId of ["test-a","test-b"]){
+      const claimed=await f.claim(0,id,taskId);
+      assert.equal(claimed.status,200,JSON.stringify(claimed.body));
+      await sleep(20);
+      const job=await f.run();
+      const verified=await f.verify(1,id,claimed.body.leaseId,job,{taskId});
+      assert.equal(verified.status,201,JSON.stringify(verified.body));
+    }
+    const claimed=await f.claim(1,id,"review",reviewerKey);
+    assert.equal(claimed.status,200,JSON.stringify(claimed.body));
+    const read=await workspace(f,0,id,reviewerKey);
+    assert.equal(read.status,200,JSON.stringify(read.body));
+    assert.deepEqual(read.body.files,request(["dotnet-test"]).request.files);
+    assert.equal(read.body.fileCount,1);
+    assert.equal(read.body.generation,1);
+  }finally {await f.close();}
 });
