@@ -70,7 +70,9 @@ test("strict vendor-key-pinned signature links HTTP request/response and declare
   const serialized=JSON.stringify(result);
   assert.equal(serialized.includes("namespace X"),false);
   assert.equal(serialized.includes("test_api_key"),false);
-  assert.equal(serialized.includes("120"),false);
+  // A short decimal fragment may coincidentally occur inside a SHA256 hex.
+  // Only reject a leaked field name/value, never an arbitrary hash substring.
+  assert.equal(serialized.includes('"promptTokens":120'),false);
 });
 test("fail closed on wrong independent pin, keys, identity and replayed evidence",async()=>{
   const x=await sample();
