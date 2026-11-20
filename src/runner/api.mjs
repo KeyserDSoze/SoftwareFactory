@@ -9,7 +9,7 @@ import { admitWorkflowBatch, MAX_BATCH_BODY_BYTES } from "./batch-workflows.mjs"
 import { projectVerifiedJobPlan } from "./pm-job-plan.mjs";
 import { registerWorkflow, getWorkflow } from "./workflows.mjs";
 import { registerAgentHandoff, getAgentHandoff, mutateAgentTaskLease, mutateAgentTaskCheckpoint, mutateAgentTaskReview,
-  stageAgentReviewArtifact, getAgentReviewArtifact,
+  stageAgentReviewArtifact, getAgentReviewArtifact, getAgentReviewSources,
   verifyAgentTestTask, MAX_HANDOFF_BODY_BYTES } from "./agent-handoffs.mjs";
 import { loadAgentActorsFile, authenticateAgentActor, reauthorizeAgentActor } from "./agent-actors.mjs";
 import { beginRepairSession, getRepairSession, advanceRepairSession } from "./coordinator.mjs";
@@ -127,9 +127,11 @@ export function createRunnerServer({
     const agentReviewRoute = req.url === "/v1/agent-task-reviews";
     const agentArtifactStageRoute = req.url === "/v1/agent-review-artifacts";
     const agentArtifactFetchRoute = /^\/v1\/agent-review-artifacts\/([a-f0-9-]{36})$/.exec(req.url || "");
+    const agentSourceFetchRoute = /^\/v1\/agent-review-sources\/([a-f0-9-]{36})$/.exec(req.url || "");
     const agentMutationRoute = agentLeaseRoute || agentCheckpointRoute ||
       agentTestRoute || agentReviewRoute ||
-      agentArtifactStageRoute || Boolean(agentArtifactFetchRoute);
+      agentArtifactStageRoute || Boolean(agentArtifactFetchRoute) ||
+      Boolean(agentSourceFetchRoute);
     if (agentMutationRoute && !agentActorsFile) {
       send(503, { error: "agent_auth_unconfigured" }); return;
     }
@@ -509,6 +511,29 @@ export function createRunnerServer({
         send(200,result);
       } catch(error) {
         if(["HANDOFF_NOT_FOUND","HANDOFF_INTEGRITY","ENOENT",
+          "REVIEW_ARTIFACT_MISSING","REVIEW_ARTIFACT_INTEGRITY"].includes(error.code))
+          send(404,{error:"not_found"});
+        else if(error.code==="ACTOR_AUTH_REVOKED")
+          send(401,{error:"unauthorized"});
+        else if(error.code==="ACTOR_AUTH_UNAVAILABLE")
+          send(503,{error:"agent_auth_unavailable"});
+        else send(500,{error:"internal_error"});
+      }
+      return;
+    }
+    // Source disclosure requires the same actor and review-submit gate as
+    // the retained report. Never expose original runner inputs to root/tenant
+    // credentials, unrelated actors, or before a stored review submission.
+    if (req.method==="GET" && agentSourceFetchRoute) {
+      try {
+        const result=await getAgentReviewSources({
+          dataDir,submissionId:agentSourceFetchRoute[1],
+          actor:actorPrincipal,reauthorize:reauthorizeActorMutation,
+        });
+        send(200,result);
+      } catch(error) {
+        if(["HANDOFF_NOT_FOUND","HANDOFF_INTEGRITY","HANDOFF_REVIEW_EVIDENCE",
+          "HANDOFF_TEST_EVIDENCE","RUNNER_INPUT_INVALID","ENOENT",
           "REVIEW_ARTIFACT_MISSING","REVIEW_ARTIFACT_INTEGRITY"].includes(error.code))
           send(404,{error:"not_found"});
         else if(error.code==="ACTOR_AUTH_REVOKED")
