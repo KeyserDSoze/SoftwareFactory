@@ -955,3 +955,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Un Reviewer con lease attiva può ottenere il file set originale del Tester **prima** di produrre il rapporto, dal nuovo `GET /v1/agent-review-workspaces/:handoffId/:taskId`. Source integrity = input/journal e digest verificati #114; no source copiato nel manifest, `no-store`.
 - [x] Differente canale post-submit per l'approvatore #119, separazione dei ruoli/tenant, deny su release/expiry e source tamper, actor token revocato; due API, fencing lock e regressioni multi-Tester stessi file.
 - [ ] Prova di reale lettura/comprensione, agent executor LLM e costi attestati da provider indipendente **non** risolti: #113/#109/#105.
+
+
+## Osservazione usage token da risposte AI reali (#121 — 20 novembre 2026)
+
+- [x] `aiComplete` espone un'osservazione tipizzata da `usage` di **risposte 2xx non vuote** del provider OpenAI-compatible: contatori bounded e somma coerente, nessuna stima se campo assente o invalido, nessun cambio dell'API legacy che restituisce stringa.
+- [x] Observers solo in memoria: pipeline log temporaneo e ultima chiamata Code Agent writer/reviewer/repair; etichette italiano/inglese, nessuna persistenza in progetto/cloud/GitHub, nessuna chiave/prompt/completion in receipts.
+- [x] Test frontend per usage valido, missing, bad schema/overflow/booleans/frazioni, HTTP error, response vuota, callback error/abort, forwarding della pipeline, no falso costo; ADR 0074.
+- [ ] Provider response usage non è una fattura **firmata né indipendentemente verificata**; un server executor trusted, pricing versionato per valuta e prevenzione doppio addebito richiedono ancora #109/#105/#113. Il runner non conta `executions` da questi contatori.
