@@ -368,6 +368,97 @@ export function verifyAiReviewStoredArtifact(
   }catch {throw fail();}
 }
 
+
+const STAGE_INTENT_CONTEXT="softwarefactory.ai-review.stage-intent.v1";
+const STAGE_INTENT_ASSURANCE="operator_signed_stage_intent_unverified";
+/** The second signature is made AFTER lease/submission selection. It binds
+ * intent to the operator-observed receipt and exact actor-stage document.
+ * It is not a provider or runner attestation and does not prove live lease.
+ */
+function stageIntentStatement(workspace,receipt,receiptTrustedKey,stage) {
+  const checked=verifyAiReviewReceipt(workspace,receipt,receiptTrustedKey);
+  verifyAiReviewStage(workspace,receipt,receiptTrustedKey,stage,{
+    leaseId:stage?.leaseId,submissionId:stage?.submissionId,
+  });
+  return {version:1,context:STAGE_INTENT_CONTEXT,
+    assurance:STAGE_INTENT_ASSURANCE,
+    handoffId:stage.handoffId,taskId:stage.taskId,
+    generation:workspace.generation,leaseId:stage.leaseId,
+    submissionId:stage.submissionId,
+    sourceFingerprint:stage.sourceFingerprint,
+    sourceDigest:checked.sourceDigest,
+    workspaceSha256:checked.workspaceSha256,
+    receiptSha256:sha256(canonical(receipt)),
+    stageSha256:sha256(canonical(stage))};
+}
+export function signAiReviewStageIntent(
+  workspace,receipt,receiptTrustedKey,stage,privateKeySource,
+) {
+  try {
+    const statement=stageIntentStatement(
+      workspace,receipt,receiptTrustedKey,stage);
+    const privateKey=signerKey(privateKeySource);
+    const pub=createPublicKey(privateKey);
+    return {version:1,algorithm:"Ed25519",statement,
+      signerKeySha256:publicKeyFingerprint(pub),
+      signature:sign(null,Buffer.from(canonical(statement)),privateKey)
+        .toString("base64url")};
+  }catch {throw fail();}
+}
+export function verifyAiReviewStageIntent(
+  workspace,receipt,receiptTrustedKey,stage,intent,intentTrustedKey,
+) {
+  try {
+    if(!exact(intent,["version","algorithm","statement",
+        "signerKeySha256","signature"]) ||
+        intent.version!==1 || intent.algorithm!=="Ed25519" ||
+        !SHA.test(intent.signerKeySha256) ||
+        typeof intent.signature!=="string" || !SIG.test(intent.signature))
+      throw fail();
+    const statement=stageIntentStatement(
+      workspace,receipt,receiptTrustedKey,stage);
+    if(!exact(intent.statement,Object.keys(statement)) ||
+        canonical(intent.statement)!==canonical(statement))
+      throw fail();
+    const pub=intentTrustedKey instanceof KeyObject &&
+        intentTrustedKey.type==="public" ?
+      intentTrustedKey:createPublicKey(intentTrustedKey);
+    if(pub.asymmetricKeyType!=="ed25519" ||
+        intent.signerKeySha256!==publicKeyFingerprint(pub))
+      throw fail();
+    const signature=Buffer.from(intent.signature,"base64url");
+    if(signature.length!==64 ||
+        !verify(null,Buffer.from(canonical(statement)),pub,signature))
+      throw fail();
+    return {verified:true,assurance:STAGE_INTENT_ASSURANCE,
+      handoffId:statement.handoffId,taskId:statement.taskId,
+      generation:statement.generation,leaseId:statement.leaseId,
+      submissionId:statement.submissionId,
+      sourceFingerprint:statement.sourceFingerprint,
+      signerKeySha256:intent.signerKeySha256};
+  }catch {throw fail();}
+}
+export function verifyAiReviewStoredWithStageIntent(
+  workspace,receipt,receiptTrustedKey,stage,intent,intentTrustedKey,
+  stored,{owner,tenantId},
+) {
+  try {
+    const checked=verifyAiReviewStageIntent(workspace,receipt,
+      receiptTrustedKey,stage,intent,intentTrustedKey);
+    const linked=verifyAiReviewStoredArtifact(workspace,receipt,
+      receiptTrustedKey,stage,stored,{
+        leaseId:checked.leaseId,submissionId:checked.submissionId,
+        owner,tenantId,
+      });
+    return {verified:true,
+      assurance:"operator_stage_intent_and_server_record_compared_unverified",
+      handoffId:checked.handoffId,taskId:checked.taskId,
+      submissionId:checked.submissionId,
+      artifactDigest:linked.artifactDigest,
+      stageIntentSignerKeySha256:checked.signerKeySha256};
+  }catch {throw fail();}
+}
+
 /** File-safe CLI: reserve the output BEFORE any potentially billable network
  * call to prevent accidental same-path concurrent double execution. A crash
  * leaves an incomplete file that deliberately requires operator intervention.
@@ -384,6 +475,13 @@ export async function main(argv=process.argv.slice(2)) {
       "stage","lease-id","submission-id"] :
     mode==="verify-stored" ? ["workspace","receipt","public-key",
       "stage","stored","lease-id","submission-id",
+      "expected-owner","expected-tenant"] :
+    mode==="sign-stage-intent" ? ["workspace","receipt",
+      "receipt-public-key","stage","private-key","out"] :
+    mode==="verify-stage-intent" ? ["workspace","receipt",
+      "receipt-public-key","stage","intent","stage-public-key"] :
+    mode==="verify-stored-intent" ? ["workspace","receipt",
+      "receipt-public-key","stage","intent","stage-public-key","stored",
       "expected-owner","expected-tenant"] : null;
   if(!names || options.length!==names.length)throw fail();
   const flags=Object.create(null);
@@ -396,6 +494,48 @@ export async function main(argv=process.argv.slice(2)) {
   if(names.some(name=>!flags[name]))throw fail();
   const workspace=await readBoundedJson(flags.workspace,"evidence");
   validateReviewWorkspace(workspace);
+  if(["sign-stage-intent","verify-stage-intent",
+      "verify-stored-intent"].includes(mode)){
+    const receipt=await readBoundedJson(flags.receipt,"receipt");
+    const receiptTrusted=(await readAttestationFile(
+      flags["receipt-public-key"],"public-key")).toString("utf8");
+    const stage=await readBoundedJson(flags.stage,"receipt");
+    if(mode==="sign-stage-intent"){
+      const privateKey=await readAttestationFile(flags["private-key"],
+        "private-key");
+      const intent=signAiReviewStageIntent(
+        workspace,receipt,receiptTrusted,stage,privateKey);
+      if(typeof constants.O_NOFOLLOW!=="number")throw fail();
+      let out;
+      try {
+        out=await open(flags.out,constants.O_WRONLY|constants.O_CREAT|
+          constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+        await out.writeFile(JSON.stringify(intent)+"\n","utf8");
+        await out.sync();
+      }catch {throw fail();}
+      finally {await out?.close().catch(()=>{});}
+      process.stdout.write("AI_REVIEW_STAGE_INTENT_SIGNED\n");
+      return {created:true,submissionId:stage.submissionId};
+    }
+    const intent=await readBoundedJson(flags.intent,"receipt");
+    const intentTrusted=(await readAttestationFile(
+      flags["stage-public-key"],"public-key")).toString("utf8");
+    if(mode==="verify-stage-intent"){
+      const verified=verifyAiReviewStageIntent(
+        workspace,receipt,receiptTrusted,stage,intent,intentTrusted);
+      process.stdout.write("AI_REVIEW_STAGE_INTENT_VERIFIED\n");
+      return verified;
+    }
+    const stored=await readBoundedJson(flags.stored,"receipt");
+    const verified=verifyAiReviewStoredWithStageIntent(workspace,receipt,
+      receiptTrusted,stage,intent,intentTrusted,stored,{
+        owner:flags["expected-owner"],
+        tenantId:flags["expected-tenant"]==="-"?
+          null:flags["expected-tenant"],
+      });
+    process.stdout.write("AI_REVIEW_STORED_STAGE_INTENT_COMPARED\n");
+    return verified;
+  }
   if(["verify","prepare-stage","verify-stage","verify-stored"].includes(mode)){
     const receipt=await readBoundedJson(flags.receipt,"receipt");
     const pub=(await readAttestationFile(flags["public-key"],"public-key"))

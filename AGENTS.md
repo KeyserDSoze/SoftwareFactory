@@ -998,3 +998,8 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - `verify-stage` confronta il body staged con la receipt verificata; `verify-stored` ricalcola il digest `stored_review_document_v1` della GET actor-only post-submit e confronta documento, owner/tenant attesi, generation/source/submission, senza invocare `review_submit` o `approve`. Mai considerare questa comparazione come provider attestation, CI non contatta alcuna AI. ADR 0082, issue #128; #113/#109/#105 restano aperte.
 
 - **#128 anti-replay:** la firma della receipt precede la scelta `leaseId/submissionId`. Non verificare il payload auto-adottando gli UUID contenuti nel payload stesso: `verify-stage` e `verify-stored` richiedono entrambi gli identificatori **attesi esternamente** tramite `--lease-id` e `--submission-id`. Altrimenti una sostituzione valida per formato non sarebbe rilevabile. Nessuna firma provider o proof della lease è introdotta: la lease resta enforced nel server.
+
+
+## Impegno firmato sulla richiesta di stage (#129)
+
+- La receipt AI v1 è **pre-lease/submission UUID**. `sign-stage-intent` firma offline un commitment canonico di *receipt+stage+workspace*, includendo i due UUID scelti dopo la review. `verify-stage-intent` richiede chiave pubblica pinned del firmatario dell'intento e della receipt (potenzialmente distinte) e rifiuta qualunque campo modificato. `verify-stored-intent` ricontrolla anche documento e digest della GET tramite #128, senza accettare identità/permessi solo dal JSON di un server. Output O_EXCL/O_NOFOLLOW 0600, nessuna rete/auto-submit. Non è provider attestation, lease valida o approvazione. ADR 0083; #113/#109/#105 aperte.

@@ -1382,3 +1382,34 @@ Per handoff senza tenant usare letteralmente `--expected-tenant=-`, mentre `--ex
 
 
 **Anti-sostituzione UUID (#128):** gli identificatori di lease e submission vengono scelti *dopo* la firma del provider response, perciò **non** possono essere dedotti dalla receipt. `verify-stage` e `verify-stored` richiedono entrambi il `--lease-id` e `--submission-id` attesi **dalla scelta già confermata dall'operatore** (ad esempio dal proprio record di handoff), non ricalcolati dal JSON potenzialmente alterato. Se non si conoscono più gli UUID attesi, la verifica fail-closed; non inventare un pair e non interpretare il solo formato UUID come prova di lease corrente.
+
+## Impegno Ed25519 di deposito post-receipt (#129)
+
+Dopo `prepare-stage` (#128), l'operatore può firmare offline una **seconda** attestazione di *intenzione di deposito*, con una propria chiave privata Ed25519 (idealmente dedicata), su `leaseId`, `submissionId`, identificativi del task e della snapshot, SHA canonico della receipt AI originaria e SHA canonico del payload staged. Questa firma viene apposta **dopo** la scelta degli UUID e consente a `verify-stage-intent` di rilevare una loro sostituzione senza adottare gli UUID da un file non autenticato. `verify-stored-intent` collega anche il rapporto custodito e il suo digest #116 all'intento firmato. La firma resta dell'operatore, non del provider o di un approvatore indipendente; il runner deve ancora verificare la lease effettiva e il reviewer/approver devono agire manualmente. I token dichiarati dal provider non sono costi verificati. ADR 0083; #113/#109/#105 rimangono aperte.
+
+```bash
+# Chiave distinta e privata per l'intenzione di deposito (off-host)
+openssl genpkey -algorithm Ed25519 -out stage-private.pem
+openssl pkey -in stage-private.pem -pubout -out stage-trusted.pub
+chmod 600 stage-private.pem
+
+node src/runner/ai-review-execute.mjs sign-stage-intent \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --receipt-public-key=review-trusted.pub --stage=review-stage.json \
+  --private-key=stage-private.pem --out=review-stage-intent.json
+
+node src/runner/ai-review-execute.mjs verify-stage-intent \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --receipt-public-key=review-trusted.pub --stage=review-stage.json \
+  --intent=review-stage-intent.json --stage-public-key=stage-trusted.pub
+
+# Dopo deposito e submit manuali; stored-review.json proviene dalla GET protetta
+node src/runner/ai-review-execute.mjs verify-stored-intent \
+  --workspace=review-workspace.json --receipt=ai-review-receipt.json \
+  --receipt-public-key=review-trusted.pub --stage=review-stage.json \
+  --intent=review-stage-intent.json --stage-public-key=stage-trusted.pub \
+  --stored=stored-review.json \
+  --expected-owner=YOUR_REVIEWER_ACTOR_ID --expected-tenant=YOUR_TENANT_ID
+```
+
+Le due trust key pubbliche devono essere installate/verificate **indipendentemente** dal JSON da controllare; per handoff senza tenant usare `--expected-tenant=-`. Il file `review-stage-intent.json` contiene solo identificatori/hashes/firma, **non** i byte sorgenti. Questo NON prova una risposta del vendor, il corretto svolgimento dell'LLM, l'esistenza di una lease attiva o che il server abbia davvero emesso quel GET. Nessuna richiesta HTTPS, firma di approval o spesa provider dalla CLI.

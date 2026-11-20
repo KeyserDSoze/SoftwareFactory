@@ -1023,3 +1023,10 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] Registrare Factory CI/Pages/Installer sullo stesso SHA finale prima della chiusura #128. ADR 0082. #113/#109/#105 restano aperte.
 
 - [x] Corretto il gap emerso nel primo run CI #44719842709: la receipt firmata non contiene gli UUID scelti successivamente. Entrambi i comandi offline di verifica ora richiedono la coppia di identificatori attesi **come input indipendente**, anziché fidarsi dei campi letti dal file staged; regressioni positive/negative. Fallimento iniziale non nascosto, CI da rieseguire sul nuovo SHA.
+
+
+## Commitment offline Ed25519 dopo selezione UUID (#129 — 20/11/2026)
+
+- [x] `sign-stage-intent`: firma domain-separated di hash receipt/stage e vincoli handoff/task/snapshot, lease e submission post-receipt, con chiave Ed25519 off-host, output O_EXCL 0600 e nessun POST.
+- [x] `verify-stage-intent` e `verify-stored-intent`: due trust key public pinned, controllo firma e payload, ricalcolo digest del documento custodito, senza fidarsi di UUID auto-dichiarati nel JSON di stage. Regressioni su chiavi, replay/tamper, source e record.
+- [ ] Verificare CI/Pages/Installer `completed/success` sullo SHA definitivo di main prima di chiudere #129. Nessun vendor-attested receipt o auto-approve; #113/#109/#105 restano aperte. ADR 0083.

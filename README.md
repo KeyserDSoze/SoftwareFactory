@@ -805,3 +805,8 @@ Prima di firmare l'osservazione HTTP, la CLI `ai-review-execute` richiede una so
 ### Collegamento verificabile del report AI al deposito Reviewer (#128)
 
 `ai-review-execute.mjs` può ora produrre offline `review-stage.json` direttamente dalla ricevuta Ed25519 operatore dopo verifica con chiave pubblica pinned (`prepare-stage`, `verify-stage`). Quando il Reviewer deposita il JSON attraverso la propria API actor-scoped e un approvatore autorizzato rilegge il rapporto conservato, `verify-stored` confronta identità del task, generation, documento, source fingerprint e digest del record salvato con la ricevuta e gli owner/tenant attesi. Il deposito e la revisione restano **azioni manuali**, senza auto-submit né auto-approval; non c'è una attestazione del provider o del billing. Istruzioni in [docs/runner.md](docs/runner.md), ADR 0082.
+
+
+### Impegno firmato di deposito Code Reviewer (#129)
+
+Un secondo artefatto Ed25519 `stage-intent`, prodotto *dopo* la scelta degli UUID, firma la relazione tra ricevuta operatore, documento staged, lease e submission. Con una chiave pubblica pinnata indipendentemente, la CLI verifica che la richiesta di deposito e la risposta di custodia corrispondano all'intenzione firmata, senza dover adottare gli UUID da un JSON non firmato. I comandi sono esclusivamente offline e non avviano API, provider, approvazioni o billing. Istruzioni nella [guida runner](docs/runner.md), ADR 0083.
