@@ -31,6 +31,8 @@ import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infra
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 import { prepareLegacyCasCopy, legacyCasBackupJson, copyLegacyCasTicket } from "./infrastructure/project-cas-migration";
 import { inspectLegacyCasCopy, readCasExportSnapshot, type CasCopyInspection } from "./infrastructure/project-cas-reconciliation";
+import { listCasRecoveryCopies, prepareCasRecoveryTicket, confirmCasRecoveryTicket } from "./infrastructure/project-cas-recovery-library";
+import type { CasProjectChoice } from "./infrastructure/project-cas";
 import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
 import { assertLocalProjectUnchanged, prepareLocalProjectSwitch,
   readConfirmedLocalProjectSwitch } from "./infrastructure/local-project-switch";
@@ -73,6 +75,7 @@ export default function App() {
   const [project, setProject] = useState<FactoryProject>(loadProject);
   const [projectIndexRevision, setProjectIndexRevision] = useState(0);
   const [casInspection, setCasInspection] = useState<CasCopyInspection | null>(null);
+  const [casRecoveryCopies, setCasRecoveryCopies] = useState<CasProjectChoice[] | null>(null);
   const [settings, setSettings] = useState<FactorySettings>(loadSettings);
   const [tab, setTab] = useState<Tab>("workspace");
   const [selectedStage, setSelectedStage] = useState<StageId>("features");
@@ -615,6 +618,7 @@ export default function App() {
       setBusy(true); setOperation(t(locale,"casCopyBusy"));
       await copyLegacyCasTicket(ticket,true);
       setCasInspection(null);
+      setCasRecoveryCopies(null);
       setNotice(t(locale,"casCopyDone"));
     } catch(e) {
       setError(e instanceof Error ? e.message : t(locale,"casCopyFailure"));
@@ -663,6 +667,47 @@ export default function App() {
       setError(e instanceof Error ? e.message : t(locale,"casExportFailed"));
     } finally { setBusy(false); setOperation(""); }
   }
+
+  async function refreshCasRecoveryLibrary(): Promise<void> {
+    if (busy || busyRef.current) return;
+    const locale=normalizeLocale(settingsRef.current.language);
+    setCasRecoveryCopies(null);
+    setBusy(true); setOperation(t(locale,"casRecoveryReading"));
+    try {
+      // No localStorage read: this must work for an orphaned IDB snapshot.
+      const copies=await listCasRecoveryCopies();
+      setCasRecoveryCopies(copies);
+    } catch(e) {
+      setError(e instanceof Error ? e.message : t(locale,"casRecoveryFailed"));
+    } finally { setBusy(false); setOperation(""); }
+  }
+
+  async function downloadCasRecoveryCopy(choice: CasProjectChoice): Promise<void> {
+    if (busy || busyRef.current || !casRecoveryCopies?.some(x =>
+      x.id === choice.id && x.revision === choice.revision)) return;
+    const locale=normalizeLocale(settingsRef.current.language);
+    setBusy(true); setOperation(t(locale,"casRecoveryReading"));
+    try {
+      // Preconsent ticket holds both revision and raw. The user must approve
+      // exporting historical data, which may contain checkpoint/brief text.
+      const ticket=await prepareCasRecoveryTicket(choice.id,choice.revision);
+      if (!window.confirm(t(locale,"casRecoveryConfirm"))) return;
+      const raw=await confirmCasRecoveryTicket(ticket,true);
+      const url=URL.createObjectURL(new Blob([raw],{type:"application/json"}));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-indexeddb-recovery-"+ticket.id+"-r"+ticket.revision+".json";
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      setNotice(t(locale,"casRecoveryDone"));
+      // Force a fresh list after a download: never treat rows as current.
+      setCasRecoveryCopies(null);
+    } catch(e) {
+      setCasRecoveryCopies(null);
+      setError(e instanceof Error ? e.message : t(locale,"casRecoveryFailed"));
+    } finally { setBusy(false); setOperation(""); }
+  }
+
   function downloadRecoveryProject(project: FactoryProject): void {
     // Explicit single-project recovery file; no PAT, AI API or cloud credentials
     // are included (they are stored in the browser's session/device vault).
@@ -948,6 +993,25 @@ export default function App() {
               </button>}
             </div>}
 
+
+            <div className="helper">
+              <button className="secondary" disabled={busy} onClick={() => void refreshCasRecoveryLibrary()}>
+                <Search size={15}/>{t(normalizeLocale(settings.language),"casRecoveryListButton")}
+              </button>
+              <p>{t(normalizeLocale(settings.language),"casRecoveryExplain")}</p>
+              {casRecoveryCopies !== null && <div data-testid="cas-recovery-library">
+                {casRecoveryCopies.length === 0 ?
+                  <p>{t(normalizeLocale(settings.language),"casRecoveryEmpty")}</p> :
+                  <ul>{casRecoveryCopies.map(copy => <li key={copy.id}>
+                    <strong>{copy.name}</strong> · rev. {copy.revision} · {formatDate(copy.updatedAt)}
+                    <button className="secondary" disabled={busy}
+                      aria-label={t(normalizeLocale(settings.language),"casRecoveryExportButton")+": "+copy.name}
+                      onClick={() => void downloadCasRecoveryCopy(copy)}>
+                      <Download size={15}/>{t(normalizeLocale(settings.language),"casRecoveryExportButton")}
+                    </button>
+                  </li>)}</ul>}
+              </div>}
+            </div>
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
           </section>
