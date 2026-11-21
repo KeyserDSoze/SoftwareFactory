@@ -8,7 +8,8 @@ const fixture=()=>{
   original.config.name="Before";
   original.config.description="Original brief";
   original.stages[0]={...original.stages[0],status:"complete",
-    output:"HISTORICAL_AI_EVIDENCE",sources:[{title:"Source",url:"https://example.com",snippet:"Old"}]};
+    output:"HISTORICAL_AI_EVIDENCE",sources:[{title:"Source",url:"https://example.com",snippet:"Old",
+      query:"old evidence",fetchedAt:"2026-11-21T16:00:00.000Z"}]};
   const raw=JSON.stringify(original);
   return {original,expected:{id:original.id,revision:3,raw}};
 };
