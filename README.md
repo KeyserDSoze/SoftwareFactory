@@ -855,3 +855,10 @@ SoftwareFactory ora impedisce di salvare come riuscito uno snapshot locale che n
 ### Fondazione CAS IndexedDB per futuri salvataggi transazionali (#138)
 
 È disponibile un nuovo modulo **separato** `project-cas.ts` che esegue compare-and-swap all'interno di una singola transazione `readwrite` IndexedDB: una sola delle due schede che tenta di creare o aggiornare la stessa revisione può vincere. I dati vengono limitati a **1.000.000 caratteri JSON**, si rifiutano versioni obsolete o record corrotti, e le cancellazioni producono una revisione tombstone per evitare di riutilizzare un vecchio token dopo ricreazione. In assenza di IndexedDB non viene effettuato un falso salvataggio di ripiego su localStorage. La primitiva viene collaudata in Chromium reale, nello smoke Docker senza rete. **L'editor corrente continua tuttavia a usare localStorage e Web Locks:** questo incremento non migra i progetti esistenti e non protegge ancora le scritture del percorso principale. Migrazione esplicita, integrazione asincrona dei salvataggi e verifiche cross-device restano nella [#92](https://github.com/KeyserDSoze/SoftwareFactory/issues/92) e [#91](https://github.com/KeyserDSoze/SoftwareFactory/issues/91). [ADR 0092](adr/0092-indexeddb-project-cas-primitive.md).
+
+
+## Preparazione libreria IndexedDB in sola lettura (#140, verso #139)
+
+La nuova API listCasProjects legge in una singola transazione readonly i progetti CAS e ne mostra soltanto id, nome, aggiornamento, destinazione GitHub e revisione; esclude tombstone, rifiuta dati corrotti e non nasconde un eventuale 41esimo progetto. La CI include prove Chromium reali su due schede, reload, corruzione e superamento del limite. Non scrive o cancella dati.
+
+**Solo prerequisito infrastrutturale**: il live editor e la libreria visibile restano su localStorage. Non esiste ancora migrazione automatica, backup implicito, CAS multi-device o cutover a salvataggi asincroni. La #139 e le #91/#92 rimangono aperte.

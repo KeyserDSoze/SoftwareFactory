@@ -122,6 +122,9 @@ if (!inside) {
       const afterDelete=await casA.evaluate(id =>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.equal(afterDelete,null,"A tombstone must read as deleted");
+      const emptyLibrary=await casA.evaluate(() =>
+        window.FactoryProjectCas.listCasProjects());
+      assert.deepEqual(emptyLibrary,[],"Tombstones must not appear in the library");
       // Recreating must advance generation instead of resetting to 1 (ABA).
       const reinsert=await candidate(casA,"re-created after tombstone",null);
       assert.equal(reinsert.ok,true);
@@ -136,6 +139,80 @@ if (!inside) {
       const staleAgain=await candidate(casB,"stale after reopen",updated);
       assert.equal(staleAgain.ok,false);
       assert.match(staleAgain.error,/Conflitto CAS/);
+      const secondId="22222222-2222-4222-8222-222222222222";
+      const second=await casB.evaluate(async id =>
+        window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Second project"},stages:[],
+          updatedAt:"2026-11-21T10:00:00.000Z",
+          githubDestination:{owner:"example",repo:"repo"},
+        },null),secondId);
+      assert.equal(second.revision,1);
+      const library=await freshPage.evaluate(() =>
+        window.FactoryProjectCas.listCasProjects());
+      assert.deepEqual(library,[
+        {id:secondId,name:"Second project",updatedAt:"2026-11-21T10:00:00.000Z",
+          repository:"example/repo",revision:1},
+        {id,name:"re-created after tombstone",updatedAt:"2026-11-20T20:00:00.000Z",
+          repository:"",revision:4},
+      ],"The IDB library must be consistent after tab reload");
+      assert.equal((await casA.evaluate(() =>
+        window.FactoryProjectCas.listCasProjects())).length,2,
+        "Both tabs must discover the same IDB projects");
+
+      // Deliberate corruption only in this disposable test browser profile.
+      await casA.evaluate(async id => {
+        const db=await new Promise((resolve,reject) => {
+          const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(Error("Test fixture open failed"));
+        });
+        try {
+          await new Promise((resolve,reject) => {
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(Error("Test fixture write failed"));
+            tx.objectStore("projects").put({id,revision:2,raw:"not-json"},id);
+          });
+        } finally {db.close();}
+      },secondId);
+      const badList=await casB.evaluate(async () => {
+        try {await window.FactoryProjectCas.listCasProjects();return "unexpected success";}
+        catch(e){return String(e);}
+      });
+      assert.match(badList,/corrotto/,"Malformed IDB row must reject entire library");
+      assert.doesNotMatch(badList,/not-json/,"Never echo raw storage content");
+
+      // Recreate a valid row and then exceed 40 active projects; discovery
+      // must refuse rather than silently truncate.
+      await casA.evaluate(async ({secondId,second}) => {
+        const db=await new Promise((resolve,reject) => {
+          const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(Error("Test fixture open failed"));
+        });
+        try {
+          await new Promise((resolve,reject) => {
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(Error("Test fixture write failed"));
+            const store=tx.objectStore("projects");
+            store.put({id:secondId,revision:1,raw:second.raw},secondId);
+            for(let i=0;i<39;i++) {
+              const extraId="33333333-3333-4333-8333-"+String(i).padStart(12,"0");
+              store.put({id:extraId,revision:1,raw:JSON.stringify({
+                id:extraId,config:{name:"Extra"},stages:[],
+                updatedAt:"2026-11-21T10:00:00.000Z",
+              })},extraId);
+            }
+          });
+        } finally {db.close();}
+      },{secondId,second});
+      const overfull=await freshPage.evaluate(async () => {
+        try {await window.FactoryProjectCas.listCasProjects();return "unexpected success";}
+        catch(e){return String(e);}
+      });
+      assert.match(overfull,/oltre 40/,"Never hide a 41st IDB project");
+      console.log("FACTORY_INDEXEDDB_LIBRARY_E2E_PASS: two tabs, tombstone, reload, corruption and overfull fail-closed");
       console.log("FACTORY_INDEXEDDB_CAS_E2E_PASS: Chromium two-tab insert/update races, stale delete, tombstone ABA and tab reopen");
     } finally {
       await casContext.close();

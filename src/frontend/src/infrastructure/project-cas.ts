@@ -132,6 +132,58 @@ export async function readCasProject(id: string): Promise<CasProjectSnapshot | n
   } finally { db.close(); }
 }
 
+/** Read-only IndexedDB library discovery for future opt-in migration (#139/#140).
+ * Never use a localStorage index or hide corrupt/overfull IndexedDB data.
+ */
+export type CasProjectChoice = Readonly<{
+  id: string; name: string; updatedAt: string; repository: string; revision: number;
+}>;
+
+export async function listCasProjects(): Promise<CasProjectChoice[]> {
+  const db = await openCasDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const projects: CasProjectChoice[] = [];
+      let failure = "Elenco progetti IndexedDB interrotto.";
+      tx.oncomplete = () => resolve(projects.sort((a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)));
+      tx.onabort = () => reject(Error(failure));
+      tx.onerror = () => reject(Error("Elenco progetti IndexedDB non riuscito."));
+      const req = tx.objectStore(STORE).openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        try {
+          if (typeof cursor.key !== "string") throw Error("Invalid key");
+          checkId(cursor.key);
+          const row = readRow(cursor.value as unknown, cursor.key);
+          if (!row) throw Error("Missing row");
+          if (row.raw !== null) {
+            // readRow already checked project identity, schema and size.
+            const project = JSON.parse(row.raw) as FactoryProject;
+            projects.push({
+              id: row.id, revision: row.revision,
+              name: project.config.name, updatedAt: project.updatedAt,
+              repository: project.githubDestination?.owner && project.githubDestination?.repo
+                ? project.githubDestination.owner + "/" + project.githubDestination.repo : "",
+            });
+            if (projects.length > 40) {
+              failure = "Libreria IndexedDB oltre 40 progetti: recupero manuale richiesto.";
+              tx.abort();
+              return;
+            }
+          }
+          cursor.continue();
+        } catch {
+          failure = "Archivio IndexedDB locale corrotto: elenco non disponibile.";
+          tx.abort();
+        }
+      };
+    });
+  } finally { db.close(); }
+}
+
 export async function compareAndSwapCasProject(
   project: FactoryProject, expected: CasProjectSnapshot | null,
 ): Promise<CasProjectSnapshot> {

@@ -1057,3 +1057,10 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 
 - `src/frontend/src/infrastructure/project-cas.ts` espone una primitiva **separata** dal live `localStorage`: `readCasProject`, `compareAndSwapCasProject` e `deleteCasProject` con versioni `{ id,revision,raw }` esatte. La `readwrite` IndexedDB contiene `get -> compare versione+JSON -> put/tombstone` nello stesso oggetto transaction, senza `await` nel callback; rispondere **solo** al `tx.oncomplete`, non al `request.onsuccess`. Per un insert `expected=null` significa key assente o tombstone. Il delete richiede un token corrente e conserva una tombstone con generazione monotona (anti-ABA), non resetta la revisione. Corruzione, API mancante, quota e version mismatch falliscono chiusi senza fallback plaintext/localStorage.
 - **ATTENZIONE:** attualmente l'editor continua a salvare via `persistProjectIfUnchanged` su localStorage: la primitiva CAS è pronta e testata ma **non è ancora integrata nella UI** e non protegge i writer legacy. Non migrare automaticamente dati, non attivare dual-write fire-and-forget e non marcare #92/#91 come completate. Prossimo lavoro: cutover UX controllato + trasformazione in async dell'intero save loop, e collaudo storage upgrade/legacy. L'E2E Chromium di due vere tab è dentro `factory-browser-lock-smoke.mjs` e deve stampare `FACTORY_INDEXEDDB_CAS_E2E_PASS` prima di considerarlo verificato.
+
+
+## Discovery read-only della libreria CAS (#140/#139)
+
+- listCasProjects deve usare una sola transazione IndexedDB readonly con cursore; verificare tutte le chiavi, i record e i progetti con readRow. Omettere solo tombstone; fallire chiuso per corruzione o oltre 40 progetti attivi, senza troncamento o cancellazione.
+- Restituire soltanto metadata, ordinati per updatedAt decrescente e ID crescente. Non usare l'indice localStorage né ripiegare su quello in caso di IndexedDB indisponibile.
+- La CI Chromium verifica due tab, reload, tombstone, corruzione e >40 progetti tramite marker FACTORY_INDEXEDDB_LIBRARY_E2E_PASS. Nessun passaggio automatico dell'editor legacy: #139/#91/#92 restano aperte (ADR 0093).

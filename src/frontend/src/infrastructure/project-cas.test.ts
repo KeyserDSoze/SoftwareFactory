@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { compareAndSwapCasProject, deleteCasProject, readCasProject,
-  serializeCasProject } from "./project-cas";
+  serializeCasProject, listCasProjects } from "./project-cas";
 
 describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -38,6 +38,7 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
     vi.stubGlobal("localStorage", {setItem:local});
     const p=createProject();
     await expect(readCasProject(p.id)).rejects.toThrow(/IndexedDB non disponibile/);
+    await expect(listCasProjects()).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(compareAndSwapCasProject(p,null)).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(deleteCasProject(p.id,{id:p.id,revision:1,raw:serializeCasProject(p)}))
       .rejects.toThrow(/IndexedDB non disponibile/);

@@ -1109,3 +1109,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [ ] **Da fare in #92/#91:** migrazione user-controlled di progetti legacy, cutover dello store autorevole (rimozione del percorso sincrono non transazionale), integrazione di tutte le chiamate UI/app a salvataggio asincrono e prove su browser non cooperativi. Un DB per origin/profilo non equivale a CAS cross-device o sincronizzazione cloud reale.
 
 - [x] Prima Factory CI #44819199533 fermata al typecheck TS2353: test di input ciclico con proprietà extra su literal FactoryProject; fixture corretta con `Object.assign` per conservare la stessa condizione runtime senza forzare il type. Nessun cambio al CAS transazionale. Ripetere CI completa.
+
+
+## Discovery readonly IndexedDB (#140 — 21/11/2026)
+
+- [x] API listCasProjects con transaction readonly e cursor; verifica dati/ID, solo metadata, ordinamento deterministico, tombstone escluse e overfull >40 fail-closed.
+- [x] Vitest assenza IndexedDB e suite Chromium dual-tab con reload, corruzione deliberata e limite, marker FACTORY_INDEXEDDB_LIBRARY_E2E_PASS.
+- [ ] Confermare Factory CI, Pages e Installer candidate sullo SHA main prima di chiudere #140.
+- [ ] #139 resta aperta: backup user-controlled prima di import legacy, migrazione assistita, integrazione write-path async end-to-end, recovery UX. Nessuna promessa CAS multi-device o provider reale. ADR 0093.
