@@ -681,3 +681,8 @@ Per una cancellazione intenzionale, il controller CAS di #144 richiede token pro
 ## Inserimento IndexedDB fail-closed (#147)
 
 `compareAndSwapCasProject` interpreta `expected=null` come **missing** soltanto, non come tombstone. Lo scan/validazione di tutte le righe e la verifica del limite 40 progetti attivi avvengono nella stessa transazione readwrite dell'inserimento, senza `await` tra get/cursor/add. Gli update con token `id/revision/raw` mantengono il modello CAS, anche quando la libreria è piena. Solo `restoreCasTombstoneProject` (#146) con consenso, backup canonico e revisione tombstone può riattivare un progetto eliminato. Questa infrastruttura non modifica l'editor React legacy; serve ancora il cutover completo #139.
+
+
+## File picker standalone per restore storico IndexedDB (#148)
+
+`project-cas-restore-file.ts` accetta soltanto JSON progetto e envelope recovery v1 in memoria, limita gli input a 1,5 MB e produce il raw canonico del progetto. In `App.tsx` il file picker IT/EN esegue `prepareCasTombstoneRestore(id,raw)` senza scritture, chiede consenso esplicito mostrando ID e revisione e poi chiama `confirmCasTombstoneRestore` che rilegge la tombstone e delega all'unica transazione `restoreCasTombstoneProject` di #146/#147. Operazioni abortite, concorrenti o con file non valido **non** attivano import/merge nell'editor legacy o fallback. Il file non viene persistito nella SPA; la lista IDB di recupero viene invalidata e l'operatore può aggiornare la visualizzazione. L'editor React continua a usare `localStorage` finché ogni write path non viene migrato insieme nella #139. Nessuna attestazione di review/test deriva dal JSON recuperato.

@@ -1162,7 +1162,7 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Ticket ID + revisione + JSON raw con controllo canonico prima del consenso e doppia rilettura post-consenso; rifiuto anche di raw manomesso a parità di revisione.
 - [x] UI IT/EN di elenco e download storico JSON esplicito senza riattivazione dell'editor, backup automatico o mutazione di uno dei due archivi.
 - [x] Vitest su legacy assente/corrotto, ticket invalidi, IDB non disponibile e conflitti; Chromium due schede, copia orfana, legacy corrotto, export esatto, modifica IDB con stessa revisione e tombstone. Marker `FACTORY_INDEXEDDB_ORPHAN_RECOVERY_E2E_PASS`.
-- [ ] Verificare Factory CI, Pages e Installer candidate sullo stesso SHA e chiudere #145.
+- [x] Factory CI, Pages e Installer candidate completate sullo stesso SHA e #145 chiusa (vedi issue).
 - [ ] #139 ancora aperta: attivare un **unico** editor async end-to-end con backup, source selection, restore controllato e tutti i writer; #91/#92 aperte per cloud/multi-device. ADR 0098.
 
 
@@ -1171,7 +1171,7 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Ripristino da JSON di backup esatto e tombstone con revisione verificata, consenso operatore separato e `restoreCasTombstoneProject` atomico con controllo capacità (40) nella stessa readwrite transaction; token solo dopo `tx.oncomplete`.
 - [x] `CasSelectionController.delete` con consenso, ticket id/revision/raw e interlock commit/switch. Controller bloccato dopo successo o ack ambiguo, senza fallback legacy né auto-restore.
 - [x] Vitest di consenso/backup canonico/tombstone stale/errore IDB e delete controller; Chromium dual tab con race restore (un vincitore), writer stale dopo delete, revisione monotona, full library 40 e nessuna modifica legacy. Marker `FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS`.
-- [ ] Factory CI + Pages + Installer candidate successful sullo stesso SHA prima di chiudere #146.
+- [x] Factory CI + Pages + Installer candidate completed/success sullo stesso SHA; #146 chiusa.
 - [ ] #139 ancora aperta: cutover di **tutti** i writer React/Code Agent/GitHub/import/restore, UI IT/EN, scelta source of truth, rollback e test crash/versionchange. La #147 elimina il bypass di tombstone revival tramite `expected=null`; il cutover editor resta da completare. #91/#92 aperte. ADR 0099.
 
 
@@ -1183,3 +1183,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest e Chromium su due schede: race insert, no-revive, restore approvato, cap 40, update al limite, corruzione, reload; marker `FACTORY_INDEXEDDB_STRICT_INSERT_E2E_PASS`.
 - [ ] Factory CI, Pages, Installer candidate `completed/success` stesso SHA prima della chiusura #147.
 - [ ] Resta #139: migrazione completa live React/Code Agent/GitHub/restore/switch a CAS async, UX di recovery/rollback. #91/#92 aperte. ADR 0100.
+
+
+## UI ripristino tombstone IDB da JSON, senza cambiare editor live (#148 — 21/11/2026)
+
+- [x] File input IT/EN per JSON progetto grezzo e backup envelope SoftwareFactory v1, limite file 1,5 MB e parser canonicalizzato con Vitest (corruzione/schema/ID).
+- [x] Ticket tombstone read-only prima di conferma umana con nome, ID e revisione; gestione annulla, busy guard, invalidazione lista storica, errore fail-closed senza auto-retry.
+- [x] Conferma avvia soltanto `confirmCasTombstoneRestore`: transazione IDB atoma e ACK `tx.oncomplete`; nessun `setProject`/localStorage/GitHub/cloud/runner né interpretazione di evidenze storiche come attuali.
+- [x] Chromium reale UI con upload, consenso negato/positivo, formati raw ed envelope, ID mancante, restore già eseguito, tombstone stale mutata dalla seconda tab e zero modifiche legacy; marker `FACTORY_INDEXEDDB_UI_TOMBSTONE_RESTORE_E2E_PASS`.
+- [ ] Gate Factory CI + Pages + Installer candidate completed/success su uno SHA main prima di chiudere #148.
+- [ ] Cutover editor live di tutti i write path, selezione autoritativa/reload e rollback/UX quota/versionchange ancora nella #139. #91/#92 aperte. ADR 0101.

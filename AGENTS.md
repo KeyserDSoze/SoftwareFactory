@@ -1119,3 +1119,11 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - `expected=null` vuol dire **ID mai visto**, non tombstone. Non recuperare dati cancellati tramite la CAS generica: usare soltanto `prepareCasTombstoneRestore` / `confirmCasTombstoneRestore` con backup canonico, consenso e tombstone revision.
 - Scansionare e validare l'intero store IDB e il limite di **40 attivi nella stessa readwrite transaction** prima dell'`add`. Niente `await` nel callback o preflight list in un'altra transazione.
 - A 40 attivi: insert generico rifiutato, update con token esatto consentito. Righe corrotte rifiutano l'insert senza cambiare lo store. Test `FACTORY_INDEXEDDB_STRICT_INSERT_E2E_PASS`. Non affermare che il live editor è migrato; #139/#91/#92 ancora aperte.
+
+
+## File-picker di ripristino manuale tombstone (#148 / ADR 0101)
+
+- L'interfaccia live può **solo** avviare il ripristino indipendente di una copia IndexedDB con backup scelto e consenso esplicito. Non collegare questo percorso a `setProject`, `projectRef`, `persistProjectIfUnchanged`, `localStorage`, cloud/GitHub né riavviare job/review. Il progetto attivo legacy continua ad essere autorevole per l'editor.
+- Accettare JSON progetto/backup envelope v1 esclusivamente attraverso `parseCasRestoreBackupFile`, dimensione `file.size` max 1,5 MB prima della lettura, e serializzazione CAS canonica. Non memorizzare il File o il suo JSON in React state o storage, non mostrare raw o provider errors al pubblico; filtri file HTML non sostituiscono il parser.
+- `prepareCasTombstoneRestore` (read-only) precede la finestra conferma, che mostra ID e revision di tombstone. Se l'operatore accetta chiamare `confirmCasTombstoneRestore` con ticket immutato e consenso true; la transazione CAS nativa controlla la revisione, capienza e ack. Nessun fallback, retry automatico o silenzioso import del backup in caso di conflitto.
+- L'input deve resettarsi anche su annullamento/errore per consentire il reselect, il guard `casRestoreBusyRef` deve impedire doppio submit, la libreria storica deve invalidarsi. Test native Chromium `FACTORY_INDEXEDDB_UI_TOMBSTONE_RESTORE_E2E_PASS`; #139 resta aperta per migrare **tutti** i writer del live editor, #91/#92 aperte.
