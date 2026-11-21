@@ -718,6 +718,160 @@ if (!inside) {
       await lifecycleContext.close();
     }
 
+
+    // #148: actual SPA file picker, IT consent and native IDB restore from a
+    // saved JSON. Never changes the live localStorage editor or GitHub. Fresh
+    // browser profile prevents inherited consent handlers from other tests.
+    const restoreUiContext=await browser.newContext();
+    try {
+      const page=await restoreUiContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      await expect(page.getByRole("button",{
+        name:"Copia in IndexedDB (anteprima)",
+      })).toBeEnabled({timeout:15000});
+      const rival=await restoreUiContext.newPage();
+      await rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await rival.addScriptTag({content:casBundle});
+      await rival.addScriptTag({content:lifecycleBundle});
+      const source=await page.evaluate(async()=>{
+        const make=(id,name)=>({id,config:{name,description:"Old draft"},
+          stages:[],updatedAt:"2026-11-21T17:00:00.000Z"});
+        const ids=[
+          "aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "bbbbbbb1-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "ccccccc1-cccc-4ccc-8ccc-cccccccccccc",
+        ];
+        const snapshots=[];
+        for(let index=0;index<ids.length;index++){
+          const s=await window.FactoryProjectCas.compareAndSwapCasProject(
+            make(ids[index],["Raw saved backup","Envelope saved backup","Rival restored backup"][index]),null);
+          await window.FactoryProjectCas.deleteCasProject(s.id,s);
+          snapshots.push(s);
+        }
+        return snapshots;
+      });
+      const backupFile=page.getByLabel("Ripristina progetto IndexedDB eliminato da backup JSON");
+      await expect(backupFile).toBeEnabled();
+      const legacyBaseline=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        library:localStorage.getItem("softwarefactory.project.index.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const jsonFile=(name,text)=>({name,mimeType:"application/json",buffer:Buffer.from(text,"utf8")});
+      await backupFile.setInputFiles(jsonFile("broken.json","{invalid"));
+      await expect(page.getByRole("alert")).toContainText("Backup JSON IndexedDB non valido");
+      await expect(backupFile).toBeEnabled();
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),source[0].id),
+        {state:"tombstone",revision:2},
+        "Bad JSON must not recreate a deleted project");
+
+      // A well-formed backup for a never-seen ID cannot create any project.
+      const nonDeleted={...JSON.parse(source[0].raw),
+        id:"ddddddd1-dddd-4ddd-8ddd-dddddddddddd"};
+      await backupFile.setInputFiles(jsonFile("never-deleted.json",JSON.stringify(nonDeleted)));
+      await expect(page.getByRole("alert")).toContainText("tombstone assente");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),nonDeleted.id),{state:"missing"});
+
+      // Cancel consent. Selecting the same file again must still be possible.
+      let declined=0;
+      page.once("dialog",dlg=>{declined++;void dlg.dismiss();});
+      await backupFile.setInputFiles(jsonFile("saved-project.json",source[0].raw));
+      await expect(backupFile).toBeEnabled();
+      assert.equal(declined,1,"Explicit consent is required for IDB restore");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),source[0].id),
+        {state:"tombstone",revision:2});
+
+      // Approve an exact raw project export. The user-visible dialog carries
+      // only project name, ID, generation and a non-live-editor warning.
+      let accepted=0;
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/Raw saved backup/);
+        assert.match(dlg.message(),/Tombstone rev\. 2/);
+        assert.match(dlg.message(),/localStorage/);
+        accepted++;
+        void dlg.accept();
+      });
+      await backupFile.setInputFiles(jsonFile("saved-project.json",source[0].raw));
+      await expect(page.getByText("Copia IndexedDB ripristinata soltanto",{exact:false}))
+        .toBeVisible({timeout:15000});
+      assert.equal(accepted,1);
+      const restoredRaw=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source[0].id);
+      assert.equal(restoredRaw.revision,3);
+      assert.equal(restoredRaw.raw,source[0].raw);
+      await backupFile.setInputFiles(jsonFile("saved-project.json",source[0].raw));
+      await expect(page.getByRole("alert")).toContainText("tombstone assente");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source[0].id),restoredRaw,
+        "A second file selection cannot overwrite a restored project");
+
+      // Existing v1 local recovery envelopes from the SPA are accepted, but
+      // only the normalized project is inserted into IndexedDB.
+      const envelope=JSON.stringify({
+        kind:"softwarefactory-local-recovery",schemaVersion:1,
+        exportedAt:"2026-11-21T17:00:00.000Z",
+        project:JSON.parse(source[1].raw),
+      },null,2);
+      page.once("dialog",dlg=>void dlg.accept());
+      await backupFile.setInputFiles(jsonFile("softwarefactory-recovery.json",envelope));
+      await expect(page.getByText("Copia IndexedDB ripristinata soltanto",{exact:false}))
+        .toBeVisible({timeout:15000});
+      const restoredEnvelope=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source[1].id);
+      assert.equal(restoredEnvelope.revision,3);
+      assert.equal(restoredEnvelope.raw,source[1].raw);
+
+      // Native second-tab CAS mutation WHILE confirmation is open. The UI
+      // must fail closed on stale tombstone without retry or local fallback.
+      let notifyDialog;
+      const dialogSeen=new Promise(resolve=>{notifyDialog=resolve;});
+      const handleDialog=dialog=>notifyDialog(dialog);
+      page.on("dialog",handleDialog);
+      const pendingFile=backupFile.setInputFiles(jsonFile("race.json",source[2].raw));
+      const dialog=await dialogSeen;
+      assert.match(dialog.message(),/Rival restored backup/);
+      const rivalTicket=await rival.evaluate(async({id,raw})=>
+        window.FactoryCasLifecycle.prepareCasTombstoneRestore(id,raw),
+        {id:source[2].id,raw:source[2].raw});
+      const rivalResult=await rival.evaluate(async ticket=>
+        window.FactoryCasLifecycle.confirmCasTombstoneRestore(ticket,true),rivalTicket);
+      assert.equal(rivalResult.revision,3);
+      await dialog.accept();
+      await pendingFile;
+      page.off("dialog",handleDialog);
+      await expect(page.getByRole("alert")).toContainText("Tombstone IndexedDB cambiata");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source[2].id),
+        rivalResult,"The UI must not overwrite the winner of a rival restore");
+
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        library:localStorage.getItem("softwarefactory.project.index.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBaseline,
+        "File-driven IDB restore must never write or change legacy editor state");
+      const recoveredLibrary=await page.getByRole("button",{
+        name:"Mostra copie IndexedDB recuperabili",
+      });
+      await recoveredLibrary.click();
+      await expect(page.getByTestId("cas-recovery-library"))
+        .toContainText("Raw saved backup");
+      await expect(page.getByTestId("cas-recovery-library"))
+        .toContainText("Envelope saved backup");
+      console.log("FACTORY_INDEXEDDB_UI_TOMBSTONE_RESTORE_E2E_PASS: actual SPA file upload, invalid/missing, explicit cancel+confirm, raw+envelope backup, two-tab stale ticket, no legacy writes");
+    }finally {
+      await restoreUiContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
