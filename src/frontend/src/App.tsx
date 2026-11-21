@@ -33,6 +33,8 @@ import { prepareLegacyCasCopy, legacyCasBackupJson, copyLegacyCasTicket } from "
 import { inspectLegacyCasCopy, readCasExportSnapshot, type CasCopyInspection } from "./infrastructure/project-cas-reconciliation";
 import { listCasRecoveryCopies, prepareCasRecoveryTicket, confirmCasRecoveryTicket } from "./infrastructure/project-cas-recovery-library";
 import type { CasProjectChoice } from "./infrastructure/project-cas";
+import { prepareCasTombstoneRestore, confirmCasTombstoneRestore } from "./infrastructure/project-cas-lifecycle";
+import { MAX_CAS_RESTORE_FILE_BYTES, parseCasRestoreBackupFile } from "./infrastructure/project-cas-restore-file";
 import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
 import { assertLocalProjectUnchanged, prepareLocalProjectSwitch,
   readConfirmedLocalProjectSwitch } from "./infrastructure/local-project-switch";
@@ -101,6 +103,7 @@ export default function App() {
   const projectRef = useRef(project);
   const writerLeaseRef = useRef<ProjectWriterLease | null>(null);
   const projectSwitchRef = useRef(false);
+  const casRestoreBusyRef = useRef(false);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -708,6 +711,47 @@ export default function App() {
     } finally { setBusy(false); setOperation(""); }
   }
 
+
+  /** Explicit isolated IDB repair. Never select this record in the legacy
+   * editor, change projectRef, or write localStorage/GitHub/cloud (#148).
+   */
+  async function restoreDeletedCasCopyFromFile(file: File): Promise<void> {
+    if (busy || busyRef.current || casRestoreBusyRef.current) return;
+    casRestoreBusyRef.current=true;
+    const locale=normalizeLocale(settingsRef.current.language);
+    setBusy(true);
+    setOperation(t(locale,"casRestoreBusy"));
+    setCasRecoveryCopies(null); // Any displayed IDB library is only historical.
+    try {
+      // Check bytes BEFORE reading or parsing any untrusted user file.
+      if (file.size === 0 || file.size > MAX_CAS_RESTORE_FILE_BYTES)
+        throw Error(t(locale,"casRestoreSize"));
+      const backup=parseCasRestoreBackupFile(await file.text());
+      // Prepare a read-only tombstone generation ticket before asking for
+      // consent. Only a tombstoned ID is eligible; never insert missing IDs.
+      const ticket=await prepareCasTombstoneRestore(backup.id,backup.raw);
+      const approved=window.confirm(
+        t(locale,"casRestoreConfirm")+"\n\n"+
+        t(locale,"casRestoreProject")+": "+backup.name.slice(0,120)+"\n"+
+        "ID: "+ticket.tombstone.id+"\n"+
+        "Tombstone rev. "+ticket.tombstone.revision
+      );
+      if (!approved) return;
+      const saved=await confirmCasTombstoneRestore(ticket,true);
+      setCasInspection(null);
+      setNotice(t(locale,"casRestoreDone")+" (rev. "+saved.revision+")");
+      // Force a fresh recovery list after a successful IDB-only restore.
+      setCasRecoveryCopies(null);
+    } catch(e) {
+      // Do not leak raw backup contents or native provider error strings.
+      setError(locale==="en" ? t(locale,"casRestoreFailed") :
+        e instanceof Error ? e.message : t(locale,"casRestoreFailed"));
+    } finally {
+      casRestoreBusyRef.current=false;
+      setBusy(false); setOperation("");
+    }
+  }
+
   function downloadRecoveryProject(project: FactoryProject): void {
     // Explicit single-project recovery file; no PAT, AI API or cloud credentials
     // are included (they are stored in the browser's session/device vault).
@@ -1011,6 +1055,23 @@ export default function App() {
                     </button>
                   </li>)}</ul>}
               </div>}
+            </div>
+
+            <div className="helper">
+              <label htmlFor="cas-tombstone-restore-file">
+                {t(normalizeLocale(settings.language),"casRestoreFileLabel")}
+                <input id="cas-tombstone-restore-file" type="file"
+                  accept=".json,application/json"
+                  disabled={busy}
+                  onChange={e=>{
+                    const input=e.currentTarget, chosen=input.files?.[0];
+                    // Clear immediately so the same file can be reselected
+                    // after cancellation, a failed race or a browser restart.
+                    input.value="";
+                    if(chosen) void restoreDeletedCasCopyFromFile(chosen);
+                  }}/>
+              </label>
+              <p>{t(normalizeLocale(settings.language),"casRestoreExplain")}</p>
             </div>
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
