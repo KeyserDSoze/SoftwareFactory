@@ -374,6 +374,147 @@ if (!inside) {
       await editorContext.close();
     }
 
+
+    // #144: read-only preconsent project switch tickets and coordinated CAS
+    // writes. Native Chromium IndexedDB, two tabs, no live-editor cutover.
+    const selectionBuild=await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-selection.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryCasSelection",target:"es2022",
+    });
+    const selectionBundle=selectionBuild.outputFiles[0].text;
+    const selectionContext=await browser.newContext();
+    try {
+      const primary=await selectionContext.newPage();
+      const rival=await selectionContext.newPage();
+      await Promise.all([
+        primary.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for (const tab of [primary,rival]) {
+        await tab.addScriptTag({content:casBundle});
+        await tab.addScriptTag({content:selectionBundle});
+      }
+      const fromId="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const toId="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+      const original=await primary.evaluate(async({fromId,toId})=>{
+        const make=(id,name)=>({
+          id,config:{name},stages:[],updatedAt:"2026-11-21T11:00:00.000Z",
+        });
+        const a=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make(fromId,"Source A"),null);
+        const b=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make(toId,"Destination B"),null);
+        window.__casSelection=await window.FactoryCasSelection
+          .openCasSelectionController(fromId);
+        return {a,b};
+      },{fromId,toId});
+      const choices=await primary.evaluate(()=>window.__casSelection.list());
+      assert.deepEqual(choices.map(x=>x.id).sort(),[fromId,toId].sort(),
+        "The selection library must be listed from IndexedDB only");
+      const ticket=await primary.evaluate(id=>
+        window.__casSelection.prepareSwitch(id),toId);
+      assert.deepEqual(ticket.source,original.a);
+      assert.deepEqual(ticket.destination,original.b);
+      const newB=await rival.evaluate(async b=>{
+        const item=JSON.parse(b.raw);
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          ...item,config:{...item.config,name:"Rival changes B during confirmation"},
+        },b);
+      },original.b);
+      const stale=await primary.evaluate(async ticket=>{
+        try {await window.__casSelection.confirmSwitch(ticket);return "unexpected success";}
+        catch(error){return {message:String(error),
+          current:window.__casSelection.snapshot(),state:window.__casSelection.state()};}
+      },ticket);
+      assert.match(stale.message,/non confermato/);
+      assert.deepEqual(stale.current,original.a,
+        "Stale switch must preserve original writable project");
+      assert.equal(stale.state,"ready");
+      const validTicket=await primary.evaluate(id=>
+        window.__casSelection.prepareSwitch(id),toId);
+      assert.deepEqual(validTicket.destination,newB);
+      const selected=await primary.evaluate(async ticket=>
+        window.__casSelection.confirmSwitch(ticket),validTicket);
+      assert.deepEqual(selected,newB);
+      assert.deepEqual(await primary.evaluate(()=>
+        window.__casSelection.snapshot()),newB);
+
+      // Prepare an old selection ticket; a current-project commit changes
+      // the controller generation and must invalidate that old ticket.
+      const oldTicket=await primary.evaluate(id=>
+        window.__casSelection.prepareSwitch(id),fromId);
+      const saved=await primary.evaluate(async()=>{
+        const ctrl=window.__casSelection;
+        const before=ctrl.snapshot(),project=JSON.parse(before.raw);
+        const promise=ctrl.commit({
+          ...project,config:{...project.config,name:"New B checkpoint"},
+        },before);
+        const during=ctrl.state();
+        let duringSwitch;
+        try {await ctrl.confirmSwitch({
+          source:before,destination:before,generation:0,
+        });duringSwitch="unexpected success";}
+        catch(e){duringSwitch=String(e);}
+        return {during,duringSwitch,saved:await promise};
+      });
+      assert.equal(saved.during,"saving");
+      assert.match(saved.duringSwitch,/sospesa/,
+        "Selection must refuse an in-flight write");
+      assert.equal(saved.saved.revision,newB.revision+1);
+      const staleGeneration=await primary.evaluate(async ticket=>{
+        try {await window.__casSelection.confirmSwitch(ticket);
+          return "unexpected success";}
+        catch(e){return String(e);}
+      },oldTicket);
+      assert.match(staleGeneration,/obsoleto/,
+        "A ticket created before a save cannot be accepted afterward");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),toId),saved.saved);
+
+      // A direct CAS delete by a non-cooperating tab must not make a
+      // tombstoned destination silently selectable.
+      const deleted=await rival.evaluate(async snap=>
+        window.FactoryProjectCas.deleteCasProject(snap.id,snap),original.a);
+      assert.equal(deleted.revision,2);
+      const tombstoneError=await primary.evaluate(async id=>{
+        try {await window.__casSelection.prepareSwitch(id);
+          return "unexpected success";}
+        catch(e){return String(e);}
+      },fromId);
+      assert.match(tombstoneError,/eliminato/);
+      const missingError=await primary.evaluate(async()=>{
+        try {await window.__casSelection.prepareSwitch(
+          "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+          return "unexpected success";}
+        catch(e){return String(e);}
+      });
+      assert.match(missingError,/assente/);
+
+      // Reload creates a fresh controller from IDB, never from localStorage.
+      const refreshed=await selectionContext.newPage();
+      await refreshed.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await refreshed.addScriptTag({content:casBundle});
+      await refreshed.addScriptTag({content:selectionBundle});
+      const afterReload=await refreshed.evaluate(async id=>{
+        const current=await window.FactoryCasSelection.openCasSelectionController(id);
+        return {state:current.state(),snapshot:current.snapshot()};
+      },toId);
+      assert.equal(afterReload.state,"ready");
+      assert.deepEqual(afterReload.snapshot,saved.saved);
+      for(const page of [primary,rival,refreshed]) {
+        const legacy=await page.evaluate(({fromId,toId})=>[
+          localStorage.getItem("softwarefactory.project.library.v1."+fromId),
+          localStorage.getItem("softwarefactory.project.library.v1."+toId),
+        ],{fromId,toId});
+        assert.deepEqual(legacy,[null,null],
+          "CAS controller must never write either legacy project slot");
+      }
+      console.log("FACTORY_INDEXEDDB_SELECTION_E2E_PASS: preconsent exact ticket, rival-tab conflict, writer-switch fencing, tombstone, reload and zero legacy writes");
+    } finally {
+      await selectionContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
