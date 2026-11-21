@@ -8,6 +8,8 @@ import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
 import {listCasProjects} from "../infrastructure/project-cas";
+import {prepareCasIsolatedNewProject,confirmCasIsolatedNewProject}
+  from "../application/cas-isolated-create";
 import {
   openCasSelectionController,type CasSelectionController,
 } from "../infrastructure/project-cas-selection";
@@ -28,6 +30,8 @@ export default function CasIsolatedEditor({locale}:Props) {
   const [snapshot,setSnapshot]=useState<CasProjectSnapshot|null>(null);
   const [draftName,setDraftName]=useState("");
   const [draftDescription,setDraftDescription]=useState("");
+  const [newProjectName,setNewProjectName]=useState("");
+  const [newProjectDescription,setNewProjectDescription]=useState("");
   const [working,setWorking]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -69,6 +73,32 @@ export default function CasIsolatedEditor({locale}:Props) {
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");
+    setNewProjectName(""); setNewProjectDescription("");
+  }
+  function createFresh():void {
+    void run(async()=>{
+      // A selected IDB editor, especially a dirty draft, must not be
+      // displaced by a new-project submission. Discard explicitly first.
+      if(snapshot || active.current) throw Error("Discard selected IDB project first");
+      const ticket=prepareCasIsolatedNewProject(
+        newProjectName,newProjectDescription,
+      );
+      if(!window.confirm(t(locale,"casIsoCreateConfirm")+"\n"+
+        ticket.name+"\nID: "+ticket.id)) return;
+      // The only write is native CAS expected=null: strict never-seen insert,
+      // 40-active cap and tx.oncomplete acknowledgement. No legacy fallback.
+      const acknowledged=await confirmCasIsolatedNewProject(ticket,true);
+      // A second tab may modify the new project after tx.oncomplete. Never
+      // silently open/adopt it as the current editor in that case.
+      const fresh=await openCasSelectionController(ticket.id);
+      if(!exact(fresh.snapshot(),acknowledged))
+        throw Error("New project altered after insertion");
+      // Successful insert does not automatically become an active editor.
+      // Discover it from IDB again so opening still requires explicit consent.
+      setList(await listCasProjects());
+      setNewProjectName(""); setNewProjectDescription("");
+      setNotice(t(locale,"casIsoCreateDone")+" (rev. "+acknowledged.revision+")");
+    });
   }
   function refresh():void {
     void run(async()=>{
@@ -157,6 +187,23 @@ export default function CasIsolatedEditor({locale}:Props) {
           onClick={refresh}>{t(locale,"casIsoRefresh")}</button>
         <button type="button" className="secondary" disabled={working}
           onClick={close}>{t(locale,"casIsoClose")}</button>
+      </div>
+      <div data-testid="cas-isolated-create">
+        <p className="helper">{t(locale,"casIsoCreateExplain")}</p>
+        <label>{t(locale,"casIsoCreateName")}
+          <input value={newProjectName} maxLength={CAS_ISOLATED_NAME_MAX}
+            disabled={working || Boolean(snapshot)}
+            onChange={e=>setNewProjectName(e.target.value)}/>
+        </label>
+        <label>{t(locale,"casIsoCreateDescription")}
+          <textarea value={newProjectDescription}
+            maxLength={CAS_ISOLATED_DESCRIPTION_MAX}
+            disabled={working || Boolean(snapshot)}
+            onChange={e=>setNewProjectDescription(e.target.value)}/>
+        </label>
+        <button type="button" className="secondary"
+          disabled={working || Boolean(snapshot) || !newProjectName.trim()}
+          onClick={createFresh}>{t(locale,"casIsoCreateAction")}</button>
       </div>
       {list!==null && <div data-testid="cas-isolated-library">
         {list.length===0 ? <p>{t(locale,"casIsoEmpty")}</p> :
