@@ -968,3 +968,8 @@ Nel pilota IDB separato, una `create` nativa confermata con `tx.oncomplete` non 
 ## Protezione bozze del pilota IndexedDB (#154)
 
 Il pannello CAS separato richiede conferma IT/EN per **chiudere con modifiche non salvate** a nome, descrizione o requisiti. Il refresh di una sessione pronta conserva sempre la bozza; dopo un conflitto che rende la sessione non più scrivibile, il refresh che la cancellerebbe richiede consenso esplicito. Annullando, il testo resta in memoria per copia manuale; confermando, viene abbandonata solo la bozza locale e si deve riaprire manualmente la revisione attuale. Nessuna correzione automatica del conflitto, nessun retry e nessuna mutazione del live editor localStorage. Il pilota non equivale al cutover #139 né al sync multi-device #91/#92.
+
+
+## Reset selettivo dei checkpoint nel pilota IndexedDB (#155)
+
+Il pannello di editing CAS opt-in permette di scegliere una fase (`features`, `competitors`, `technical`, `architecture`, `adversarial`, `implementation`) e **azzerare quella e tutte le successive**, mantenendo esattamente i checkpoint precedenti. Prima di ogni commit scarica il JSON **raw** pre-reset, richiede la conferma di averlo conservato e un consenso distruttivo distinto; la transazione IndexedDB compare ID/revisione/JSON, fallisce su conflitti tra schede e conferma solo a `tx.oncomplete`. Bozze config sporche e reset inutili vengono bloccati. Questa funzione non esegue la pipeline e non crea attestazioni AI, test o review: serve solo a invalidare output locali. L'editor live localStorage resta separato finché non è completo il cutover #139; #91/#92 sono indipendenti e aperte.

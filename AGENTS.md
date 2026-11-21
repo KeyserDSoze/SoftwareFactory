@@ -1168,3 +1168,8 @@ Una volta confermata `compareAndSwapCasProject(project,null)` su `tx.oncomplete`
 ## No silent draft loss in opt-in CAS editor (#154 / ADR 0107)
 
 Non azzerare una bozza umana IndexedDB sporca tramite chiusura o refresh di una selezione bloccata senza un consenso esplicito IT/EN. Il confronto usa ID/revisione/raw canonico e nome/brief/requisiti; dato malformato è dirty fail-closed. Se il controller è `ready`, il refresh conserva token e draft. Dopo conflitto CAS, un refresh consentito elimina solo il form locale, non aggiorna né riscrive automaticamente la revisione vincente. Nessun retry, fallback legacy o doppia source-of-truth. Marker `FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS`; #139/#91/#92 restano aperte.
+
+
+## Reset selettivo stage solo CAS (#155 / ADR 0108)
+
+Nel pilota opt-in la cancellazione di output/stage non è una prova di esecuzione o review: il builder deve soltanto azzerare la fase selezionata e tutte le successive, conservando le precedenti, senza modificare dati di GitHub/runner. Snapshot canonical id/revision/raw e layout completo ordinato di 6 stage obbligatori; no-op e struttura corrotta rifiutati. Nessuna modifica mentre il draft config è sporco. Prima di `controller.commit`, esportare backup raw pre-reset, chiedere consenso su file conservato e reset distruttivo; nessuna chiamata al writer legacy o retry dopo conflitto. Chromium `FACTORY_INDEXEDDB_STAGE_RESET_E2E_PASS`, Vitest e CI/Pages/Installer sullo stesso SHA. #139 resta aperta per la migrazione di tutti i writer attivi, #91/#92 ancora aperte.

@@ -4,6 +4,8 @@
  * live setProject, localStorage, GitHub or cloud operations are reachable here.
  */
 import {useRef,useState} from "react";
+import {STAGES} from "../domain/defaults";
+import type {StageId} from "../domain/types";
 import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
@@ -21,6 +23,9 @@ import {
 } from "../application/cas-isolated-config";
 import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
+import {
+  buildCasIsolatedStageReset,canResetCasIsolatedStage,
+} from "../application/cas-isolated-stage-reset";
 
 type Props={locale:FactoryLocale};
 
@@ -35,6 +40,7 @@ export default function CasIsolatedEditor({locale}:Props) {
   const [draftName,setDraftName]=useState("");
   const [draftDescription,setDraftDescription]=useState("");
   const [draftRequirements,setDraftRequirements]=useState("");
+  const [stageToReset,setStageToReset]=useState<StageId>("features");
   const [newProjectName,setNewProjectName]=useState("");
   const [newProjectDescription,setNewProjectDescription]=useState("");
   const [working,setWorking]=useState(false);
@@ -80,6 +86,7 @@ export default function CasIsolatedEditor({locale}:Props) {
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
+    setStageToReset("features");
     setNewProjectName(""); setNewProjectDescription("");
   }
   function createFresh():void {
@@ -245,6 +252,42 @@ export default function CasIsolatedEditor({locale}:Props) {
     });
   }
 
+  function resetStage():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected))
+        throw Error("Stale CAS stage reset or unsaved config draft");
+      const candidate=buildCasIsolatedStageReset(expected,stageToReset);
+      if(!window.confirm(t(locale,"casIsoStageResetBackupConfirm")+
+        "\\n"+stageToReset+" / "+expected.id+" / rev. "+expected.revision))
+        return;
+      // Exact ORIGINAL JSON, including any historical AI output/receipts.
+      // This is a deliberate export, never a hidden fallback or upload.
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-stage-reset-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoStageResetSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoStageResetFinalConfirm")+
+        "\\n"+stageToReset+" / "+expected.id+" / rev. "+expected.revision))
+        return;
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent CAS stage reset ACK");
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoStageResetDone")+
+        " ("+stageToReset+", rev. "+committed.revision+")");
+    });
+  }
+
   return <section className="panel" data-testid="cas-isolated-editor">
     <div className="panel-title"><div>
       <span className="eyebrow">INDEXEDDB / CAS</span>
@@ -309,6 +352,22 @@ export default function CasIsolatedEditor({locale}:Props) {
         <button type="button" className="secondary"
           disabled={working || !dirty || !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
+        <div data-testid="cas-isolated-stage-reset">
+          <p className="helper">{t(locale,"casIsoStageResetExplain")}</p>
+          <label>{t(locale,"casIsoStageResetSelection")}
+            <select value={stageToReset} disabled={working || Boolean(dirty)}
+              onChange={e=>setStageToReset(e.target.value as StageId)}>
+              {STAGES.map(stage=><option key={stage.id} value={stage.id}>
+                {stage.id}
+              </option>)}
+            </select>
+          </label>
+          <button type="button" className="secondary"
+            disabled={working || Boolean(dirty) ||
+              active.current?.state()!=="ready" ||
+              !canResetCasIsolatedStage(snapshot,stageToReset)}
+            onClick={resetStage}>{t(locale,"casIsoStageResetAction")}</button>
+        </div>
         <button type="button" className="secondary"
           disabled={working || !active.current || Boolean(dirty)}
           onClick={deleteSelected}>{t(locale,"casIsoDeleteAction")}</button>

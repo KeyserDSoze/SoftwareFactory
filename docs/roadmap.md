@@ -1232,3 +1232,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Refresh di una sessione pronta non cancella la bozza; race CAS del tab rivale non si risolve con rebase automatico. Vitest e Chromium due tab `FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS`.
 - [ ] Verificare Factory CI, Pages, Installer candidate completed/success **stesso SHA main** e marker Chromium prima di chiudere #154.
 - [ ] #139 ancora aperta: migrazione totale di writer live/Code Agent/pipeline/GitHub/import/cloud/restore, UX rollback/quota/versionchange. #91/#92 ancora aperte.
+
+
+## Reset stage e downstream nel pilota React CAS (#155 — 21/11/2026)
+
+- [x] Builder puro `buildCasIsolatedStageReset` con snapshot e sei stage validi, solo invalidazione delle fasi selezionata e successive; no-op e corruzione fail-closed, senza finti completamenti AI/test.
+- [x] UI IT/EN nel pannello IDB, bozza sporca disabilita il comando, export backup JSON raw e tre consensi, `controller.commit` con ACK post `tx.oncomplete`. Nessun auto-restore né retry.
+- [x] Vitest + Chromium E2E: reset parziale, backup esatto, deny/accept, writer CAS rivale nel consenso finale, reload, no legacy writes; marker `FACTORY_INDEXEDDB_STAGE_RESET_E2E_PASS`.
+- [ ] Gate finale: Factory CI, Pages, Installer candidate completed/success sullo **stesso SHA main** e marker nei log, poi chiudere #155.
+- [ ] Cutover `App` principale/Code Agent/pipeline/GitHub/import/cloud/restore e rollback/recovery/quota/versionchange ancora #139; #91/#92 aperte.

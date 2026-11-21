@@ -1116,6 +1116,176 @@ if (!inside) {
     }
 
 
+    // #155: an isolated, explicit stage reset uses the SAME native CAS
+    // controller, preserving earlier checkpoints and exact pre-reset backup.
+    const stageResetContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await stageResetContext.newPage();
+      const rival=await stageResetContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const original=await rival.evaluate(async()=>{
+        const id="15515515-1551-4551-8551-155155155155";
+        const ids=["features","competitors","technical","architecture",
+          "adversarial","implementation"];
+        const project={
+          id,config:{name:"Stage reset CAS",description:"Original brief",
+            requirements:"Never infer successful AI tests"},
+          stages:ids.map((stage,i)=>({
+            id:stage,label:stage,status:"complete",
+            output:"HISTORICAL_STAGE_"+i,
+            sources:[{title:"Historical",url:"https://example.com/"+i,
+              snippet:"old",query:"old",fetchedAt:"2026-11-21T20:00:00.000Z"}],
+            updatedAt:"2026-11-21T20:00:00.000Z",
+          })),
+          createdAt:"2026-11-21T20:00:00.000Z",
+          updatedAt:"2026-11-21T20:00:00.000Z",
+        };
+        return window.FactoryProjectCas.compareAndSwapCasProject(project,null);
+      });
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: Stage reset CAS"}).click();
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 1");
+      const reset=page.getByTestId("cas-isolated-stage-reset");
+      const selector=reset.getByLabel("Fase da azzerare (IndexedDB)");
+      const action=reset.getByRole("button",{
+        name:"Azzera fase e successive SOLO IndexedDB con backup",
+      });
+      await selector.selectOption("technical");
+      await expect(action).toBeEnabled();
+      const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      await name.fill("Unsaved config prevents stage reset");
+      await expect(action).toBeDisabled();
+      await name.fill("Stage reset CAS");
+      await expect(action).toBeEnabled();
+
+      // Declining the backup, or the saved-file acknowledgement, is read-only.
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await action.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),original);
+
+      page.removeAllListeners("dialog");
+      let declined=0;
+      const declineDialog=async dlg=>{
+        declined++;
+        if(declined===1)await dlg.accept();
+        else await dlg.dismiss();
+      };
+      page.on("dialog",declineDialog);
+      const declinedDownload=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await declinedDownload).path())).toString("utf8"),
+        original.raw,"Pre-stage-reset backup must preserve exact old AI receipt");
+      assert.equal(declined,2);
+      page.off("dialog",declineDialog);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),original);
+
+      page.removeAllListeners("dialog");
+      let approved=0;
+      const acceptDialog=async dlg=>{approved++;await dlg.accept();};
+      page.on("dialog",acceptDialog);
+      const savedDownload=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await savedDownload).path())).toString("utf8"),
+        original.raw);
+      assert.equal(approved,3,"Backup, saved-file, destructive consent all required");
+      page.off("dialog",acceptDialog);
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      await expect(panel.getByRole("status"))
+        .toContainText("Reset checkpoint IndexedDB confermato");
+      const saved=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id);
+      const previous=JSON.parse(original.raw),after=JSON.parse(saved.raw);
+      assert.equal(saved.revision,2);
+      assert.deepEqual(after.stages.slice(0,2),previous.stages.slice(0,2),
+        "Earlier approved checkpoints must remain byte-equivalent");
+      assert.deepEqual(after.stages.slice(2),
+        previous.stages.slice(2).map(({id,label})=>({
+          id,label,status:"pending",output:"",sources:[],
+        })),"Selected and downstream AI artifacts must become pending and empty");
+      assert.deepEqual(after.config,previous.config);
+      assert.equal(after.createdAt,previous.createdAt);
+      await expect(action).toBeDisabled();
+
+      // A rival wins while the UI is paused on the FINAL consent: the
+      // obsolete CAS token must be rejected without overwriting the winner.
+      await selector.selectOption("features");
+      await expect(action).toBeEnabled();
+      page.removeAllListeners("dialog");
+      let finalConsent;
+      const waiting=new Promise(resolve=>{finalConsent=resolve;});
+      let approvedBackup=false,approvedSaved=false;
+      const onRace=async dlg=>{
+        if(dlg.message().startsWith("ULTIMA CONFERMA:")){
+          assert.ok(approvedBackup && approvedSaved);
+          finalConsent(dlg);
+        }else if(dlg.message().startsWith("Scaricare il backup JSON ESATTO")){
+          approvedBackup=true;await dlg.accept();
+        }else if(dlg.message().startsWith("Confermi di aver SALVATO")){
+          approvedSaved=true;await dlg.accept();
+        }else await dlg.dismiss();
+      };
+      page.on("dialog",onRace);
+      const pendingDownload=page.waitForEvent("download");
+      const attempt=action.click();
+      void attempt.catch(()=>{});
+      const paused=await waiting;
+      const racedBackup=await pendingDownload;
+      assert.equal((await readFile(await racedBackup.path())).toString("utf8"),
+        saved.raw);
+      const winner=await rival.evaluate(async previous=>{
+        const next=JSON.parse(previous.raw);
+        next.config.description="Native rival CAS update wins";
+        return window.FactoryProjectCas.compareAndSwapCasProject(next,previous);
+      },saved);
+      assert.equal(winner.revision,3);
+      await paused.accept();
+      await attempt;
+      page.off("dialog",onRace);
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      await expect(panel.getByRole("status")).toContainText("Sessione IndexedDB bloccata");
+      await expect(action).toBeDisabled();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),winner,
+        "A stale stage reset must not overwrite a native rival writer");
+
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "IDB stage resets and rival conflicts must never write legacy storage");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),winner,
+        "Checkpoint reset and later rival revision must survive reload");
+      console.log("FACTORY_INDEXEDDB_STAGE_RESET_E2E_PASS: exact raw backup, three consents, selective downstream invalidation, no-op, dirty draft, stale rival write, reload and unchanged legacy");
+    }finally{
+      await stageResetContext.close();
+    }
+
+
     // #150: A new project can be created directly in the standalone CAS
     // editor, without touching the legacy workspace or first staging a
     // localStorage project. The same never-seen native transaction fences
