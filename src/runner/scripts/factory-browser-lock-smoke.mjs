@@ -1146,7 +1146,10 @@ if (!inside) {
       await panel.getByRole("button",{
         name:"Abbandona bozza e selezione",
       }).click();
-      await expect(create).toBeEnabled();
+      // The successful creation intentionally cleared its draft fields;
+      // discard re-enables the form, not an empty-name submission.
+      await expect(newName).toBeEnabled();
+      await expect(create).toBeDisabled();
 
       // During confirmation a noncooperating tab creates and then deletes
       // the SAME randomly generated ID. Generic expected=null must never
