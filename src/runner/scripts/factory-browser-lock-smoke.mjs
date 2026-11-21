@@ -1435,6 +1435,13 @@ if (!inside) {
       page.removeAllListeners("dialog");
       page.once("dialog",dlg=>void dlg.accept());
       await panel.getByRole("button",{name:"Apri copia IDB: Deletion race B"}).click();
+      // The React click launches an asynchronous, consented IDB open. Do
+      // not remove its dialog handler or start delete until the CAS editor
+      // has actually acknowledged the selection of this exact snapshot.
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText(originals.b.id,{timeout:15000});
+      await expect(panel.getByLabel("Nome progetto (solo IndexedDB)"))
+        .toHaveValue("Deletion race B");
       page.removeAllListeners("dialog");
       let releaseFinal;
       const finalDialog=new Promise(resolve=>{releaseFinal=resolve;});
