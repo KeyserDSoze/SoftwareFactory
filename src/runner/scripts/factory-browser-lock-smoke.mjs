@@ -266,6 +266,62 @@ if (!inside) {
         window.FactoryProjectCas.readCasProject(id),original.id),copied,
         "A second attempt must not overwrite a committed CAS record");
 
+
+      // #142: the staged copy matches only until the live legacy editor writes.
+      const inspectButton=page.getByRole("button",{
+        name:"Confronta copia IndexedDB (sola lettura)",
+      });
+      await inspectButton.click();
+      await expect(page.getByTestId("cas-inspection-status"))
+        .toContainText("identici",{timeout:15000});
+      await page.getByLabel("Nome progetto").fill("Legacy changed after initial staging");
+      await page.waitForFunction(id=>{
+        const slot=localStorage.getItem("softwarefactory.project.library.v1."+id);
+        return slot && JSON.parse(slot).config.name === "Legacy changed after initial staging";
+      },original.id,{timeout:15000});
+      await inspectButton.click();
+      await expect(page.getByTestId("cas-inspection-status"))
+        .toContainText("DIVERSA",{timeout:15000});
+      const exportButton=page.getByRole("button",{
+        name:"Esporta copia IndexedDB storica (JSON)",
+      });
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await exportButton.click();
+      await expect(exportButton).toBeVisible();
+      page.once("dialog",dlg=>void dlg.accept());
+      const exportDownload=page.waitForEvent("download",{timeout:20000});
+      await exportButton.click();
+      const recoveredDownload=await exportDownload;
+      assert.equal(recoveredDownload.suggestedFilename(),
+        "softwarefactory-indexeddb-recovery-"+original.id+"-r1.json");
+      assert.equal((await readFile(await recoveredDownload.path())).toString("utf8"),
+        original.raw,"Recovery download must match historical IndexedDB JSON");
+      const legacyNow=await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),original.id);
+      assert.notEqual(legacyNow,original.raw,"Export must not revert active legacy project");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),copied,
+        "Export must not mutate IDB");
+      await inspectButton.click();
+      await expect(page.getByTestId("cas-inspection-status")).toContainText("rev. 1");
+      await page.evaluate(async copied=>{
+        const old=JSON.parse(copied.raw);
+        await window.FactoryProjectCas.compareAndSwapCasProject({
+          ...old,config:{...old.config,name:"Other tab IDB edit"},
+        },copied);
+      },copied);
+      page.once("dialog",dlg=>void dlg.accept());
+      await exportButton.click();
+      await expect(page.getByRole("alert")).toContainText("cambiata");
+      await inspectButton.click();
+      await expect(page.getByTestId("cas-inspection-status")).toContainText("rev. 2");
+      const reconciliationBuild=await require("esbuild").build({
+        entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-reconciliation.ts")],
+        bundle:true,write:false,platform:"browser",format:"iife",
+        globalName:"FactoryCasReconcile",target:"es2022",
+      });
+      await page.addScriptTag({content:reconciliationBuild.outputFiles[0].text});
       // Inject the non-UI copy helper in two same-origin pages. Even without
       // Web Locks, the strict readwrite transaction admits only one insert.
       const second=await staging.newPage();
@@ -327,6 +383,21 @@ if (!inside) {
       assert.equal(tomb.ok,false);
       assert.match(tomb.error,/già presente/);
 
+
+      const missingCheck=await page.evaluate(id=>
+        window.FactoryCasReconcile.inspectLegacyCasCopy(id),staleId);
+      assert.equal(missingCheck.status,"missing","Absent IDB row is not a tombstone");
+      const tombCheck=await page.evaluate(id=>
+        window.FactoryCasReconcile.inspectLegacyCasCopy(id),tombId);
+      assert.equal(tombCheck.status,"tombstone","Deleted IDB row remains a tombstone");
+      assert.equal(tombCheck.revision,2);
+      const tombExport=await page.evaluate(async id=>{
+        try {await window.FactoryCasReconcile.readCasExportSnapshot(id,2);
+          return "unexpected success";}
+        catch(e){return String(e);}
+      },tombId);
+      assert.match(tombExport,/cambiata/);
+      console.log("FACTORY_INDEXEDDB_RECONCILE_E2E_PASS: equality/divergence, historical export, revision race, missing and tombstone");
       console.log("FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS: exact backup, two consents, dual-tab insert race, stale source and tombstone");
     } finally {await staging.close();}
     const context = await browser.newContext({acceptDownloads:true});
