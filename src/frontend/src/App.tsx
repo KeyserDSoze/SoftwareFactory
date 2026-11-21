@@ -1078,7 +1078,7 @@ export default function App() {
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
           </section>
-          <CasIsolatedEditor locale={normalizeLocale(settings.language)}/>
+          <CasIsolatedEditor locale={normalizeLocale(settings.language)} settings={settings}/>
           <section className="hero"><div className="hero-copy"><div className="hero-pill"><Sparkles size={14} /> THE AUTONOMOUS SOFTWARE STUDIO</div>
             <h1>Da un'idea a un'<em>applicazione.</em></h1>
             <p>Descrivi il prodotto, scegli lo stack e lascia che gli agenti pianifichino feature, ricerca, architettura e adversarial review. Esamina ogni decisione, poi genera uno scaffold versionabile.</p>

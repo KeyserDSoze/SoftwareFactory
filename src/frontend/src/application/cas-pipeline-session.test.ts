@@ -3,7 +3,7 @@ import {createProject,STAGES} from "../domain/defaults";
 import type {FactoryProject} from "../domain/types";
 import type {CasProjectSnapshot} from "../infrastructure/project-cas";
 import {openCasEditorSession} from "../infrastructure/project-cas-editor-session";
-import {openCasPipelineSession} from "./cas-pipeline-session";
+import {openCasPipelineSession,canBeginCasPipelineStage} from "./cas-pipeline-session";
 
 vi.mock("../infrastructure/project-cas-editor-session",()=>({
   openCasEditorSession:vi.fn(),

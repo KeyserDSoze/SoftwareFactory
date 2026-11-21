@@ -1122,6 +1122,222 @@ if (!inside) {
     }
 
 
+    // #157: Real SPA opt-in AI stage; network provider is mocked only at
+    // HTTP boundary, while ALL IDB CAS transactions use native Chromium.
+    const casAiContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await casAiContext.newPage(),rival=await casAiContext.newPage();
+      const stageIds=["features","competitors","technical","architecture",
+        "adversarial","implementation"];
+      const providerSettings={
+        language:"it",
+        profiles:[{id:"default",label:"E2E Mock AI",
+          baseUrl:"https://cas-ai-provider.example/v1",
+          model:"ci-model",enabled:true}],
+        assignments:Object.fromEntries(stageIds.map(id=>[id,"default"])),
+      };
+      await page.addInitScript(settings=>{
+        localStorage.setItem("softwarefactory.settings.v1",JSON.stringify(settings));
+        sessionStorage.setItem("softwarefactory.secret.ai.default","CI_MOCK_SECRET");
+      },providerSettings);
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle})]);
+      const ids=["15715715-1571-4571-8571-157157157157",
+        "15715715-1571-4571-8571-157157157158",
+        "15715715-1571-4571-8571-157157157159"];
+      const originals=await rival.evaluate(async ids=>{
+        const now="2026-11-21T22:30:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(id=>({
+            id,label:id,status:"pending",output:"",sources:[],
+          }));
+        return await Promise.all(ids.map((id,i)=>
+          window.FactoryProjectCas.compareAndSwapCasProject({
+            id,config:{
+              name:["Real AI success","Real AI cancel","Real AI rival"][i],
+              description:"AI consent and native CAS only",
+              requirements:"Do not invent tests, approvals or reviews",
+            },stages,createdAt:now,updatedAt:now,
+          },null)));
+      },ids);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      let posts=0,mode="success",pending=null,notifyPending=null;
+      const fakeBody=JSON.stringify({choices:[{finish_reason:"stop",
+        message:{role:"assistant",content:"PROVIDER_HTTP_RESULT"}}]});
+      await page.route("https://cas-ai-provider.example/v1/chat/completions",
+        async route=>{
+          if(route.request().method()==="OPTIONS"){
+            await route.fulfill({status:204,headers:{
+              "access-control-allow-origin":"*",
+              "access-control-allow-methods":"POST,OPTIONS",
+              "access-control-allow-headers":"authorization,content-type",
+            }});return;
+          }
+          posts++;
+          if(mode==="success"){
+            await route.fulfill({status:200,contentType:"application/json",
+              headers:{"access-control-allow-origin":"*"},body:fakeBody});
+          }else{
+            pending=route;
+            notifyPending?.();
+          }
+        });
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      const pick=async name=>{
+        page.removeAllListeners("dialog");
+        page.once("dialog",dlg=>void dlg.accept());
+        await panel.getByRole("button",{name:"Apri copia IDB: "+name}).click();
+      };
+      await pick("Real AI success");
+      const runner=page.getByTestId("cas-isolated-ai-stage");
+      const start=runner.getByRole("button",{
+        name:"Esegui UNA fase AI SOLO IndexedDB con backup",
+      });
+      await expect(start).toBeEnabled();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await start.click();
+      assert.equal(posts,0,"No provider I/O before 3 consents");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[0]),originals[0]);
+
+      // Refuse the saved-file ACK after a genuine exact-raw download.
+      page.removeAllListeners("dialog");
+      let count=0;
+      const denySecond=async dlg=>{
+        count++;if(count===1)await dlg.accept();else await dlg.dismiss();
+      };
+      page.on("dialog",denySecond);
+      const download1=page.waitForEvent("download");
+      await start.click();
+      assert.equal((await readFile(await (await download1).path())).toString("utf8"),
+        originals[0].raw);
+      assert.equal(count,2);page.off("dialog",denySecond);
+      assert.equal(posts,0);
+
+      // Decline provider disclosure despite a saved backup.
+      page.removeAllListeners("dialog");
+      count=0;
+      const denyThird=async dlg=>{
+        count++;if(count<3)await dlg.accept();else await dlg.dismiss();
+      };
+      page.on("dialog",denyThird);
+      const download2=page.waitForEvent("download");
+      await start.click();
+      assert.equal((await readFile(await (await download2).path())).toString("utf8"),
+        originals[0].raw);
+      assert.equal(count,3);page.off("dialog",denyThird);
+      assert.equal(posts,0);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[0]),originals[0]);
+
+      page.removeAllListeners("dialog");
+      count=0;
+      page.on("dialog",async dlg=>{count++;await dlg.accept();});
+      const download3=page.waitForEvent("download");
+      await start.click();
+      assert.equal((await readFile(await (await download3).path())).toString("utf8"),
+        originals[0].raw);
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      await expect(panel.getByRole("status"))
+        .toContainText("Risposta del provider AI persistita");
+      assert.equal(count,3);assert.equal(posts,1);
+      const success=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[0]);
+      assert.equal(success.revision,3);
+      assert.equal(JSON.parse(success.raw).stages[0].status,"complete");
+      assert.equal(JSON.parse(success.raw).stages[0].output,"PROVIDER_HTTP_RESULT");
+      await expect(start).toBeDisabled();
+      page.removeAllListeners("dialog");
+
+      const discard=panel.getByRole("button",{name:"Abbandona bozza e selezione"});
+      const chooseNext=async name=>{
+        await discard.click();
+        await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+        await pick(name);
+      };
+      await chooseNext("Real AI cancel");
+      mode="hold";
+      const cancelledReq=new Promise(resolve=>{notifyPending=resolve;});
+      page.on("dialog",dlg=>void dlg.accept());
+      const cancelFile=page.waitForEvent("download");
+      await start.click();
+      assert.equal((await readFile(await (await cancelFile).path())).toString("utf8"),
+        originals[1].raw);
+      await cancelledReq;
+      await expect(runner.getByTestId("cas-isolated-pipeline-status"))
+        .toContainText("richiesta al provider in corso");
+      await runner.getByRole("button",{name:"Annulla richiesta AI IndexedDB"}).click();
+      await expect(panel.getByRole("status"))
+        .toContainText("Richiesta AI annullata");
+      try{await pending.abort("failed");}catch{/* browser already aborted */}
+      pending=null;
+      const cancelled=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[1]);
+      assert.equal(cancelled.revision,3);
+      assert.equal(JSON.parse(cancelled.raw).stages[0].status,"pending");
+      assert.equal(JSON.parse(cancelled.raw).stages[0].output,"");
+      page.removeAllListeners("dialog");
+
+      await chooseNext("Real AI rival");
+      let resume;
+      mode="hold";
+      pending=null;
+      const rivalReq=new Promise(resolve=>{notifyPending=resolve;});
+      page.on("dialog",dlg=>void dlg.accept());
+      const raceFile=page.waitForEvent("download");
+      await start.click();
+      assert.equal((await readFile(await (await raceFile).path())).toString("utf8"),
+        originals[2].raw);
+      await rivalReq;
+      const running=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[2]);
+      assert.equal(running.revision,2);
+      assert.equal(JSON.parse(running.raw).stages[0].status,"running");
+      const winner=await rival.evaluate(async before=>{
+        const project=JSON.parse(before.raw);
+        project.config.description="Rival changed brief while AI was pending";
+        return window.FactoryProjectCas.compareAndSwapCasProject(project,before);
+      },running);
+      const held=pending;
+      mode="success";
+      await held.fulfill({status:200,contentType:"application/json",
+        headers:{"access-control-allow-origin":"*"},body:fakeBody});
+      await expect(panel.getByRole("status"))
+        .toContainText("Conflitto/ACK pipeline IndexedDB non confermato");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[2]),winner,
+        "Stale AI completion MUST lose to native rival CAS writer");
+      await expect(start).toBeDisabled();
+      page.removeAllListeners("dialog");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[2]),winner);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore);
+      console.log("FACTORY_INDEXEDDB_AI_STAGE_UI_E2E_PASS: provider HTTP simulated, three consent gates, raw backup, native begin/complete/abort, rival token fencing, reload, no legacy writes");
+    }finally{
+      await casAiContext.close();
+    }
+
     // #156: native asynchronous pipeline checkpoints, intentionally NOT
     // connected to App's legacy changeProject. This uses real two-tab CAS,
     // and a late AI result must lose against a noncooperating native writer.

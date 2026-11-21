@@ -72,6 +72,22 @@ function validateOutput(output:string,sources:ResearchSource[]):void {
     throw Error("Risultato pipeline IndexedDB non valido: commit annullato.");
 }
 
+/** Pure read-only UI preflight. begin() repeats every check after opening
+ * an exact IDB session; a preflight result is never a commit acknowledgement. */
+export function canBeginCasPipelineStage(
+  snapshot:CasProjectSnapshot|null,stageId:StageId,
+):boolean {
+  if(!snapshot) return false;
+  try{
+    const index=STAGES.findIndex(stage=>stage.id===stageId);
+    if(index<0) return false;
+    const project=strictProject(snapshot);
+    return !project.stages.some(stage=>stage.status==="running") &&
+      stageReady(project,stageId) &&
+      ["pending","failed"].includes(project.stages[index].status);
+  }catch{return false;}
+}
+
 export async function openCasPipelineSession(id:string):Promise<CasPipelineSession> {
   // Explicit native IDB open: no bootstrap, tombstone revival or fallback.
   const session=await openCasEditorSession(id);

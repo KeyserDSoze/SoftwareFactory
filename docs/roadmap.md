@@ -1250,3 +1250,11 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest + Chromium due tab: commit reali IDB, abort, fail, rival durante AI, reload e legacy invariato; marker \`FACTORY_INDEXEDDB_PIPELINE_ASYNC_E2E_PASS\`.
 - [ ] Factory CI, Pages, Installer candidate success **stesso SHA main** e marker Chromium prima di chiudere #156.
 - [ ] Integrare nel LIVE insieme agli altri writer e recovery controllata del running dopo crash: rimane #139. #91/#92 restano aperte.
+
+## Esecuzione singola fase AI opt-in da pannello IndexedDB (#157 — 21/11/2026)
+
+- [x] UI IT/EN nello stesso pannello CAS: stage pronto, solo bozza config pulita, provider/route verificati, backup raw byte-esatto, consenso file salvato, consenso invio provider/costi.
+- [x] `openCasPipelineSession` con ticket id/rev/raw verificato, `begin` prima dell'HTTP `runStage`, commit result `complete` solo se CAS valido, `abort` e `fail` sanitizzati; readback post-ACK separato. Mai fallback al live legacy.
+- [x] Vitest preflight puro e Chromium vero a due schede con provider HTTP simulato (solo nel test), rifiuti di tutti i consensi, backup, successo, cancel, rival winner, reload e legacy invariato. Marker `FACTORY_INDEXEDDB_AI_STAGE_UI_E2E_PASS`.
+- [ ] Gate di chiusura: Factory CI/Pages/Installer candidate completed/success sullo **stesso SHA main** e marker Chromium confermato.
+- [ ] Cutover coordinato di **tutti** i writer live `App.tsx` e UX crash/restore/rollback/versionchange/quota rimane #139; sync multi-device/provider #91/#92 aperte.

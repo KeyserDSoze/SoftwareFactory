@@ -3,9 +3,15 @@
  * Factory editor and does not import/migrate its write paths. No projectRef,
  * live setProject, localStorage, GitHub or cloud operations are reachable here.
  */
-import {useRef,useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import {STAGES} from "../domain/defaults";
-import type {StageId} from "../domain/types";
+import type {FactoryProject,FactorySettings,StageId} from "../domain/types";
+import {runStage} from "../application/pipeline";
+import {resolveAgentRoute,stageAgentRole} from "../domain/agent-roles";
+import {validateAiEndpoint} from "../infrastructure/ai";
+import {
+  openCasPipelineSession,canBeginCasPipelineStage,
+} from "../application/cas-pipeline-session";
 import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
@@ -27,13 +33,13 @@ import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
-type Props={locale:FactoryLocale};
+type Props={locale:FactoryLocale;settings:FactorySettings};
 
 function exact(a:CasProjectSnapshot,b:CasProjectSnapshot):boolean {
   return a.id===b.id && a.revision===b.revision && a.raw===b.raw;
 }
 
-export default function CasIsolatedEditor({locale}:Props) {
+export default function CasIsolatedEditor({locale,settings}:Props) {
   const [expanded,setExpanded]=useState(false);
   const [list,setList]=useState<CasProjectChoice[]|null>(null);
   const [snapshot,setSnapshot]=useState<CasProjectSnapshot|null>(null);
@@ -41,6 +47,9 @@ export default function CasIsolatedEditor({locale}:Props) {
   const [draftDescription,setDraftDescription]=useState("");
   const [draftRequirements,setDraftRequirements]=useState("");
   const [stageToReset,setStageToReset]=useState<StageId>("features");
+  const [stageToRun,setStageToRun]=useState<StageId>("features");
+  const [pipelineRunning,setPipelineRunning]=useState(false);
+  const [pipelineStatus,setPipelineStatus]=useState("");
   const [newProjectName,setNewProjectName]=useState("");
   const [newProjectDescription,setNewProjectDescription]=useState("");
   const [working,setWorking]=useState(false);
@@ -48,6 +57,10 @@ export default function CasIsolatedEditor({locale}:Props) {
   const [notice,setNotice]=useState("");
   const active=useRef<CasSelectionController|null>(null);
   const inFlight=useRef(false);
+  const pipelineAbort=useRef<AbortController|null>(null);
+  // Unmount aborts the network; a committed "running" stage is not
+  // automatically completed or rolled back after browser crash/reload.
+  useEffect(()=>()=>{pipelineAbort.current?.abort();},[]);
 
   const dirty=hasCasIsolatedUnsavedDraft(
     snapshot,draftName,draftDescription,draftRequirements,
@@ -60,6 +73,7 @@ export default function CasIsolatedEditor({locale}:Props) {
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
     setDraftRequirements(p.config.requirements ?? "");
+    setPipelineStatus("");
   }
   async function run(action:()=>Promise<void>):Promise<void> {
     if(inFlight.current) return;
@@ -86,7 +100,8 @@ export default function CasIsolatedEditor({locale}:Props) {
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
-    setStageToReset("features");
+    setStageToReset("features");setStageToRun("features");
+    setPipelineStatus("");
     setNewProjectName(""); setNewProjectDescription("");
   }
   function createFresh():void {
@@ -288,6 +303,115 @@ export default function CasIsolatedEditor({locale}:Props) {
     });
   }
 
+  function executeCasStage():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot,stage=stageToRun;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected) ||
+         !canBeginCasPipelineStage(expected,stage))
+        throw Error("Invalid isolated CAS pipeline preflight");
+
+      // Provider config is checked BEFORE the first native IDB write.
+      // All settings are non-secret; the AI token remains in sessionStorage.
+      const capturedSettings=structuredClone(settings);
+      const {profile}=resolveAgentRoute(
+        capturedSettings,stageAgentRole(stage),stage);
+      validateAiEndpoint(profile.baseUrl);
+
+      if(!window.confirm(t(locale,"casIsoPipelineBackupConfirm")+
+          "\n"+stage+" / "+expected.id+" / rev. "+expected.revision))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-ai-stage-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoPipelineSavedConfirm")))return;
+      // Explicit consent before provider disclosure; research stages can
+      // additionally query the configured search gateway.
+      if(!window.confirm(t(locale,"casIsoPipelineProviderConfirm")+
+          "\n"+stage+" / "+profile.baseUrl))return;
+
+      const pipeline=await openCasPipelineSession(expected.id);
+      if(!exact(pipeline.snapshot(),expected))
+        throw Error("CAS project changed during provider consent");
+      // tx.oncomplete for "running" MUST happen before any provider request.
+      const ticket=await pipeline.begin(stage);
+      const cancellation=new AbortController();
+      pipelineAbort.current=cancellation;
+      setPipelineRunning(true);
+      setPipelineStatus(t(locale,"casIsoPipelineRunning")+
+        " ("+stage+", rev. "+ticket.started.revision+")");
+      let ack:CasProjectSnapshot|null=null;
+      let outcome:"complete"|"abort"|"fail"="complete";
+      let providerReturned=false;
+      try{
+        const project=JSON.parse(ticket.started.raw) as FactoryProject;
+        const response=await runStage(
+          project,capturedSettings,stage,cancellation.signal);
+        providerReturned=true;
+        // Cancellation applies only to pending network I/O, never an
+        // already submitted native commit.
+        pipelineAbort.current=null;
+        if(cancellation.signal.aborted){
+          outcome="abort";
+          ack=await pipeline.abort(ticket);
+        }else{
+          ack=await pipeline.complete(
+            ticket,response.output,response.sources);
+        }
+      }catch{
+        pipelineAbort.current=null;
+        if(pipeline.state()!=="ready"){
+          active.current=null;setList(null);
+          setPipelineStatus("");
+          setNotice(t(locale,"casIsoPipelineBlocked")+
+            " ID: "+expected.id+" / rev. "+ticket.started.revision);
+          return;
+        }
+        outcome=cancellation.signal.aborted?"abort":"fail";
+        try{
+          ack=outcome==="abort"?
+            await pipeline.abort(ticket):
+            await pipeline.fail(ticket,
+              providerReturned?"invalid_result":"provider");
+        }catch{
+          active.current=null;setList(null);
+          setPipelineStatus("");
+          setNotice(t(locale,"casIsoPipelineBlocked")+
+            " ID: "+expected.id+" / rev. "+ticket.started.revision);
+          return;
+        }
+      }finally{
+        pipelineAbort.current=null;
+        setPipelineRunning(false);
+        setPipelineStatus("");
+      }
+
+      // Native oncomplete ACK remains valid even when read-only readback
+      // fails or another writer advanced the row. Never retry the AI call.
+      if(!ack)throw Error("Native CAS pipeline ACK unavailable");
+      const identity=" ID: "+ack.id+" / rev. "+ack.revision;
+      try{
+        const reopened=await openCasSelectionController(ack.id);
+        if(!exact(reopened.snapshot(),ack))
+          throw Error("Post-ACK readback no longer exact");
+        active.current=reopened;
+        accept(ack);setList(null);
+        setNotice(t(locale,outcome==="complete"?"casIsoPipelineDone":
+          outcome==="abort"?"casIsoPipelineAborted":"casIsoPipelineFailed")+
+          identity);
+      }catch{
+        active.current=null;setSnapshot(null);setList(null);
+        setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setNotice(t(locale,"casIsoPipelinePostAckWarning")+identity);
+      }
+    });
+  }
+
   return <section className="panel" data-testid="cas-isolated-editor">
     <div className="panel-title"><div>
       <span className="eyebrow">INDEXEDDB / CAS</span>
@@ -367,6 +491,30 @@ export default function CasIsolatedEditor({locale}:Props) {
               active.current?.state()!=="ready" ||
               !canResetCasIsolatedStage(snapshot,stageToReset)}
             onClick={resetStage}>{t(locale,"casIsoStageResetAction")}</button>
+        </div>
+        <div data-testid="cas-isolated-ai-stage">
+          <p className="helper">{t(locale,"casIsoPipelineExplain")}</p>
+          <label>{t(locale,"casIsoPipelineSelection")}
+            <select value={stageToRun} disabled={working || Boolean(dirty)}
+              onChange={e=>setStageToRun(e.target.value as StageId)}>
+              {STAGES.map(stage=><option key={stage.id} value={stage.id}>
+                {stage.id}
+              </option>)}
+            </select>
+          </label>
+          <button type="button" className="secondary"
+            disabled={working || Boolean(dirty) ||
+              active.current?.state()!=="ready" ||
+              !canBeginCasPipelineStage(snapshot,stageToRun)}
+            onClick={executeCasStage}>{t(locale,"casIsoPipelineAction")}</button>
+          <button type="button" className="secondary"
+            disabled={!pipelineRunning || !pipelineAbort.current}
+            onClick={()=>{
+              pipelineAbort.current?.abort();
+              setPipelineStatus(t(locale,"casIsoPipelineCancelling"));
+            }}>{t(locale,"casIsoPipelineCancel")}</button>
+          {pipelineStatus && <p role="status"
+            data-testid="cas-isolated-pipeline-status">{pipelineStatus}</p>}
         </div>
         <button type="button" className="secondary"
           disabled={working || !active.current || Boolean(dirty)}
