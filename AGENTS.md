@@ -1158,3 +1158,8 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 ### Requisiti nel pilota IndexedDB (#152)
 
 L'editor CAS isolato permette modifiche di `config.requirements` fino a 12.000 caratteri: conservare il token snapshot/revisione IDB e due conferme di backup prima del commit, invalidare i checkpoint e bloccare delete con bozza non salvata. Il pilota NON modifica il workspace legacy. Test Vitest + Chromium due tab `FACTORY_INDEXEDDB_REQUIREMENTS_E2E_PASS`; lasciare #139/#91/#92 aperte finché non è completo il cutover.
+
+
+## Creazione CAS con lettura post-ACK separata (#153)
+
+Una volta confermata `compareAndSwapCasProject(project,null)` su `tx.oncomplete`, l'esito write è definitivo anche se `openCasSelectionController` o `listCasProjects` successivamente falliscono. Mai propagare l'errore read-only al gestore generico "creazione non confermata", né ripetere automaticamente con altro UUID. Mostrare ID/revisione e warning IT/EN; riapertura e recupero sono azioni manuali con verifica ID/rev/raw. Marker Chromium `FACTORY_INDEXEDDB_CREATE_POSTACK_E2E_PASS`. Restano separati editor legacy e pilota IDB; #139/#91/#92 aperte.

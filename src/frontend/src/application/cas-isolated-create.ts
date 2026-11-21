@@ -91,3 +91,26 @@ export async function confirmCasIsolatedNewProject(
     throw Error("ACK nuovo progetto IndexedDB incoerente: verifica la libreria.");
   return Object.freeze({id:result.id,revision:result.revision,raw:result.raw});
 }
+
+
+/**
+ * Post-ACK readback is OBSERVATIONAL. Failure, stale raw or a rival writer
+ * does not undo an already completed IndexedDB transaction. Never throw an
+ * error that the UI could mistake for an uncommitted create, or retry insert
+ * under another UUID. The UI must show a warning and the committed ID.
+ */
+export async function verifyCasIsolatedCreatedReadback(
+  acknowledged:CasProjectSnapshot,
+  read:(id:string)=>Promise<CasProjectSnapshot>,
+):Promise<boolean> {
+  try {
+    const observed=await read(acknowledged.id);
+    return Boolean(observed) && observed.id===acknowledged.id &&
+      observed.revision===acknowledged.revision &&
+      observed.raw===acknowledged.raw;
+  }catch{
+    // No information about the completed create can be retracted by a later
+    // read-only failure. The operator must inspect the library explicitly.
+    return false;
+  }
+}

@@ -1,6 +1,7 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from "vitest";
 import {
   prepareCasIsolatedNewProject,confirmCasIsolatedNewProject,
+  verifyCasIsolatedCreatedReadback,
 } from "./cas-isolated-create";
 import {compareAndSwapCasProject} from "../infrastructure/project-cas";
 import {CAS_ISOLATED_NAME_MAX,CAS_ISOLATED_DESCRIPTION_MAX} from "./cas-isolated-config";
@@ -66,6 +67,30 @@ describe("standalone IDB-only project create ticket (#150)",()=>{
     insert.mockResolvedValueOnce({id:ticket.id,revision:2,raw:ticket.raw});
     await expect(confirmCasIsolatedNewProject(ticket,true)).rejects.toThrow(/incoerente/);
     expect(insert).toHaveBeenCalledTimes(2);
+  });
+
+  it("separates confirmed create from later failed, stale or unavailable readback (#153)",async()=>{
+    const ticket=prepareCasIsolatedNewProject("Committed","Read failure after ACK");
+    const acknowledged={id:ticket.id,revision:1,raw:ticket.raw};
+    insert.mockResolvedValueOnce(acknowledged);
+    const completed=await confirmCasIsolatedNewProject(ticket,true);
+    const same=vi.fn(async()=>({...completed}));
+    expect(await verifyCasIsolatedCreatedReadback(completed,same)).toBe(true);
+    expect(same).toHaveBeenCalledWith(ticket.id);
+    for(const changed of [
+      {...completed,revision:2},
+      {...completed,raw:completed.raw+" "},
+      {...completed,id:"a0000000-0000-4000-8000-000000000000"},
+      null,
+    ]){
+      const reader=vi.fn(async()=>changed as typeof completed);
+      expect(await verifyCasIsolatedCreatedReadback(completed,reader)).toBe(false);
+    }
+    const unavailable=vi.fn(async():Promise<typeof completed>=>{
+      throw Error("IndexedDB versionchange / blocked");
+    });
+    expect(await verifyCasIsolatedCreatedReadback(completed,unavailable)).toBe(false);
+    expect(insert).toHaveBeenCalledTimes(1);
   });
 
   it("never falls back to localStorage on missing IDB, quota or ambiguous ACK",async()=>{

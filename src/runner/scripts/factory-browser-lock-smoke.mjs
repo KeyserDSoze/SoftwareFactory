@@ -1256,6 +1256,90 @@ if (!inside) {
       await freshCasContext.close();
     }
 
+    // #153: the IDB create transaction commits but the next read-only open
+    // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
+    // creation or encourage a second new UUID; operator can recover via ID.
+    const postAckContext=await browser.newContext();
+    try {
+      const page=await postAckContext.newPage();
+      const rival=await postAckContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      const form=page.getByTestId("cas-isolated-create");
+      const name=form.getByLabel("Nome nuovo progetto (solo IndexedDB)");
+      await name.fill("Committed but unreadable");
+      // The create itself uses the first native IDB open. Fail the SECOND
+      // open only, which belongs to the after-ACK verification read.
+      await page.evaluate(()=>{
+        const nativeOpen=indexedDB.open.bind(indexedDB);
+        let opens=0;
+        Object.defineProperty(indexedDB,"open",{
+          configurable:true,
+          value:(...args)=>{
+            opens++;
+            if(opens===2){
+              Object.defineProperty(indexedDB,"open",{
+                configurable:true,value:nativeOpen,
+              });
+              throw Error("Deliberate post-ACK readback failure");
+            }
+            return nativeOpen(...args);
+          },
+        });
+      });
+      let confirmedId="";
+      page.once("dialog",dlg=>{
+        confirmedId=dlg.message().match(/ID: ([0-9a-f-]{36})/i)?.[1]||"";
+        void dlg.accept();
+      });
+      await form.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      }).click();
+      assert.ok(confirmedId,"Create consent must pin ID before commit");
+      await expect(panel.getByRole("status"))
+        .toContainText("Creazione IndexedDB GIÀ CONFERMATA",{timeout:15000});
+      await expect(panel.getByRole("status")).toContainText(confirmedId);
+      await expect(panel.getByRole("alert")).toHaveCount(0);
+      await expect(name).toHaveValue("");
+      await expect(form.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      })).toBeDisabled();
+      const committed=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),confirmedId);
+      assert.equal(committed.revision,1);
+      assert.equal(JSON.parse(committed.raw).config.name,"Committed but unreadable");
+      assert.deepEqual((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).map(x=>x.id),
+        [confirmedId],"There must be exactly one committed native IDB row");
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(page.getByTestId("cas-isolated-library"))
+        .toContainText("Committed but unreadable");
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Post-ACK read fault must not touch active legacy Factory");
+      console.log("FACTORY_INDEXEDDB_CREATE_POSTACK_E2E_PASS: one committed project despite failed readback, ID and no-retry warning, explicit recovery and unchanged legacy");
+    }finally{
+      await postAckContext.close();
+    }
+
     // No-IDB browser must reject new native project creation, not redirect
     // writes to legacy storage or report a false successful save.
     const noIdbContext=await browser.newContext();

@@ -958,3 +958,8 @@ Le tombstone non si ripristinano tramite una nuova creazione: il ripristino rich
 ## Editing requirements in the isolated IndexedDB pilot (#152)
 
 The explicit IndexedDB-only editor can now change project requirements alongside name and brief, within a 12,000-character bound. It uses the same canonical revision ticket, byte-exact pre-edit JSON download, two operator acknowledgements and transaction-complete CAS; any edit invalidates stale pipeline stages. Deletion is blocked if requirements are unsaved. Chromium exercises the real SPA, two competing tabs, exact JSON backups, and verifies that localStorage remains untouched. **This is not the active Factory editor**: pipeline, Code Agent, GitHub push, import and cloud restore still use the legacy live path until the coordinated #139 cutover; neither cross-device nor cloud CAS is implied.
+
+
+## Creazione IndexedDB: ACK di scrittura distinto dal readback (#153)
+
+Nel pilota IDB separato, una `create` nativa confermata con `tx.oncomplete` non viene mai riportata come "non confermata" se un successivo readback o refresh dell'elenco fallisce. La UI svuota il modulo, mantiene ID/revisione e mostra un avviso IT/EN per verificare manualmente la libreria **senza creare un altro UUID**. Solo ID+revisione+JSON byte-esatto autorizzano l'esito `verificato`; i writer concorrenti non vengono automaticamente adottati. Nessun retry, localStorage fallback o switch live. Chromium simula un'interruzione del readback **dopo** il commit e controlla l'unicità del record e la recuperabilità. Ciò non completa il cutover #139 né il sync multi-device #91/#92.

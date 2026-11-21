@@ -8,8 +8,10 @@ import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
 import {listCasProjects} from "../infrastructure/project-cas";
-import {prepareCasIsolatedNewProject,confirmCasIsolatedNewProject}
-  from "../application/cas-isolated-create";
+import {
+  prepareCasIsolatedNewProject,confirmCasIsolatedNewProject,
+  verifyCasIsolatedCreatedReadback,
+} from "../application/cas-isolated-create";
 import {
   openCasSelectionController,type CasSelectionController,
 } from "../infrastructure/project-cas-selection";
@@ -92,16 +94,30 @@ export default function CasIsolatedEditor({locale}:Props) {
       // The only write is native CAS expected=null: strict never-seen insert,
       // 40-active cap and tx.oncomplete acknowledgement. No legacy fallback.
       const acknowledged=await confirmCasIsolatedNewProject(ticket,true);
-      // A second tab may modify the new project after tx.oncomplete. Never
-      // silently open/adopt it as the current editor in that case.
-      const fresh=await openCasSelectionController(ticket.id);
-      if(!exact(fresh.snapshot(),acknowledged))
-        throw Error("New project altered after insertion");
-      // Successful insert does not automatically become an active editor.
-      // Discover it from IDB again so opening still requires explicit consent.
-      setList(await listCasProjects());
+      // From this point the native transaction has ALREADY completed.
+      // Neither a readback failure nor a racing writer can make this create
+      // uncommitted. Clear the form to discourage a duplicate with a new UUID.
       setNewProjectName(""); setNewProjectDescription("");
-      setNotice(t(locale,"casIsoCreateDone")+" (rev. "+acknowledged.revision+")");
+      setList(null);
+      const identity=" ID: "+acknowledged.id+" (rev. "+acknowledged.revision+")";
+      const verified=await verifyCasIsolatedCreatedReadback(
+        acknowledged,async id=>(await openCasSelectionController(id)).snapshot(),
+      );
+      if(!verified) {
+        // The project exists per ACK, but its current state is unknown.
+        // Do not rebase, retry or silently open a rival version.
+        setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);
+        return;
+      }
+      try {
+        // Library discovery is a separate read-only operation. If it fails
+        // after a successful readback, it must not erase the create ACK.
+        setList(await listCasProjects());
+        setNotice(t(locale,"casIsoCreateDone")+identity);
+      }catch{
+        setList(null);
+        setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);
+      }
     });
   }
   function refresh():void {
