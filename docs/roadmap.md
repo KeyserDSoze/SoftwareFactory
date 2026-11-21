@@ -1172,4 +1172,14 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] `CasSelectionController.delete` con consenso, ticket id/revision/raw e interlock commit/switch. Controller bloccato dopo successo o ack ambiguo, senza fallback legacy né auto-restore.
 - [x] Vitest di consenso/backup canonico/tombstone stale/errore IDB e delete controller; Chromium dual tab con race restore (un vincitore), writer stale dopo delete, revisione monotona, full library 40 e nessuna modifica legacy. Marker `FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS`.
 - [ ] Factory CI + Pages + Installer candidate successful sullo stesso SHA prima di chiudere #146.
-- [ ] #139 ancora aperta: cutover di **tutti** i writer React/Code Agent/GitHub/import/restore, UI IT/EN, scelta source of truth, rollback e test crash/versionchange. La vecchia CAS insert `expected=null` conserva un comportamento compatibile di tombstone revival da migrare in fase di cutover. #91/#92 aperte. ADR 0099.
+- [ ] #139 ancora aperta: cutover di **tutti** i writer React/Code Agent/GitHub/import/restore, UI IT/EN, scelta source of truth, rollback e test crash/versionchange. La #147 elimina il bypass di tombstone revival tramite `expected=null`; il cutover editor resta da completare. #91/#92 aperte. ADR 0099.
+
+
+## Strict insert CAS, capienza e tombstone (#147 — 21/11/2026)
+
+- [x] Inserimento `expected=null` ammesso soltanto per ID mai visti; tombstone e record presenti sono conflitto, senza resurrection implicita.
+- [x] Validazione integrale dei record + limite 40 attivi nell'unica transazione di insert; update di record esistente con token esatto consentito anche a capacità massima.
+- [x] Ripristino tombstone unicamente via #146 backup/esatto, consenso e revisione; nessuna modifica legacy.
+- [x] Vitest e Chromium su due schede: race insert, no-revive, restore approvato, cap 40, update al limite, corruzione, reload; marker `FACTORY_INDEXEDDB_STRICT_INSERT_E2E_PASS`.
+- [ ] Factory CI, Pages, Installer candidate `completed/success` stesso SHA prima della chiusura #147.
+- [ ] Resta #139: migrazione completa live React/Code Agent/GitHub/restore/switch a CAS async, UX di recovery/rollback. #91/#92 aperte. ADR 0100.

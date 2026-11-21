@@ -1110,5 +1110,12 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 
 - Nel futuro editor CAS `CasSelectionController.delete(expected,consent)` richiede un token identico e consenso `true`, interlock con commit/switch e `deleteCasProject` nativo. Al `tx.oncomplete` una tombstone incrementa la revisione; bloccare il controller anche dopo ack di delete incerto, mai retry automatico.
 - Preparare il ripristino da backup raw esterno **canonico** con `prepareCasTombstoneRestore`; nessun recupero automatico da localStorage. La conferma richiede un altro consenso esplicito. La primitiva `restoreCasTombstoneProject` fa ID/revision tombstone + cap 40 + write in un'unica transazione, senza `await` dentro il readwrite e senza fallback. Un tombstone reintrodotto da writer non cooperativo fa fallire il restore, non lo sovrascrive.
-- `compareAndSwapCasProject(project,null)` per compatibilità **può** ricreare tombstone con generazione incrementale; non usarlo per il restore operatore. Nel cutover futuro disaccoppiare definitivamente la creazione di ID mai visti dal restore autorizzato e mantenere capacità/fencing coerenti su tutti i call-site. Backup con possibile contenuto progettuale sensibile: mai inferire approvazioni di review/test/runner.
+- `compareAndSwapCasProject(project,null)` dalla #147 **rifiuta** tombstone e progetti già presenti; è esclusivamente insert never-seen con cap 40 nella stessa transazione. Per il restore usare solo la #146 con backup e consenso. Nel cutover futuro disaccoppiare definitivamente la creazione di ID mai visti dal restore autorizzato e mantenere capacità/fencing coerenti su tutti i call-site. Backup con possibile contenuto progettuale sensibile: mai inferire approvazioni di review/test/runner.
 - Il lifecycle è **solo infrastruttura**, non collegare delete/restore alla SPA legacy, non importare automaticamente e non dichiarare #139/#91/#92 chiuse. Gate Chromium `FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS` e ADR 0099.
+
+
+## Strict CAS insert (#147 / ADR 0100)
+
+- `expected=null` vuol dire **ID mai visto**, non tombstone. Non recuperare dati cancellati tramite la CAS generica: usare soltanto `prepareCasTombstoneRestore` / `confirmCasTombstoneRestore` con backup canonico, consenso e tombstone revision.
+- Scansionare e validare l'intero store IDB e il limite di **40 attivi nella stessa readwrite transaction** prima dell'`add`. Niente `await` nel callback o preflight list in un'altra transazione.
+- A 40 attivi: insert generico rifiutato, update con token esatto consentito. Righe corrotte rifiutano l'insert senza cambiare lo store. Test `FACTORY_INDEXEDDB_STRICT_INSERT_E2E_PASS`. Non affermare che il live editor è migrato; #139/#91/#92 ancora aperte.
