@@ -1154,3 +1154,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest di sessione/mocked I/O e Chromium reale a due schede: rival writer dopo ticket, conferma stale, salvataggio durante selezione, tombstone/missing, reload e nessuna mutazione legacy. Marker `FACTORY_INDEXEDDB_SELECTION_E2E_PASS`.
 - [ ] Factory CI/Pages/Installer candidate `completed/success` stesso SHA main prima di chiudere #144.
 - [ ] Rimane #139: integrare il controller **solo insieme** ai write-path di React/pipeline/Code Agent/GitHub/restore e UX IT/EN/rollback, per non avere due fonti autorevoli. #91/#92 rimangono aperte. ADR 0097.
+
+
+## Recupero snapshot IndexedDB anche senza sorgente legacy (#145 — 21/11/2026)
+
+- [x] Discovery read-only autonoma dall'archivio `localStorage`, con limite 40 progetti, validazione fail-closed e tombstone escluse.
+- [x] Ticket ID + revisione + JSON raw con controllo canonico prima del consenso e doppia rilettura post-consenso; rifiuto anche di raw manomesso a parità di revisione.
+- [x] UI IT/EN di elenco e download storico JSON esplicito senza riattivazione dell'editor, backup automatico o mutazione di uno dei due archivi.
+- [x] Vitest su legacy assente/corrotto, ticket invalidi, IDB non disponibile e conflitti; Chromium due schede, copia orfana, legacy corrotto, export esatto, modifica IDB con stessa revisione e tombstone. Marker `FACTORY_INDEXEDDB_ORPHAN_RECOVERY_E2E_PASS`.
+- [ ] Verificare Factory CI, Pages e Installer candidate sullo stesso SHA e chiudere #145.
+- [ ] #139 ancora aperta: attivare un **unico** editor async end-to-end con backup, source selection, restore controllato e tutti i writer; #91/#92 aperte per cloud/multi-device. ADR 0098.

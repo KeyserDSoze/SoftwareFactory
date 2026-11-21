@@ -666,3 +666,8 @@ L'archivio IndexedDB `softwarefactory.project.cas.v1` (store `projects`) impleme
 ## Futuro controller di selezione IndexedDB (#144)
 
 Il controller infrastrutturale `project-cas-selection.ts` usa `openCasEditorSession` (#143) e `listCasProjects` (#140). Separa una **preparazione read-only prima del consenso** dalla conferma che riapre la revisione esatta; protegge commit e switch in volo dello stesso controller. Writers su schede diverse sono protetti solo dal CAS nativo IndexedDB, non dal guard in memoria. La selezione in memoria **non** viene persistita in localStorage. Non è ancora l'architettura del live editor: le componenti React e le integrazioni continuano a usare la libreria legacy. Il cutover full async e la riconciliazione dei backup richiedono #139/ADR futuro.
+
+
+## Recovery IDB autonomo dal legacy (#145)
+
+`project-cas-recovery-library.ts` espone un percorso **solo read-only** verso IndexedDB per la UI di export storico, distinto dalle sessioni di scrittura CAS (#143/#144) e dallo staging legacy (#141). `listCasRecoveryCopies` usa la discovery validata IDB; `prepareCasRecoveryTicket(id, revision)` materializza il JSON esatto **prima** del consenso; `confirmCasRecoveryTicket(ticket,true)` verifica due volte revision e raw dopo il consenso e restituisce gli stessi byte. Non legge né riscrive localStorage, non ripristina tombstone e non imposta il progetto attivo. Le future operazioni di restore/cutover dovranno essere progettate separatamente nella #139. Una copia IDB dello stesso origin non è una sincronizzazione cloud, né una garanzia contro modifiche successive ai controlli.
