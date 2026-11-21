@@ -1276,6 +1276,226 @@ if (!inside) {
       await noIdbContext.close();
     }
 
+
+    // #151: actual SPA-only isolated IndexedDB delete with exact raw backup,
+    // three independent consents, native tombstone, explicit manual restore
+    // and a noncooperating writer racing the final destructive dialog.
+    const isolatedDeleteContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await isolatedDeleteContext.newPage();
+      const rival=await isolatedDeleteContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const originals=await page.evaluate(async()=>{
+        const make=(id,name)=>({
+          id,config:{name,description:"Back up AI checkpoints before deletion"},
+          stages:[{id:"features",label:"Features",status:"complete",
+            output:"HISTORICAL_AI_NOT_CURRENT",sources:[]}],
+          createdAt:"2026-11-21T20:00:00.000Z",
+          updatedAt:"2026-11-21T20:00:00.000Z",
+        });
+        const a=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make("fa111111-1111-4111-8111-111111111111","Deletion candidate A"),null);
+        const b=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make("fa222222-2222-4222-8222-222222222222","Deletion race B"),null);
+        return {a,b};
+      });
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Deletion candidate A",
+      }).click();
+      const deleteButton=panel.getByRole("button",{
+        name:"Elimina copia IndexedDB con backup",
+      });
+      await expect(deleteButton).toBeEnabled();
+      const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      await name.fill("Unsaved draft must not be deleted");
+      await expect(deleteButton).toBeDisabled();
+      await name.fill("Deletion candidate A");
+      await expect(deleteButton).toBeEnabled();
+
+      // First backup consent: declining means no file, no tombstone.
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await deleteButton.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.a.id),
+        originals.a,"Declining download must leave CAS snapshot present");
+
+      // Second saved-file confirmation: user downloaded exact JSON but has
+      // not affirmed saving it, so delete must not enter a transaction.
+      page.removeAllListeners("dialog");
+      let dialogs=0;
+      const onDeclineSaved=async dlg=>{
+        dialogs++;
+        if(dialogs===1) await dlg.accept();
+        else await dlg.dismiss();
+      };
+      page.on("dialog",onDeclineSaved);
+      const downloadOne=page.waitForEvent("download");
+      await deleteButton.click();
+      const fileOne=await downloadOne;
+      assert.equal(fileOne.suggestedFilename(),
+        "softwarefactory-cas-before-delete-"+originals.a.id+"-r1.json");
+      assert.equal((await readFile(await fileOne.path())).toString("utf8"),
+        originals.a.raw,"Backup must be byte-exact, including AI checkpoint");
+      assert.equal(dialogs,2);
+      page.off("dialog",onDeclineSaved);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.a.id),
+        originals.a);
+
+      // Destructive final consent: refusing after confirming backup saved
+      // still leaves the project active. All three prompts must be distinct.
+      page.removeAllListeners("dialog");
+      dialogs=0;
+      const onDeclineDestructive=async dlg=>{
+        dialogs++;
+        if(dialogs===3){
+          assert.match(dlg.message(),/Deletion candidate A/);
+          assert.match(dlg.message(),new RegExp(originals.a.id));
+          assert.match(dlg.message(),/rev\. 1/);
+          await dlg.dismiss();
+        }else await dlg.accept();
+      };
+      page.on("dialog",onDeclineDestructive);
+      const downloadTwo=page.waitForEvent("download");
+      await deleteButton.click();
+      await downloadTwo;
+      assert.equal(dialogs,3,"Three ordered consents: backup, saved, destructive");
+      page.off("dialog",onDeclineDestructive);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.a.id),
+        originals.a);
+
+      // Fully consented delete: genuine IDB tombstone rev2 must be acknowledged
+      // after native transaction complete; the editor loses its write token.
+      page.removeAllListeners("dialog");
+      dialogs=0;
+      const onApprove=async dlg=>{dialogs++;await dlg.accept();};
+      page.on("dialog",onApprove);
+      const downloadFinal=page.waitForEvent("download");
+      await deleteButton.click();
+      const fileFinal=await downloadFinal;
+      const exactRaw=(await readFile(await fileFinal.path())).toString("utf8");
+      assert.equal(exactRaw,originals.a.raw);
+      assert.equal(dialogs,3);
+      page.off("dialog",onApprove);
+      await expect(panel.getByRole("status"))
+        .toContainText("Copia IndexedDB eliminata",{timeout:15000});
+      await expect(page.getByTestId("cas-isolated-active")).toHaveCount(0);
+      const tombstone=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),originals.a.id);
+      assert.deepEqual(tombstone,{state:"tombstone",revision:2});
+      await expect(page.getByTestId("cas-isolated-library"))
+        .not.toContainText("Deletion candidate A");
+      const repeat=await rival.evaluate(async({id,raw})=>
+        window.FactoryProjectCas.compareAndSwapCasProject(
+          JSON.parse(raw),null).then(()=>"unexpected",String),
+        {id:originals.a.id,raw:originals.a.raw});
+      assert.notEqual(repeat,"unexpected","Generic CAS cannot resurrect tombstone");
+
+      // The #148 separate restore UI must still accept the exact saved
+      // backup with a NEW explicit consent; no automatic resurrection.
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      const input=page.getByLabel(
+        "Ripristina progetto IndexedDB eliminato da backup JSON");
+      await input.setInputFiles({
+        name:"deleted-idb-backup.json",mimeType:"application/json",
+        buffer:Buffer.from(exactRaw,"utf8"),
+      });
+      await expect(page.getByText(
+        "Copia IndexedDB ripristinata soltanto",{exact:false}))
+        .toBeVisible({timeout:15000});
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.a.id),
+        {...originals.a,revision:3},
+        "Restore must preserve exact project JSON with monotone revision");
+
+      // The second deletion attempt races a noncooperating CAS writer during
+      // its FINAL destructive confirmation. It must fail closed and block
+      // stale editor token; winner keeps its JSON.
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: Deletion race B"}).click();
+      page.removeAllListeners("dialog");
+      let releaseFinal;
+      const finalDialog=new Promise(resolve=>{releaseFinal=resolve;});
+      let raceDialogs=0;
+      const onRace=async dlg=>{
+        raceDialogs++;
+        if(raceDialogs<3) await dlg.accept();
+        else releaseFinal(dlg);
+      };
+      page.on("dialog",onRace);
+      const raceDownload=page.waitForEvent("download");
+      const attempted=deleteButton.click();
+      const downloaded=await raceDownload;
+      assert.equal((await readFile(await downloaded.path())).toString("utf8"),
+        originals.b.raw);
+      const waiting=await finalDialog;
+      assert.match(waiting.message(),/Deletion race B/);
+      const winner=await rival.evaluate(async old=>{
+        const next=JSON.parse(old.raw);
+        next.config.description="Rival writer won during final consent";
+        return window.FactoryProjectCas.compareAndSwapCasProject(next,old);
+      },originals.b);
+      assert.equal(winner.revision,2);
+      await waiting.accept();
+      await attempted;
+      page.off("dialog",onRace);
+      await expect(panel.getByRole("alert"))
+        .toContainText("non confermata");
+      await expect(panel.getByRole("status"))
+        .toContainText("Sessione IndexedDB bloccata");
+      await expect(deleteButton).toBeDisabled();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.b.id),winner,
+        "Concurrent CAS update must never be destroyed by stale UI delete");
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: Deletion race B"}).click();
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      await expect(panel.getByLabel("Descrizione progetto (solo IndexedDB)"))
+        .toHaveValue("Rival writer won during final consent");
+
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "IDB delete and restore must not modify any live legacy project slots");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),originals.a.id),
+        {...originals.a,revision:3});
+      console.log("FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS: exact JSON backup, three consent gates, dirty draft blocked, native tombstone, explicit restore, rival tab conflict, reload and legacy unchanged");
+    }finally {
+      await isolatedDeleteContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
