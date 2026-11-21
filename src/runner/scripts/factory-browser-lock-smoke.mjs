@@ -677,12 +677,22 @@ if (!inside) {
       await expect(page.getByRole("alert")).toContainText("cambiata dall'elenco");
       assert.equal(updatedOrphan.revision,2);
 
-      // Even same-revision malicious/noncooperative IDB mutation after
-      // *consent starts* must be rejected by exact raw comparison.
+      // Exact raw comparison also catches a noncooperating writer which
+      // replaces JSON at the SAME revision between ticket preparation and
+      // the post-consent validation. Use the real browser bundle with a
+      // deterministic inter-tab barrier: browser dialogs auto-dismiss if
+      // acceptance is deferred asynchronously while another tab writes.
       await listButton.click();
-      const changedExport=page.getByRole("button",{
-        name:"Esporta JSON storico: Orphan changed in rival tab",
+      const recoveryBundleBuild=await require("esbuild").build({
+        entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-recovery-library.ts")],
+        bundle:true,write:false,platform:"browser",format:"iife",
+        globalName:"FactoryCasRecover",target:"es2022",
       });
+      await page.addScriptTag({content:recoveryBundleBuild.outputFiles[0].text});
+      const exactTicket=await page.evaluate(async ({id,revision})=>
+        window.FactoryCasRecover.prepareCasRecoveryTicket(id,revision),
+        {id:orphanId,revision:updatedOrphan.revision});
+      assert.equal(exactTicket.raw,updatedOrphan.raw);
       const rival=await staging.newPage();
       await rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
       const badRaw=JSON.stringify({
@@ -690,32 +700,29 @@ if (!inside) {
           ...JSON.parse(updatedOrphan.raw).config,name:"Orphan tampered same revision",
         },
       });
-      let unexpectedDownload=false;
-      page.on("download",()=>{unexpectedDownload=true;});
-      page.once("dialog",async dlg=>{
-        // Keep the main-page confirmation pending while an independent tab
-        // modifies IDB WITHOUT incrementing the CAS revision.
-        await rival.evaluate(async ({id,revision,raw})=>{
-          const db=await new Promise((resolve,reject)=>{
-            const request=indexedDB.open("softwarefactory.project.cas.v1",1);
-            request.onsuccess=()=>resolve(request.result);
-            request.onerror=()=>reject(Error("Fixture IDB open failed"));
+      await rival.evaluate(async ({id,revision,raw})=>{
+        const db=await new Promise((resolve,reject)=>{
+          const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(Error("Fixture IDB open failed"));
+        });
+        try {
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(Error("Fixture IDB write failed"));
+            tx.objectStore("projects").put({id,revision,raw},id);
           });
-          try {
-            await new Promise((resolve,reject)=>{
-              const tx=db.transaction("projects","readwrite");
-              tx.oncomplete=resolve;
-              tx.onabort=()=>reject(Error("Fixture IDB write failed"));
-              tx.objectStore("projects").put({id,revision,raw},id);
-            });
-          } finally {db.close();}
-        },{id:orphanId,revision:2,raw:badRaw});
-        await dlg.accept();
-      });
-      await changedExport.click();
-      await expect(page.getByRole("alert")).toContainText("Copia IndexedDB cambiata");
-      assert.equal(unexpectedDownload,false,
-        "An unversioned raw change during consent must never download");
+        } finally {db.close();}
+      },{id:orphanId,revision:updatedOrphan.revision,raw:badRaw});
+      const tamperBlocked=await page.evaluate(async ticket=>{
+        try {
+          await window.FactoryCasRecover.confirmCasRecoveryTicket(ticket,true);
+          return "unexpected success";
+        } catch(e){return String(e);}
+      },exactTicket);
+      assert.match(tamperBlocked,/Copia IndexedDB cambiata/,
+        "A same-revision raw change after ticket preparation must be rejected");
 
       // Tombstones remain excluded from discovery even with corrupt legacy.
       await page.evaluate(async snapshot=>
