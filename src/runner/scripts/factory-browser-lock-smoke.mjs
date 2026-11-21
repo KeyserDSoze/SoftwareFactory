@@ -892,7 +892,7 @@ if (!inside) {
         ];
         const projects=ids.map((id,i)=>({
           id,config:{name:i===0?"IDB pilot A":"IDB pilot B",
-            description:"Existing brief "+i},
+            description:"Existing brief "+i,requirements:"Existing constraints "+i},
           stages:[{id:"features",label:"Features",status:"complete",
             output:"HISTORICAL_AI_OUTPUT",sources:[]}],
           createdAt:"2026-11-21T17:00:00.000Z",
@@ -927,9 +927,13 @@ if (!inside) {
       await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 1");
       const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
       const description=panel.getByLabel("Descrizione progetto (solo IndexedDB)");
+      const requirements=panel.getByLabel("Requisiti progetto (solo IndexedDB)");
+      await expect(requirements).toHaveValue("Existing constraints 0");
+      const save=panel.getByRole("button",{name:"Salva modifica in IndexedDB con backup"});
+      await expect(save).toBeDisabled();
       await name.fill("IDB pilot A revised");
       await description.fill("New brief, stage analyses must be reset");
-      const save=panel.getByRole("button",{name:"Salva modifica in IndexedDB con backup"});
+      await requirements.fill("New requirements: no unreviewed publication");
       await expect(save).toBeEnabled();
       page.removeAllListeners("dialog");
       page.once("dialog",dlg=>void dlg.dismiss());
@@ -977,6 +981,8 @@ if (!inside) {
       assert.equal(savedA.revision,2);
       assert.equal(JSON.parse(savedA.raw).config.name,"IDB pilot A revised");
       assert.equal(JSON.parse(savedA.raw).config.description,"New brief, stage analyses must be reset");
+      assert.equal(JSON.parse(savedA.raw).config.requirements,
+        "New requirements: no unreviewed publication");
       assert.equal(JSON.parse(savedA.raw).stages[0].status,"pending");
       assert.equal(JSON.parse(savedA.raw).stages[0].output,"");
       assert.deepEqual(JSON.parse(savedA.raw).stages[0].sources,[]);
@@ -990,7 +996,8 @@ if (!inside) {
       await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
       await expect(name).toHaveValue("IDB pilot B");
       await expect(description).toHaveValue("Existing brief 1");
-      await name.fill("IDB pilot B stale draft");
+      await expect(requirements).toHaveValue("Existing constraints 1");
+      await requirements.fill("Unsaved requirements must lose to rival");
 
       // Another native CAS writer changes the selected destination while
       // the local editor is waiting for the user's SECOND save consent.
@@ -1015,6 +1022,7 @@ if (!inside) {
       const rivalB=await rival.evaluate(async expected=>{
         const p=JSON.parse(expected.raw);
         p.config.description="Written first by noncooperating tab";
+        p.config.requirements="Rival constraints take precedence";
         return window.FactoryProjectCas.compareAndSwapCasProject(p,expected);
       },original[1]);
       assert.equal(rivalB.revision,2);
@@ -1035,6 +1043,7 @@ if (!inside) {
       await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
       await expect(name).toHaveValue("IDB pilot B");
       await expect(description).toHaveValue("Written first by noncooperating tab");
+      await expect(requirements).toHaveValue("Rival constraints take precedence");
       await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
 
       const localAfter=await page.evaluate(()=>({
@@ -1051,7 +1060,8 @@ if (!inside) {
         window.FactoryProjectCas.readCasProject(id),original[0].id);
       assert.deepEqual(reopened,savedA,
         "Confirmed async CAS edits survive Chromium reload and cannot be lost");
-      console.log("FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS: opt-in CAS editor, two backup consents, exact raw download, stage invalidation, guarded selection, rival-tab conflict, reopen and legacy unchanged");
+      console.log("FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS: opt-in CAS name/brief/requirements, two backup consents, exact raw download, stage invalidation, guarded selection, rival-tab conflict, reopen and legacy unchanged");
+      console.log("FACTORY_INDEXEDDB_REQUIREMENTS_E2E_PASS: requirements persisted after tx.oncomplete, stale requirements rejected, native rival winner and legacy unchanged");
     } finally {
       await isolatedContext.close();
     }
@@ -1292,7 +1302,8 @@ if (!inside) {
         await tab.addScriptTag({content:casBundle});
       const originals=await page.evaluate(async()=>{
         const make=(id,name)=>({
-          id,config:{name,description:"Back up AI checkpoints before deletion"},
+          id,config:{name,description:"Back up AI checkpoints before deletion",
+            requirements:"Keep historical requirements before deletion"},
           stages:[{id:"features",label:"Features",status:"complete",
             output:"HISTORICAL_AI_NOT_CURRENT",sources:[]}],
           createdAt:"2026-11-21T20:00:00.000Z",
@@ -1324,6 +1335,10 @@ if (!inside) {
       });
       await expect(deleteButton).toBeEnabled();
       const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      const deleteRequirements=panel.getByLabel("Requisiti progetto (solo IndexedDB)");
+      await deleteRequirements.fill("Unsaved constraint: do not delete");
+      await expect(deleteButton).toBeDisabled();
+      await deleteRequirements.fill("Keep historical requirements before deletion");
       await name.fill("Unsaved draft must not be deleted");
       await expect(deleteButton).toBeDisabled();
       await name.fill("Deletion candidate A");
@@ -1515,7 +1530,7 @@ if (!inside) {
       assert.deepEqual(await page.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),originals.a.id),
         {...originals.a,revision:3});
-      console.log("FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS: exact JSON backup, three consent gates, dirty draft blocked, native tombstone, explicit restore, rival tab conflict, reload and legacy unchanged");
+      console.log("FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS: exact JSON backup incl. requirements, three consent gates, dirty name/requirements blocked, native tombstone, explicit restore, rival tab conflict, reload and legacy unchanged");
     }finally {
       await isolatedDeleteContext.close();
     }

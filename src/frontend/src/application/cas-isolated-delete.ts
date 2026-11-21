@@ -20,6 +20,7 @@ export function prepareCasIsolatedDelete(
   pinned:CasProjectSnapshot,
   draftName:string,
   draftDescription:string,
+  draftRequirements:string,
 ):CasIsolatedDeleteTicket {
   if(!selected || !pinned || selected.id!==pinned.id ||
     selected.revision!==pinned.revision || selected.raw!==pinned.raw ||
@@ -35,8 +36,12 @@ export function prepareCasIsolatedDelete(
   }catch{
     throw Error("Backup IndexedDB non canonico: cancellazione annullata.");
   }
-  if(draftName!==project.config.name ||
-    draftDescription!==project.config.description)
+  if(typeof draftRequirements!=="string" ||
+    (project.config.requirements!==undefined &&
+      typeof project.config.requirements!=="string") ||
+    draftName!==project.config.name ||
+    draftDescription!==project.config.description ||
+    draftRequirements!==(project.config.requirements ?? ""))
     throw Error("Bozza IndexedDB non salvata: eliminazione bloccata.");
   return Object.freeze({
     id:selected.id,revision:selected.revision,raw:selected.raw,

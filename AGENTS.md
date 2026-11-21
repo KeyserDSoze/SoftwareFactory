@@ -1153,3 +1153,8 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - Il delete autorizzato deve chiamare **soltanto** `CasSelectionController.delete(expected,true)`; la primitiva IDB readwrite compare id/revision/raw e riconosce tombstone `rev+1` a `tx.oncomplete`. Una versione obsoleta, errore/ACK ambiguo o writer non cooperativo blocca token e richiede refresh+riapertura esplicita; mai retry automatico, localStorage fallback o re-create tombstone con `expected=null`.
 - Dopo ACK riuscito invalidare la selezione e provare a rileggere la libreria IDB, senza confondere un eventuale errore di sola lettura con una delete fallita. Restore manuale possibile solo dal backup e consenso #148, non aprire il live workspace.
 - Chromium `FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS`: three-gate deny/accept, exact raw backup, dirty edit blocked, tombstone/reload, restore manuale, CAS rivale durante dialogo finale, nessun write legacy. #139/#91/#92 ancora aperte.
+
+
+### Requisiti nel pilota IndexedDB (#152)
+
+L'editor CAS isolato permette modifiche di `config.requirements` fino a 12.000 caratteri: conservare il token snapshot/revisione IDB e due conferme di backup prima del commit, invalidare i checkpoint e bloccare delete con bozza non salvata. Il pilota NON modifica il workspace legacy. Test Vitest + Chromium due tab `FACTORY_INDEXEDDB_REQUIREMENTS_E2E_PASS`; lasciare #139/#91/#92 aperte finché non è completo il cutover.

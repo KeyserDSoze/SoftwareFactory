@@ -15,7 +15,7 @@ import {
 } from "../infrastructure/project-cas-selection";
 import {
   buildCasIsolatedConfigEdit,CAS_ISOLATED_NAME_MAX,
-  CAS_ISOLATED_DESCRIPTION_MAX,
+  CAS_ISOLATED_DESCRIPTION_MAX,CAS_ISOLATED_REQUIREMENTS_MAX,
 } from "../application/cas-isolated-config";
 import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 
@@ -31,6 +31,7 @@ export default function CasIsolatedEditor({locale}:Props) {
   const [snapshot,setSnapshot]=useState<CasProjectSnapshot|null>(null);
   const [draftName,setDraftName]=useState("");
   const [draftDescription,setDraftDescription]=useState("");
+  const [draftRequirements,setDraftRequirements]=useState("");
   const [newProjectName,setNewProjectName]=useState("");
   const [newProjectDescription,setNewProjectDescription]=useState("");
   const [working,setWorking]=useState(false);
@@ -40,17 +41,19 @@ export default function CasIsolatedEditor({locale}:Props) {
   const inFlight=useRef(false);
 
   const dirty=snapshot !== null && (() => {
-    const data=JSON.parse(snapshot.raw) as {config:{name:string;description:string}};
+    const data=JSON.parse(snapshot.raw) as {config:{name:string;description:string;requirements?:string}};
     return data.config.name !== draftName ||
-      (data.config.description || "") !== draftDescription;
+      (data.config.description || "") !== draftDescription ||
+      (data.config.requirements ?? "") !== draftRequirements;
   })();
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
-    const p=JSON.parse(current.raw) as {config:{name:string;description:string}};
+    const p=JSON.parse(current.raw) as {config:{name:string;description:string;requirements?:string}};
     setSnapshot(current);
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
+    setDraftRequirements(p.config.requirements ?? "");
   }
   async function run(action:()=>Promise<void>):Promise<void> {
     if(inFlight.current) return;
@@ -73,7 +76,7 @@ export default function CasIsolatedEditor({locale}:Props) {
     if(inFlight.current) return;
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
-    setDraftName(""); setDraftDescription("");
+    setDraftName(""); setDraftDescription("");setDraftRequirements("");
     setNewProjectName(""); setNewProjectDescription("");
   }
   function createFresh():void {
@@ -153,6 +156,7 @@ export default function CasIsolatedEditor({locale}:Props) {
       // No pending name/description changes or stale in-memory revision.
       const ticket=prepareCasIsolatedDelete(
         expected,controller.snapshot(),draftName,draftDescription,
+        draftRequirements,
       );
       if(!window.confirm(t(locale,"casIsoDeleteBackupConfirm"))) return;
       // Exact historical JSON (including AI checkpoints) BEFORE tombstoning.
@@ -178,7 +182,7 @@ export default function CasIsolatedEditor({locale}:Props) {
         throw Error("CAS tombstone ACK does not match expected revision");
       active.current=null;
       setSnapshot(null);
-      setDraftName("");setDraftDescription("");
+      setDraftName("");setDraftDescription("");setDraftRequirements("");
       setList(null);
       // Do not make an already acknowledged delete appear to have failed
       // solely because a later read-only library refresh is unavailable.
@@ -194,7 +198,8 @@ export default function CasIsolatedEditor({locale}:Props) {
       if(!controller || !expected || controller.state()!=="ready" ||
         !exact(controller.snapshot(),expected))
         throw Error("Stale CAS session");
-      const candidate=buildCasIsolatedConfigEdit(expected,draftName,draftDescription);
+      const candidate=buildCasIsolatedConfigEdit(
+        expected,draftName,draftDescription,draftRequirements);
       if(!window.confirm(t(locale,"casIsoBackupConfirm"))) return;
       // The file contains the original exact raw, BEFORE the stage reset and
       // new candidate are persisted. No upload or automatic migration.
@@ -271,6 +276,12 @@ export default function CasIsolatedEditor({locale}:Props) {
             maxLength={CAS_ISOLATED_DESCRIPTION_MAX}
             disabled={working || !active.current}
             onChange={e=>setDraftDescription(e.target.value)}/>
+        </label>
+        <label>{t(locale,"casIsoRequirements")}
+          <textarea value={draftRequirements}
+            maxLength={CAS_ISOLATED_REQUIREMENTS_MAX}
+            disabled={working || !active.current}
+            onChange={e=>setDraftRequirements(e.target.value)}/>
         </label>
         <p className="helper">{t(locale,"casIsoInvalidate")}</p>
         <button type="button" className="secondary"
