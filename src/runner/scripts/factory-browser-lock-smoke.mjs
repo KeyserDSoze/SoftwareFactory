@@ -1447,9 +1447,9 @@ if (!inside) {
       page.on("dialog",onRace);
       const raceDownload=page.waitForEvent("download");
       const attempted=deleteButton.click();
-      const downloaded=await raceDownload;
-      assert.equal((await readFile(await downloaded.path())).toString("utf8"),
-        originals.b.raw);
+      // Observe click rejection early; if another assertion fails during
+      // an open dialog, context cleanup must not yield an unhandled promise.
+      void attempted.catch(()=>{});
       const waiting=await finalDialog;
       assert.match(waiting.message(),/Deletion race B/);
       const winner=await rival.evaluate(async old=>{
@@ -1460,6 +1460,9 @@ if (!inside) {
       assert.equal(winner.revision,2);
       await waiting.accept();
       await attempted;
+      const downloaded=await raceDownload;
+      assert.equal((await readFile(await downloaded.path())).toString("utf8"),
+        originals.b.raw);
       page.off("dialog",onRace);
       await expect(panel.getByRole("alert"))
         .toContainText("non confermata");
