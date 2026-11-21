@@ -218,6 +218,162 @@ if (!inside) {
       await casContext.close();
     }
 
+
+    // #143: REAL Chromium multi-tab async editor session, isolated from the
+    // live localStorage editor. Same-origin, separate browser profile.
+    const editorBuild=await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-editor-session.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryCasEditor",target:"es2022",
+    });
+    const editorBundle=editorBuild.outputFiles[0].text;
+    const editorContext=await browser.newContext();
+    try {
+      const tabA=await editorContext.newPage(),tabB=await editorContext.newPage();
+      await Promise.all([
+        tabA.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        tabB.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        tabA.addScriptTag({content:casBundle}),
+        tabB.addScriptTag({content:casBundle}),
+        tabA.addScriptTag({content:editorBundle}),
+        tabB.addScriptTag({content:editorBundle}),
+      ]);
+      const editorId="77777777-7777-4777-8777-777777777777";
+      const initial=await tabA.evaluate(async id=>{
+        return await window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"CAS editor initial"},stages:[],
+          updatedAt:"2026-11-21T11:00:00.000Z",
+        },null);
+      },editorId);
+      assert.equal(initial.revision,1);
+      const opened=await Promise.all([tabA,tabB].map(page=>page.evaluate(async id=>{
+        window.__factoryEditorSession=await window.FactoryCasEditor.openCasEditorSession(id);
+        return {state:window.__factoryEditorSession.state(),
+          token:window.__factoryEditorSession.snapshot()};
+      },editorId)));
+      assert.equal(opened[0].state,"ready");
+      assert.deepEqual(opened[0].token,initial);
+      assert.deepEqual(opened[1].token,initial);
+
+      const race=await Promise.all([tabA,tabB].map((page,index)=>
+        page.evaluate(async name=>{
+          const session=window.__factoryEditorSession;
+          const expected=session.snapshot(),project=JSON.parse(expected.raw);
+          try {
+            const saved=await session.commit({
+              ...project,config:{...project.config,name},
+            },expected);
+            return {ok:true,saved,status:session.state()};
+          } catch(error) {
+            return {ok:false,reason:String(error),status:session.state(),
+              token:session.snapshot()};
+          }
+        },"CAS tab "+index)));
+      assert.equal(race.filter(x=>x.ok).length,1,
+        "Exactly one async editor session must win the same-revision race");
+      const winnerIndex=race[0].ok?0:1;
+      const winner=winnerIndex===0?tabA:tabB;
+      const loser=winnerIndex===0?tabB:tabA;
+      assert.equal(race[winnerIndex].saved.revision,2);
+      assert.equal(race[1-winnerIndex].status,"blocked");
+      assert.deepEqual(race[1-winnerIndex].token,initial,
+        "Failed transaction must not advance the losing editor session token");
+      assert.match(race[1-winnerIndex].reason,/non confermato/);
+      const retry=await loser.evaluate(async()=>{
+        const h=window.__factoryEditorSession,token=h.snapshot();
+        try {await h.commit(JSON.parse(token.raw),token);return "unexpected success";}
+        catch(e){return String(e);}
+      });
+      assert.match(retry,/bloccata/,"Conflict must disable automatic retry");
+
+      // A NONCOOPERATING IndexedDB writer bypasses the session protocol but
+      // cannot bypass native transactional CAS. The surviving session must
+      // fail closed rather than overwrite this later update.
+      const rev2=race[winnerIndex].saved;
+      const rev3=await loser.evaluate(async prev=>{
+        const p=JSON.parse(prev.raw);
+        return await window.FactoryProjectCas.compareAndSwapCasProject({
+          ...p,config:{...p.config,name:"Noncooperating writer"},
+        },prev);
+      },rev2);
+      assert.equal(rev3.revision,3);
+      const stale=await winner.evaluate(async()=>{
+        const h=window.__factoryEditorSession,expected=h.snapshot();
+        const p=JSON.parse(expected.raw);
+        try {await h.commit({...p,config:{...p.config,name:"Lost draft"}},expected);
+          return "unexpected success";}
+        catch(e){return {error:String(e),state:h.state(),token:h.snapshot()};}
+      });
+      assert.match(stale.error,/non confermato/);
+      assert.equal(stale.state,"blocked");
+      assert.deepEqual(stale.token,rev2);
+      const authoritative=await tabA.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),editorId);
+      assert.deepEqual(authoritative,rev3,
+        "Noncooperating writer's revision must remain untouched");
+
+      // Browser reload/reopen is the ONLY recovery path; a stale session
+      // must not silently adopt a newer commit.
+      const reloaded=await editorContext.newPage();
+      await reloaded.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await reloaded.addScriptTag({content:casBundle});
+      await reloaded.addScriptTag({content:editorBundle});
+      const reopened=await reloaded.evaluate(async id=>{
+        window.__factoryEditorSession=await window.FactoryCasEditor.openCasEditorSession(id);
+        return window.__factoryEditorSession.snapshot();
+      },editorId);
+      assert.deepEqual(reopened,rev3);
+      const doubleClick=await reloaded.evaluate(async()=>{
+        const h=window.__factoryEditorSession,old=h.snapshot();
+        const p=JSON.parse(old.raw);
+        const first=h.commit({...p,config:{...p.config,name:"Double-click winner"}},old);
+        const during=h.snapshot(),state=h.state();
+        let concurrent;
+        try {await h.commit({...p,config:{...p.config,name:"Double-click loser"}},old);
+          concurrent="unexpected success";}
+        catch(e){concurrent=String(e);}
+        return {during,state,concurrent,result:await first,final:h.snapshot()};
+      });
+      assert.equal(doubleClick.state,"saving");
+      assert.deepEqual(doubleClick.during,rev3,
+        "Token is not advanced until the IDB transaction completes");
+      assert.match(doubleClick.concurrent,/già in corso/);
+      assert.equal(doubleClick.result.revision,4);
+      assert.deepEqual(doubleClick.final,doubleClick.result);
+      const last=await tabB.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),editorId);
+      assert.deepEqual(last,doubleClick.result);
+
+      const tombstone=await tabA.evaluate(async ({id,last})=>
+        window.FactoryProjectCas.deleteCasProject(id,last),{id:editorId,last});
+      assert.equal(tombstone.revision,5);
+      const tombError=await reloaded.evaluate(async id=>{
+        try {await window.FactoryCasEditor.openCasEditorSession(id);
+          return "unexpected success";}
+        catch(e){return String(e);}
+      },editorId);
+      assert.match(tombError,/eliminato/,"Deleted projects cannot be reopened as writable");
+
+      const missingError=await reloaded.evaluate(async()=>{
+        try {await window.FactoryCasEditor.openCasEditorSession(
+          "88888888-8888-4888-8888-888888888888");
+          return "unexpected success";}
+        catch(e){return String(e);}
+      });
+      assert.match(missingError,/assente/);
+      for (const page of [tabA,tabB,reloaded]) {
+        const writtenLegacy=await page.evaluate(id=>
+          localStorage.getItem("softwarefactory.project.library.v1."+id),editorId);
+        assert.equal(writtenLegacy,null,
+          "Async CAS protocol must never write a legacy localStorage project");
+      }
+      console.log("FACTORY_INDEXEDDB_ASYNC_EDITOR_E2E_PASS: dual tab CAS race, noncooperating writer, stale fencing, reload, double-click, tombstone and no legacy writes");
+    } finally {
+      await editorContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
