@@ -1213,3 +1213,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest + Chromium browser reale a due tab: rifiuto consenso, insert/rev1, reload, fasi pending, mancata eredità di evidence, tombstone rivale durante consenso, archivio full 40/41, IndexedDB indisponibile e nessuna modifica dei legacy slot. Marker `FACTORY_INDEXEDDB_NATIVE_CREATE_UI_E2E_PASS`.
 - [ ] Factory CI, Pages, Installer candidate `completed/success` **sullo stesso SHA finale main** e verifica marker nei log; poi chiudere #150.
 - [ ] Cutover completo di pipeline/Code Agent/GitHub/import/restore/editor principale a IDB, rollback/quota/versionchange UX rimangono nella #139. #91/#92 ancora aperte. ADR 0103.
+
+
+## Delete tombstone con export backup dal pilota React IDB (#151 — 21/11/2026)
+
+- [x] Ticket puro con snapshot CAS id/rev/raw canonico, verifica bozza non sporca; comando disabilitato con draft o sessione non pronta.
+- [x] Tre gate di consenso IT/EN: download JSON byte-esatto (id+revisione), conferma file effettivamente salvato e conferma distruttiva con ID/revisione. Qualsiasi annullamento non avvia scritture IDB.
+- [x] `CasSelectionController.delete` nativo con token revision-bound, tombstone rev+1 su `tx.oncomplete`, interlock doppio click, blocco sessione su ACK/conflict incerto e refresh libreria post-success; niente legacy/cloud/GitHub.
+- [x] Restore volontario da JSON via #148, senza resurrection implicita; backup custodito dall'utente, evidence storica. Chromium reale con second tab e race, decline 3 dialog, dirty draft, reload, no legacy writes; marker `FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS`.
+- [ ] Gate di chiusura: Factory CI + Pages + Installer candidate completed/success stesso SHA main e marker log confermato; solo allora chiudere #151.
+- [ ] Migrazione completa writer live React/pipeline/Code Agent/GitHub/import/cloud/restore, quota/versionchange/rollback con source of truth IDB, ancora #139. #91/#92 aperte; ADR 0104.
