@@ -872,6 +872,190 @@ if (!inside) {
       await restoreUiContext.close();
     }
 
+
+    // #149: actual opt-in isolated CAS editor in the SPA. This UI writes ONLY
+    // IndexedDB; the live Factory still edits its separate legacy project.
+    const isolatedContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await isolatedContext.newPage();
+      const rival=await isolatedContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const original=await page.evaluate(async()=>{
+        const ids=[
+          "d1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1",
+          "e2e2e2e2-e2e2-4e2e-8e2e-e2e2e2e2e2e2",
+        ];
+        const projects=ids.map((id,i)=>({
+          id,config:{name:i===0?"IDB pilot A":"IDB pilot B",
+            description:"Existing brief "+i},
+          stages:[{id:"features",label:"Features",status:"complete",
+            output:"HISTORICAL_AI_OUTPUT",sources:[]}],
+          createdAt:"2026-11-21T17:00:00.000Z",
+          updatedAt:"2026-11-21T17:00:00.000Z",
+        }));
+        return Promise.all(projects.map(p=>
+          window.FactoryProjectCas.compareAndSwapCasProject(p,null)));
+      });
+      const localBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await expect(panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      })).toBeVisible();
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(page.getByTestId("cas-isolated-library"))
+        .toContainText("IDB pilot A");
+      await expect(page.getByTestId("cas-isolated-library"))
+        .toContainText("IDB pilot B");
+      page.removeAllListeners("dialog");
+      page.once("dialog",dialog=>{
+        assert.match(dialog.message(),/IDB pilot A/);
+        assert.match(dialog.message(),/non cambia il progetto attivo/);
+        void dialog.accept();
+      });
+      await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot A"}).click();
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 1");
+      const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      const description=panel.getByLabel("Descrizione progetto (solo IndexedDB)");
+      await name.fill("IDB pilot A revised");
+      await description.fill("New brief, stage analyses must be reset");
+      const save=panel.getByRole("button",{name:"Salva modifica in IndexedDB con backup"});
+      await expect(save).toBeEnabled();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await save.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[0].id),original[0],
+        "Declining backup must leave the exact IDB snapshot unchanged");
+
+      // Exact precommit backup + *second* saved-file consent. A refusal
+      // after the download must not write the new configuration.
+      let declinedSecond=0;
+      page.removeAllListeners("dialog");
+      page.on("dialog",async dlg=>{
+        declinedSecond++;
+        if(declinedSecond===1) await dlg.accept();
+        else await dlg.dismiss();
+      });
+      const declineDownload=page.waitForEvent("download");
+      await save.click();
+      const precommit=await declineDownload;
+      assert.equal(precommit.suggestedFilename(),
+        "softwarefactory-cas-before-edit-"+original[0].id+"-r1.json");
+      assert.equal((await readFile(await precommit.path())).toString("utf8"),
+        original[0].raw);
+      assert.equal(declinedSecond,2);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[0].id),original[0]);
+
+      // Both independent consents accepted. Only genuine IDB transaction
+      // oncomplete may advance the component's revision and draft.
+      page.removeAllListeners("dialog");
+      let approved=0;
+      page.on("dialog",async dlg=>{approved++;await dlg.accept();});
+      const acceptedDownload=page.waitForEvent("download");
+      await save.click();
+      const savedFile=await acceptedDownload;
+      assert.equal((await readFile(await savedFile.path())).toString("utf8"),
+        original[0].raw);
+      assert.equal(approved,2);
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      await expect(panel.getByRole("status"))
+        .toContainText("Commit IndexedDB confermato");
+      const savedA=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[0].id);
+      assert.equal(savedA.revision,2);
+      assert.equal(JSON.parse(savedA.raw).config.name,"IDB pilot A revised");
+      assert.equal(JSON.parse(savedA.raw).config.description,"New brief, stage analyses must be reset");
+      assert.equal(JSON.parse(savedA.raw).stages[0].status,"pending");
+      assert.equal(JSON.parse(savedA.raw).stages[0].output,"");
+      assert.deepEqual(JSON.parse(savedA.raw).stages[0].sources,[]);
+
+      // The *same controller* switches only after exact ticket preparation,
+      // explicit consent and post-consent re-read of the destination.
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(page.getByTestId("cas-isolated-library")).toContainText("IDB pilot B");
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
+      await expect(name).toHaveValue("IDB pilot B");
+      await expect(description).toHaveValue("Existing brief 1");
+      await name.fill("IDB pilot B stale draft");
+
+      // Another native CAS writer changes the selected destination while
+      // the local editor is waiting for the user's SECOND save consent.
+      // The isolated editor MUST fail closed and block the stale controller.
+      page.removeAllListeners("dialog");
+      let notifyConfirm;
+      const onSecondConsent=new Promise(resolve=>{notifyConfirm=resolve;});
+      let raceDialogs=0;
+      const onDialog=async dialog=>{
+        raceDialogs++;
+        if(raceDialogs===1) await dialog.accept();
+        else notifyConfirm(dialog);
+      };
+      page.on("dialog",onDialog);
+      const raceDownload=page.waitForEvent("download");
+      const saving=save.click();
+      const backup=await raceDownload;
+      assert.equal((await readFile(await backup.path())).toString("utf8"),
+        original[1].raw);
+      const pausedDialog=await onSecondConsent;
+      assert.match(pausedDialog.message(),/SALVATO/);
+      const rivalB=await rival.evaluate(async expected=>{
+        const p=JSON.parse(expected.raw);
+        p.config.description="Written first by noncooperating tab";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,expected);
+      },original[1]);
+      assert.equal(rivalB.revision,2);
+      await pausedDialog.accept();
+      await saving;
+      page.off("dialog",onDialog);
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      await expect(panel.getByRole("status")).toContainText("Sessione IndexedDB bloccata");
+      await expect(save).toBeDisabled();
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
+        "Rival-tab CAS winner must never be overwritten or auto-merged");
+      // Explicit refresh and open reestablishes a new token; no automatic
+      // rebase onto the rival revision or retaining the stale draft.
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
+      await expect(name).toHaveValue("IDB pilot B");
+      await expect(description).toHaveValue("Written first by noncooperating tab");
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+
+      const localAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(localAfter,localBefore,
+        "Isolated IDB editor must never write the authoritative legacy workspace");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const reopened=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[0].id);
+      assert.deepEqual(reopened,savedA,
+        "Confirmed async CAS edits survive Chromium reload and cannot be lost");
+      console.log("FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS: opt-in CAS editor, two backup consents, exact raw download, stage invalidation, guarded selection, rival-tab conflict, reopen and legacy unchanged");
+    } finally {
+      await isolatedContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
