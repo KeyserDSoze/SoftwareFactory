@@ -647,13 +647,19 @@ if (!inside) {
       const orphanExport=page.getByRole("button",{
         name:"Esporta JSON storico: Orphan standalone",
       });
-      page.once("dialog",dlg=>void dlg.dismiss());
-      await orphanExport.click();
-      await expect(orphanExport).toBeVisible();
-      page.once("dialog",dlg=>void dlg.accept());
+      // The earlier #142 preview may have registered a one-shot dialog
+      // handler for a guard which returned before opening a dialog. Reusing
+      // that listener would double-handle this independent confirmation.
+      page.removeAllListeners("dialog");
+      let recoveryConsentDialogs=0;
+      page.once("dialog",dlg=>{
+        recoveryConsentDialogs++;
+        void dlg.accept();
+      });
       const orphanDownload=page.waitForEvent("download",{timeout:20000});
       await orphanExport.click();
       const orphanFile=await orphanDownload;
+      assert.equal(recoveryConsentDialogs,1,"Exactly one consent dialog is expected");
       assert.equal(orphanFile.suggestedFilename(),
         "softwarefactory-indexeddb-recovery-"+orphanId+"-r1.json");
       assert.equal((await readFile(await orphanFile.path())).toString("utf8"),
