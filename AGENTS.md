@@ -1173,3 +1173,8 @@ Non azzerare una bozza umana IndexedDB sporca tramite chiusura o refresh di una 
 ## Reset selettivo stage solo CAS (#155 / ADR 0108)
 
 Nel pilota opt-in la cancellazione di output/stage non è una prova di esecuzione o review: il builder deve soltanto azzerare la fase selezionata e tutte le successive, conservando le precedenti, senza modificare dati di GitHub/runner. Snapshot canonical id/revision/raw e layout completo ordinato di 6 stage obbligatori; no-op e struttura corrotta rifiutati. Nessuna modifica mentre il draft config è sporco. Prima di `controller.commit`, esportare backup raw pre-reset, chiedere consenso su file conservato e reset distruttivo; nessuna chiamata al writer legacy o retry dopo conflitto. Chromium `FACTORY_INDEXEDDB_STAGE_RESET_E2E_PASS`, Vitest e CI/Pages/Installer sullo stesso SHA. #139 resta aperta per la migrazione di tutti i writer attivi, #91/#92 ancora aperte.
+
+
+## Pipeline async CAS solo pre-cutover (#156 / ADR 0109)
+
+\`openCasPipelineSession\` è un contratto applicativo verificabile ma **non** sostituisce da solo \`changeProject\` del live editor. Un task AI deve partire da \`begin(stage)\` con \`running\` confermato su \`tx.oncomplete\`; \`complete/abort/fail\` accettano solo il ticket esatto restituito alla medesima sessione, non il progetto ottimisticamente letto prima di chiamare il provider. Dopo conflitto o ACK ambiguo non riprovare, non aggiornare lo state React e non scrivere \`localStorage\`. Se crash lascia uno stage running, non completarlo automaticamente o riutilizzare vecchie evidenze: richiede un percorso operator-controlled. E2E \`FACTORY_INDEXEDDB_PIPELINE_ASYNC_E2E_PASS\`; #139 resta aperta per cutover di *tutti* i writer e UX recovery/rollback; #91/#92 restano aperte.

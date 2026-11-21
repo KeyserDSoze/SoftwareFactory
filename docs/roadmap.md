@@ -1241,3 +1241,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest + Chromium E2E: reset parziale, backup esatto, deny/accept, writer CAS rivale nel consenso finale, reload, no legacy writes; marker `FACTORY_INDEXEDDB_STAGE_RESET_E2E_PASS`.
 - [ ] Gate finale: Factory CI, Pages, Installer candidate completed/success sullo **stesso SHA main** e marker nei log, poi chiudere #155.
 - [ ] Cutover `App` principale/Code Agent/pipeline/GitHub/import/cloud/restore e rollback/recovery/quota/versionchange ancora #139; #91/#92 aperte.
+
+
+## Contratto di scrittura stage async CAS (API pre-cutover, #156 — 21/11/2026)
+
+- [x] \`openCasPipelineSession\`: \`begin\` transazionale con ticket post-commit, precedenze/stage schema validi, target running e downstream pending; nessun implicit import o legacy fallback.
+- [x] \`complete/abort/fail\` richiedono lo stesso ticket e revision/raw: invalid output e fonti respinti, errore provider enum sanitizzato, result tardivo dopo abort o writer rivale fail-closed.
+- [x] Vitest + Chromium due tab: commit reali IDB, abort, fail, rival durante AI, reload e legacy invariato; marker \`FACTORY_INDEXEDDB_PIPELINE_ASYNC_E2E_PASS\`.
+- [ ] Factory CI, Pages, Installer candidate success **stesso SHA main** e marker Chromium prima di chiudere #156.
+- [ ] Integrare nel LIVE insieme agli altri writer e recovery controllata del running dopo crash: rimane #139. #91/#92 restano aperte.

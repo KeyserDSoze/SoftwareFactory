@@ -71,6 +71,12 @@ if (!inside) {
       globalName:"FactoryProjectCas",target:"es2022",
     });
     const casBundle = casBuild.outputFiles[0].text;
+    const casPipelineBuild=await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/application/cas-pipeline-session.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryCasPipeline",target:"es2022",
+    });
+    const casPipelineBundle=casPipelineBuild.outputFiles[0].text;
     const casContext = await browser.newContext();
     try {
       const casA=await casContext.newPage(),casB=await casContext.newPage();
@@ -1115,6 +1121,138 @@ if (!inside) {
       await isolatedContext.close();
     }
 
+
+    // #156: native asynchronous pipeline checkpoints, intentionally NOT
+    // connected to App's legacy changeProject. This uses real two-tab CAS,
+    // and a late AI result must lose against a noncooperating native writer.
+    const pipelineContext=await browser.newContext();
+    try{
+      const page=await pipelineContext.newPage();
+      const rival=await pipelineContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival]){
+        await tab.addScriptTag({content:casBundle});
+      }
+      await page.addScriptTag({content:casPipelineBundle});
+      const ids=[
+        "15615615-1561-4561-8561-156156156156",
+        "15615615-1561-4561-8561-156156156157",
+      ];
+      const original=await rival.evaluate(async ids=>{
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map((id,index)=>({
+          id,label:id,status:index<2?"complete":"pending",
+          output:index<2?"HISTORICAL_"+id:"",
+          sources:[],
+        }));
+        const now="2026-11-21T21:00:00.000Z";
+        return await Promise.all(ids.map((id,index)=>
+          window.FactoryProjectCas.compareAndSwapCasProject({
+            id,config:{name:"Pipeline native "+index,description:"isolated",
+              requirements:"No fake test evidence"},
+            stages,createdAt:now,updatedAt:now,
+          },null)));
+      },ids);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const started=await page.evaluate(async id=>{
+        window.CasPipelineHarness=await window.FactoryCasPipeline
+          .openCasPipelineSession(id);
+        window.CasPipelineTicket=await window.CasPipelineHarness.begin("technical");
+        return window.CasPipelineTicket.started;
+      },ids[0]);
+      assert.equal(started.revision,2,"Begin must acknowledge native IDB commit");
+      const starting=JSON.parse(started.raw);
+      assert.equal(starting.stages[2].status,"running");
+      assert.deepEqual(starting.stages.slice(0,2),
+        JSON.parse(original[0].raw).stages.slice(0,2));
+      await expect(page.evaluate(async()=>window.CasPipelineHarness.begin("technical")
+        .then(()=>false,()=>true))).resolves.toBe(true);
+      const done=await page.evaluate(()=>window.CasPipelineHarness.complete(
+        window.CasPipelineTicket,"Confirmed AI output",[]));
+      assert.equal(done.revision,3);
+      const verified=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[0]);
+      assert.deepEqual(done,verified,"Only oncomplete can confirm a stage");
+      assert.equal(JSON.parse(verified.raw).stages[2].status,"complete");
+      assert.equal(JSON.parse(verified.raw).stages[2].output,"Confirmed AI output");
+      const interrupted=await page.evaluate(async()=>{
+        window.CasPipelineTicket=await window.CasPipelineHarness.begin("architecture");
+        const before=window.CasPipelineTicket.started;
+        const done=await window.CasPipelineHarness.abort(window.CasPipelineTicket);
+        const late=await window.CasPipelineHarness.complete(
+          window.CasPipelineTicket,"Late answer",[]).then(()=>"unexpected",String);
+        return {before,done,late};
+      });
+      assert.equal(interrupted.before.revision,4);
+      assert.equal(interrupted.done.revision,5);
+      assert.match(interrupted.late,/obsoleto/);
+      assert.equal(JSON.parse(interrupted.done.raw).stages[3].status,"pending");
+      const failed=await page.evaluate(async()=>{
+        const t=await window.CasPipelineHarness.begin("architecture");
+        return window.CasPipelineHarness.fail(t,"timeout");
+      });
+      assert.equal(failed.revision,7);
+      assert.equal(JSON.parse(failed.raw).stages[3].status,"failed");
+      assert.equal(JSON.parse(failed.raw).stages[3].error,
+        "Tempo massimo del provider AI superato.");
+
+      // A late AI request's CAS token cannot overwrite a rival who updated
+      // config while the request ran, even if the tab ignores Web Locks.
+      const lateStart=await page.evaluate(async id=>{
+        window.CasLateSession=await window.FactoryCasPipeline.openCasPipelineSession(id);
+        window.CasLateTicket=await window.CasLateSession.begin("technical");
+        return window.CasLateTicket.started;
+      },ids[1]);
+      assert.equal(lateStart.revision,2);
+      const winner=await rival.evaluate(async old=>{
+        const p=JSON.parse(old.raw);
+        p.config.description="Rival changed brief during remote AI request";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,old);
+      },lateStart);
+      assert.equal(winner.revision,3);
+      const rejected=await page.evaluate(()=>
+        window.CasLateSession.complete(window.CasLateTicket,"Too late",[])
+          .then(()=>"unexpected",String));
+      assert.match(rejected,/non confermato|Conflitto CAS/);
+      assert.equal(await page.evaluate(()=>window.CasLateSession.state()),"blocked");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[1]),winner,
+        "Rival winning CAS must not be overwritten by delayed AI output");
+      const reopened=await page.evaluate(async id=>{
+        const session=await window.FactoryCasPipeline.openCasPipelineSession(id);
+        const result=await session.begin("technical").then(()=>"unexpected",String);
+        return {snapshot:session.snapshot(),result};
+      },ids[1]);
+      assert.equal(reopened.snapshot.revision,3);
+      assert.match(reopened.result,/Predecessori|già in esecuzione/);
+      // A stage left running after crash/reload needs explicit operator
+      // recovery; never interpret it as completed nor auto-retry the AI.
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[1]),winner);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "CAS async stage session must never write active legacy state");
+      console.log("FACTORY_INDEXEDDB_PIPELINE_ASYNC_E2E_PASS: begin/complete/abort/fail tx acknowledgements, late AI result fenced by rival, manual recovery required and legacy unchanged");
+    }finally{
+      await pipelineContext.close();
+    }
 
     // #155: an isolated, explicit stage reset uses the SAME native CAS
     // controller, preserving earlier checkpoints and exact pre-reset backup.
