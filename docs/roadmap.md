@@ -1144,3 +1144,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest (ack in volo, stale ticket, mancata transazione, noncanonicità e IDB indisponibile) + Chromium due schede, writer non cooperativo, reload, doppio submit, delete/tombstone, nessuna scrittura legacy. Marker `FACTORY_INDEXEDDB_ASYNC_EDITOR_E2E_PASS`.
 - [ ] Confermare Factory CI/Pages/Installer sullo stesso SHA e chiudere solo #143.
 - [ ] **#139 ancora aperta:** convertire tutte le azioni del live editor e le integrazioni GitHub/runner/import/restore a CAS async e selezione da IDB, UX rollback e recovery. #91/#92 ancora aperte. ADR 0096.
+
+
+## Selezione IDB verificata e ticket di switch prima del consenso (#144 — 21/11/2026)
+
+- [x] Controller CAS esclusivamente IndexedDB con list/snapshot/prepareSwitch/confirmSwitch/commit; niente fallback legacy, nessun import automatico.
+- [x] Ticket origine/destinazione ID+revisione+raw+generazione prima del consenso; rilettura esatta post-consenso, nessuna adozione implicita di un writer concorrente.
+- [x] Fencing tra operazioni asincrone sul medesimo controller, token di revisione e invalida-ticket dopo commit; switch fallito conserva origine. CAS ambiguity → blocco per recovery esplicito.
+- [x] Vitest di sessione/mocked I/O e Chromium reale a due schede: rival writer dopo ticket, conferma stale, salvataggio durante selezione, tombstone/missing, reload e nessuna mutazione legacy. Marker `FACTORY_INDEXEDDB_SELECTION_E2E_PASS`.
+- [ ] Factory CI/Pages/Installer candidate `completed/success` stesso SHA main prima di chiudere #144.
+- [ ] Rimane #139: integrare il controller **solo insieme** ai write-path di React/pipeline/Code Agent/GitHub/restore e UX IT/EN/rollback, per non avere due fonti autorevoli. #91/#92 rimangono aperte. ADR 0097.
