@@ -492,7 +492,9 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
           <h4>{t(locale,"casIsoInspectTitle")}</h4>
           <p className="helper">{t(locale,"casIsoInspectExplain")}</p>
           {inspectedStages===null ?
-            <p role="alert">{t(locale,"casIsoInspectInvalidSnapshot")}</p>:
+            <p className="helper" data-testid="cas-isolated-inspection-unavailable">
+              {t(locale,"casIsoInspectInvalidSnapshot")}
+            </p>:
             <ol>{inspectedStages.map((stage,index)=>
               <li key={stage.id}
                 data-testid={"cas-isolated-stage-"+stage.id}>
