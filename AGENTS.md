@@ -1064,3 +1064,11 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - listCasProjects deve usare una sola transazione IndexedDB readonly con cursore; verificare tutte le chiavi, i record e i progetti con readRow. Omettere solo tombstone; fallire chiuso per corruzione o oltre 40 progetti attivi, senza troncamento o cancellazione.
 - Restituire soltanto metadata, ordinati per updatedAt decrescente e ID crescente. Non usare l'indice localStorage né ripiegare su quello in caso di IndexedDB indisponibile.
 - La CI Chromium verifica due tab, reload, tombstone, corruzione e >40 progetti tramite marker FACTORY_INDEXEDDB_LIBRARY_E2E_PASS. Nessun passaggio automatico dell'editor legacy: #139/#91/#92 restano aperte (ADR 0093).
+
+
+## Copia volontaria non distruttiva legacy → CAS (#141/#139)
+
+- Preparare il ticket usando il raw JSON esatto dello slot per-progetto, non lo stato normalizzato da loadLocalProject e non i puntatori cache. Prima del copy richiedere esportazione del backup raw e una seconda conferma manuale di averlo salvato; il browser non può garantire che il file sia durevole.
+- insertCasProjectNeverSeen verifica tutte le righe/tombstone e capacità fino a 40 nello stesso readwrite transaction; ID esistente anche tombstone è collisione, sempre add e mai put. Segnalare corruzione, quota, errori IDB senza echo di dati e senza fallback legacy.
+- Doppio recheck dello slot prima e dopo la transazione. Le due memorie non hanno CAS comune: se il legacy cambia durante il copy, non affermare che la copia nuova è autorevole né cancellare o sovrascrivere i record.
+- L'editor live resta su localStorage. Non chiudere #139/#92/#91. CI Chromium marker FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS e ADR 0094.

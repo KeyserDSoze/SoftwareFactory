@@ -217,6 +217,118 @@ if (!inside) {
     } finally {
       await casContext.close();
     }
+
+    // Real user-consented, non-destructive localStorage -> IndexedDB staging
+    // in a separate browser profile (#141), before any live editor cutover.
+    const staging=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await staging.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const copyButton=page.getByRole("button",{name:"Copia in IndexedDB (anteprima)"});
+      await expect(copyButton).toBeEnabled({timeout:15000});
+      const original=await page.evaluate(()=>{
+        const id=JSON.parse(localStorage.getItem("softwarefactory.project.v1")||"{}").id;
+        return {id,raw:localStorage.getItem("softwarefactory.project.library.v1."+id)};
+      });
+      assert.ok(original.id && original.raw,"Live per-ID slot must exist");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await copyButton.click();
+      assert.equal(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),null,
+        "Declining first consent must not create a CAS copy");
+
+      let consents=0;
+      page.on("dialog",async dlg=>{consents++;await dlg.accept();});
+      const pendingDownload=page.waitForEvent("download",{timeout:20000});
+      await copyButton.click();
+      const downloaded=await pendingDownload;
+      assert.equal(downloaded.suggestedFilename(),
+        "softwarefactory-pre-indexeddb-"+original.id+".json");
+      assert.equal((await readFile(await downloaded.path())).toString("utf8"),original.raw,
+        "Downloaded JSON must exactly match the legacy slot including checkpoints");
+      await expect(page.getByText("Copia IndexedDB creata.",{exact:false}))
+        .toBeVisible({timeout:15000});
+      assert.equal(consents,2,"Both independent backup confirmations are required");
+      const copied=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id);
+      assert.equal(copied.revision,1);
+      assert.equal(copied.raw,original.raw);
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),original.id),
+        original.raw,"Legacy project is still authoritative and unmodified");
+
+      const retryDownload=page.waitForEvent("download",{timeout:20000});
+      await copyButton.click();
+      await retryDownload;
+      await expect(page.getByRole("alert")).toContainText("già presente");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),copied,
+        "A second attempt must not overwrite a committed CAS record");
+
+      // Inject the non-UI copy helper in two same-origin pages. Even without
+      // Web Locks, the strict readwrite transaction admits only one insert.
+      const second=await staging.newPage();
+      await second.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      const migrationBuild=await require("esbuild").build({
+        entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-migration.ts")],
+        bundle:true,write:false,platform:"browser",format:"iife",
+        globalName:"FactoryLegacyCasCopy",target:"es2022",
+      });
+      const migrationBundle=migrationBuild.outputFiles[0].text;
+      await Promise.all([page.addScriptTag({content:migrationBundle}),
+        second.addScriptTag({content:migrationBundle})]);
+      await second.addScriptTag({content:casBundle});
+      const rivalId="44444444-4444-4444-8444-444444444444";
+      await page.evaluate(id=>localStorage.setItem(
+        "softwarefactory.project.library.v1."+id,JSON.stringify({
+          id,config:{name:"Both tabs"},stages:[],
+          updatedAt:"2026-11-21T10:00:00.000Z",
+        })),rivalId);
+      const submit=(tab,id)=>tab.evaluate(async id=>{
+        const ticket=window.FactoryLegacyCasCopy.prepareLegacyCasCopy(id);
+        try {
+          return {ok:true,result:await window.FactoryLegacyCasCopy.copyLegacyCasTicket(ticket,true)};
+        } catch(error) {return {ok:false,error:String(error)};}
+      },id);
+      const race=await Promise.all([submit(page,rivalId),submit(second,rivalId)]);
+      assert.equal(race.filter(x=>x.ok).length,1,
+        "Two independent tabs must not overwrite the same imported project");
+      assert.match(race.find(x=>!x.ok).error,/già presente/);
+      const staleId="55555555-5555-4555-8555-555555555555";
+      const stale=await page.evaluate(id=>{
+        const key="softwarefactory.project.library.v1."+id;
+        const project={id,config:{name:"Before"},stages:[],
+          updatedAt:"2026-11-21T10:00:00.000Z"};
+        localStorage.setItem(key,JSON.stringify(project));
+        const ticket=window.FactoryLegacyCasCopy.prepareLegacyCasCopy(id);
+        localStorage.setItem(key,JSON.stringify({...project,config:{name:"After"}}));
+        return ticket;
+      },staleId);
+      const staleFailure=await second.evaluate(async ticket=>{
+        try {await window.FactoryLegacyCasCopy.copyLegacyCasTicket(ticket,true);
+          return "unexpected success";}
+        catch(error){return String(error);}
+      },stale);
+      assert.match(staleFailure,/cambiato/);
+      assert.equal(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),staleId),null);
+
+      // A tombstone must not be silently resurrected by an old backup.
+      const tombId="66666666-6666-4666-8666-666666666666";
+      await page.evaluate(async id=>{
+        const p={id,config:{name:"Deleted"},stages:[],
+          updatedAt:"2026-11-21T10:00:00.000Z"};
+        const active=await window.FactoryProjectCas.compareAndSwapCasProject(p,null);
+        await window.FactoryProjectCas.deleteCasProject(id,active);
+        localStorage.setItem("softwarefactory.project.library.v1."+id,JSON.stringify(p));
+      },tombId);
+      const tomb=await submit(second,tombId);
+      assert.equal(tomb.ok,false);
+      assert.match(tomb.error,/già presente/);
+
+      console.log("FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS: exact backup, two consents, dual-tab insert race, stale source and tombstone");
+    } finally {await staging.close();}
     const context = await browser.newContext({acceptDownloads:true});
     const first = await context.newPage();
     await first.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});

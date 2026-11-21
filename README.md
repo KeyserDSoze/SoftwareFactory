@@ -862,3 +862,10 @@ SoftwareFactory ora impedisce di salvare come riuscito uno snapshot locale che n
 La nuova API listCasProjects legge in una singola transazione readonly i progetti CAS e ne mostra soltanto id, nome, aggiornamento, destinazione GitHub e revisione; esclude tombstone, rifiuta dati corrotti e non nasconde un eventuale 41esimo progetto. La CI include prove Chromium reali su due schede, reload, corruzione e superamento del limite. Non scrive o cancella dati.
 
 **Solo prerequisito infrastrutturale**: il live editor e la libreria visibile restano su localStorage. Non esiste ancora migrazione automatica, backup implicito, CAS multi-device o cutover a salvataggi asincroni. La #139 e le #91/#92 rimangono aperte.
+
+
+## Copia volontaria legacy in IndexedDB (#141, anteprima)
+
+Nella libreria dei progetti il comando bilingue Copia in IndexedDB (anteprima) esporta il JSON esatto del progetto locale corrente. Richiede una conferma di download e una conferma separata che il file sia stato effettivamente salvato; poi esegue un inserimento IndexedDB never-seen con transazione, verifica le collisioni (anche tombstone), tutte le righe e il limite di 40 progetti. Se il progetto legacy cambia prima o durante la copia, viene segnalato un conflitto; una copia CAS già inserita potrebbe essere obsoleta e va verificata manualmente. Non viene cancellato alcun dato e non esiste fallback a localStorage per i fallimenti IndexedDB.
+
+**L'editor continua a scrivere su localStorage**, anche dopo la copia; non è un passaggio automatico a IndexedDB, una garanzia multi-device o un backup cloud. Il click di conferma non prova che il backup sia fisicamente presente su disco. Conserva il file JSON fuori dal browser. La Factory CI verifica il file scaricato in Chromium, il consenso, la non modifica del progetto e race su due schede; ADR 0094. #139, #92 e #91 rimangono aperte per il vero cutover asincrono e i collaudi provider.

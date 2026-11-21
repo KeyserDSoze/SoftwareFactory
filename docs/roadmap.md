@@ -1117,3 +1117,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest assenza IndexedDB e suite Chromium dual-tab con reload, corruzione deliberata e limite, marker FACTORY_INDEXEDDB_LIBRARY_E2E_PASS.
 - [ ] Confermare Factory CI, Pages e Installer candidate sullo SHA main prima di chiudere #140.
 - [ ] #139 resta aperta: backup user-controlled prima di import legacy, migrazione assistita, integrazione write-path async end-to-end, recovery UX. Nessuna promessa CAS multi-device o provider reale. ADR 0093.
+
+
+## Snapshot legacy copiabile volontariamente in CAS (#141 — 21/11/2026)
+
+- [x] API per backup del JSON raw locale, validazione identità/capacità e copy never-seen atomico in IDB, collisioni e tombstone bloccate.
+- [x] UI IT/EN a due conferme esplicite prima della copia, nessuna cancellazione dello slot, selezione immutata e nessun cutover silenzioso.
+- [x] Vitest e Chromium per file JSON esatto, due prompt, duplicate, race dual-tab, stale source e tombstone; marker FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS.
+- [ ] Verificare Factory CI, Pages e Installer candidate su medesimo SHA prima di chiudere #141.
+- [ ] #139 rimane aperta: editor write-path async end-to-end, scelta/reload dall'archivio CAS, rollback e UX di ripristino. #91/#92 non sono complete. ADR 0094.
