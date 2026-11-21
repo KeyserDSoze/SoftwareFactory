@@ -366,3 +366,95 @@ export async function deleteCasProject(
     });
   } finally { db.close(); }
 }
+
+
+/**
+ * Explicit, user-approved resurrection from an EXISTING tombstone (#146).
+ * Unlike compareAndSwapCasProject(project, null), this requires the exact
+ * deletion generation, a byte-identical backup and an explicit positive
+ * consent. The read, capacity scan and put use the SAME readwrite IDB
+ * transaction. No localStorage fallback, automatic restore or retry.
+ */
+export async function restoreCasTombstoneProject(
+  project: FactoryProject,
+  expected: CasProjectTombstone,
+  exactBackupRaw: string,
+  consent: boolean,
+): Promise<CasProjectSnapshot> {
+  // All user-intent and data checks happen BEFORE touching IndexedDB.
+  if (consent !== true)
+    throw Error("Ripristino IndexedDB non autorizzato: consenso esplicito obbligatorio.");
+  const raw = serializeCasProject(project);
+  if (raw !== exactBackupRaw)
+    throw Error("Backup IndexedDB non identico: ripristino rifiutato.");
+  if (!expected || expected.id !== project.id ||
+      !Number.isSafeInteger(expected.revision) || expected.revision < 1 ||
+      expected.revision > MAX_REVISION)
+    throw Error("Tombstone IndexedDB non valida per il ripristino.");
+
+  const db = await openCasDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      let failure = "Ripristino IndexedDB interrotto.";
+      let confirmed: CasProjectSnapshot | null = null;
+      tx.oncomplete = () => {
+        if (confirmed) resolve(confirmed);
+        else reject(Error("Ripristino IndexedDB non confermato."));
+      };
+      tx.onabort = () => reject(Error(failure));
+      tx.onerror = () => reject(Error("Ripristino IndexedDB non riuscito."));
+      const read = store.get(project.id);
+      read.onsuccess = () => {
+        let existing: Row | null;
+        try { existing = readRow(read.result as unknown, project.id); }
+        catch {
+          failure = "Archivio IndexedDB locale corrotto.";
+          tx.abort(); return;
+        }
+        if (!existing || existing.raw !== null ||
+            existing.revision !== expected.revision) {
+          failure = "Conflitto tombstone IndexedDB: revisione cambiata o progetto presente.";
+          tx.abort(); return;
+        }
+        const revision = existing.revision + 1;
+        if (revision > MAX_REVISION) {
+          failure = "Limite revisioni IndexedDB raggiunto.";
+          tx.abort(); return;
+        }
+
+        // Count every ACTIVE project, not just the tombstone being restored.
+        // Capacity and tombstone generation are both checked in this one
+        // transaction, including noncooperating writers in other tabs.
+        let active = 0;
+        const scan = store.openCursor();
+        scan.onsuccess = () => {
+          try {
+            const cursor = scan.result;
+            if (!cursor) {
+              confirmed = {id:project.id,revision,raw};
+              store.put({id:project.id,revision,raw} satisfies Row,project.id);
+              return;
+            }
+            if (typeof cursor.key !== "string") throw Error("Invalid key");
+            checkId(cursor.key);
+            const row = readRow(cursor.value as unknown,cursor.key);
+            if (!row) throw Error("Missing row");
+            if (row.raw !== null) {
+              active++;
+              if (active >= 40) {
+                failure = "Libreria IndexedDB piena (40 progetti).";
+                tx.abort(); return;
+              }
+            }
+            cursor.continue();
+          } catch {
+            failure = "Archivio IndexedDB corrotto: ripristino bloccato.";
+            tx.abort();
+          }
+        };
+      };
+    });
+  } finally { db.close(); }
+}
