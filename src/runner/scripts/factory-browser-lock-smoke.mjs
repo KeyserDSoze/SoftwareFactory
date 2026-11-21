@@ -1056,6 +1056,221 @@ if (!inside) {
       await isolatedContext.close();
     }
 
+
+    // #150: A new project can be created directly in the standalone CAS
+    // editor, without touching the legacy workspace or first staging a
+    // localStorage project. The same never-seen native transaction fences
+    // tabs that ignore all in-memory/editor locks.
+    const freshCasContext=await browser.newContext();
+    try {
+      const page=await freshCasContext.newPage();
+      const rival=await freshCasContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      const form=page.getByTestId("cas-isolated-create");
+      const newName=form.getByLabel("Nome nuovo progetto (solo IndexedDB)");
+      const newBrief=form.getByLabel("Brief nuovo progetto (solo IndexedDB)");
+      const create=form.getByRole("button",{name:"Crea nuovo progetto SOLO IndexedDB"});
+      await newName.fill("Native IDB creation");
+      await newBrief.fill("Created without any legacy project migration");
+
+      page.removeAllListeners("dialog");
+      let refused=0;
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/Native IDB creation/);
+        assert.match(dlg.message(),/ID: [0-9a-f-]{36}/i);
+        refused++;void dlg.dismiss();
+      });
+      await create.click();
+      assert.equal(refused,1);
+      assert.deepEqual(await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects()),[],
+        "Declining new-project consent must not write IndexedDB");
+
+      let createdId="";
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/Native IDB creation/);
+        const match=dlg.message().match(/ID: ([0-9a-f-]{36})/i);
+        assert.ok(match,"Consent UI must expose the new project's UUID");
+        createdId=match[1];
+        void dlg.accept();
+      });
+      await create.click();
+      await expect(panel.getByRole("status")).toContainText(
+        "Nuovo progetto creato in IndexedDB",{timeout:15000});
+      const native=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),createdId);
+      assert.equal(native.revision,1);
+      const project=JSON.parse(native.raw);
+      assert.equal(project.id,createdId);
+      assert.equal(project.config.name,"Native IDB creation");
+      assert.equal(project.config.description,
+        "Created without any legacy project migration");
+      assert.equal(project.createdAt,project.updatedAt);
+      assert.equal(project.stages.length,6);
+      assert.ok(project.stages.every(stage=>
+        stage.status==="pending" && stage.output==="" &&
+        stage.sources.length===0),"Native IDB creation must not inherit AI evidence");
+      assert.equal(project.development,undefined);
+      assert.equal(project.githubSync,undefined);
+      assert.equal(project.githubDestination,undefined);
+      assert.equal(await page.evaluate(()=>sessionStorage.getItem(
+        "softwarefactory.project.active-tab.v1")),
+        JSON.parse(legacyBefore.active).id,
+        "IDB creation must not select a project in the legacy Factory");
+
+      // Opening a newly created project still needs the isolated editor's
+      // independent selection consent, never an implicit source-of-truth cut.
+      await expect(page.getByTestId("cas-isolated-library"))
+        .toContainText("Native IDB creation");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Native IDB creation",
+      }).click();
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      await expect(create).toBeDisabled();
+      await panel.getByRole("button",{
+        name:"Abbandona bozza e selezione",
+      }).click();
+      await expect(create).toBeEnabled();
+
+      // During confirmation a noncooperating tab creates and then deletes
+      // the SAME randomly generated ID. Generic expected=null must never
+      // resurrect that tombstone. No automatic new-UUID retry is allowed.
+      await newName.fill("Rival tombstone insert");
+      await newBrief.fill("Must never replace a concurrent tombstone");
+      page.removeAllListeners("dialog");
+      let notifyDialog;
+      const raceDialog=new Promise(resolve=>{notifyDialog=resolve;});
+      const onDialog=dialog=>notifyDialog(dialog);
+      page.on("dialog",onDialog);
+      const attempted=create.click();
+      const pending=await raceDialog;
+      const match=pending.message().match(/ID: ([0-9a-f-]{36})/i);
+      assert.ok(match,"Creation consent must pin a UUID before writing");
+      const racedId=match[1];
+      const tomb=await rival.evaluate(async id=>{
+        const p={id,config:{name:"Rival deleted"},stages:[],
+          updatedAt:"2026-11-21T19:00:00.000Z"};
+        const existing=await window.FactoryProjectCas.compareAndSwapCasProject(p,null);
+        return window.FactoryProjectCas.deleteCasProject(id,existing);
+      },racedId);
+      assert.equal(tomb.revision,2);
+      await pending.accept();
+      await attempted;
+      page.off("dialog",onDialog);
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),racedId),
+        {state:"tombstone",revision:2},
+        "A rival-tab tombstone cannot be revived by stale creation consent");
+      assert.deepEqual(await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects()).then(xs=>xs.map(x=>x.id)),
+        [createdId],"The failed create must not create a second IDB project");
+
+      // Add 39 other active IDB fixtures in one genuine readwrite txn.
+      // The 41st native UI creation must abort at capacity, not overwrite.
+      await rival.evaluate(async()=>{
+        const db=await new Promise((resolve,reject)=>{
+          const req=indexedDB.open("softwarefactory.project.cas.v1",1);
+          req.onsuccess=()=>resolve(req.result);
+          req.onerror=()=>reject(Error("Capacity fixture open failed"));
+        });
+        try{
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(Error("Capacity fixture aborted"));
+            const store=tx.objectStore("projects");
+            for(let i=0;i<39;i++){
+              const id="77777777-7777-4777-8777-"+String(i).padStart(12,"0");
+              store.put({id,revision:1,raw:JSON.stringify({
+                id,config:{name:"Capacity IDB "+i},stages:[],
+                updatedAt:"2026-11-21T19:00:00.000Z",
+              })},id);
+            }
+          });
+        } finally {db.close();}
+      });
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,40);
+      await newName.fill("Forbidden 41st IDB project");
+      page.removeAllListeners("dialog");
+      let capId="";
+      page.once("dialog",dlg=>{
+        capId=dlg.message().match(/ID: ([0-9a-f-]{36})/i)?.[1]||"";
+        void dlg.accept();
+      });
+      await create.click();
+      assert.ok(capId,"Capacity attempt must identify intended new project");
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),capId),
+        {state:"missing"},
+        "At 40 active rows no 41st IDB project is created");
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,40);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Native IDB-only creation must never touch legacy Factory slots");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),createdId),native,
+        "Confirmed native IDB insert must survive reload with exact rev/raw");
+      console.log("FACTORY_INDEXEDDB_NATIVE_CREATE_UI_E2E_PASS: opt-in never-seen project, denied consent, revision 1 after tx, no fake evidence or GitHub binding, rival tombstone race, 40/41 cap, reload and no legacy writes");
+    } finally {
+      await freshCasContext.close();
+    }
+
+    // No-IDB browser must reject new native project creation, not redirect
+    // writes to legacy storage or report a false successful save.
+    const noIdbContext=await browser.newContext();
+    await noIdbContext.addInitScript(()=>{
+      Object.defineProperty(window,"indexedDB",{
+        configurable:true,value:undefined,
+      });
+    });
+    try{
+      const page=await noIdbContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      const form=page.getByTestId("cas-isolated-create");
+      await form.getByLabel("Nome nuovo progetto (solo IndexedDB)")
+        .fill("No IndexedDB available");
+      const legacy=await page.evaluate(()=>
+        localStorage.getItem("softwarefactory.project.v1"));
+      page.once("dialog",dlg=>void dlg.accept());
+      await form.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      }).click();
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      assert.equal(await page.evaluate(()=>
+        localStorage.getItem("softwarefactory.project.v1")),legacy,
+        "Missing IndexedDB must never fall back to localStorage creation");
+    } finally {
+      await noIdbContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
