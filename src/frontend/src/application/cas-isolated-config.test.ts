@@ -66,6 +66,11 @@ describe("isolated CAS configuration builder (#149/#152)",()=>{
     expect(()=>buildCasIsolatedConfigEdit(
       {...expected,raw:JSON.stringify(invalid)},"Before","Brief","New"))
       .toThrow(/Requisiti IndexedDB non validi/);
+    const nullRequirements=JSON.parse(expected.raw);
+    nullRequirements.config.requirements=null;
+    expect(()=>buildCasIsolatedConfigEdit(
+      {...expected,raw:JSON.stringify(nullRequirements)},"Before","Brief","New"))
+      .toThrow(/Requisiti IndexedDB non validi/);
     const legacy=JSON.parse(expected.raw);
     delete legacy.config.requirements;
     const next=buildCasIsolatedConfigEdit(

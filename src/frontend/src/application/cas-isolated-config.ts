@@ -38,7 +38,8 @@ export function buildCasIsolatedConfigEdit(
 
   // Historical IDB fixtures can lack requirements, while canonical new
   // projects always contain it. Never accept an unexpected non-string value.
-  const previousRequirements = original.config.requirements ?? "";
+  const previousRequirements = original.config.requirements === undefined
+    ? "" : original.config.requirements;
   if (typeof previousRequirements !== "string")
     throw Error("Requisiti IndexedDB non validi.");
   if (original.config.name === name &&
