@@ -48,7 +48,7 @@ describe("isolated CAS delete preflight (#151/#152)",()=>{
       snapshot,snapshot,p.config.name,p.config.description,"Unsaved requirements"))
       .toThrow(/non salvata/);
     expect(()=>prepareCasIsolatedDelete(
-      snapshot,snapshot,p.config.name,p.config.description,undefined))
+      snapshot,snapshot,p.config.name,p.config.description,undefined as unknown as string))
       .toThrow(/non salvata/);
     const broken={...snapshot,raw:"broken"};
     expect(()=>prepareCasIsolatedDelete(
