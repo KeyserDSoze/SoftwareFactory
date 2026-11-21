@@ -17,6 +17,7 @@ import {
   buildCasIsolatedConfigEdit,CAS_ISOLATED_NAME_MAX,
   CAS_ISOLATED_DESCRIPTION_MAX,
 } from "../application/cas-isolated-config";
+import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 
 type Props={locale:FactoryLocale};
 
@@ -144,6 +145,49 @@ export default function CasIsolatedEditor({locale}:Props) {
       }
     });
   }
+  function deleteSelected():void {
+    void run(async()=>{
+      const controller=active.current, expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready")
+        throw Error("CAS controller unavailable");
+      // No pending name/description changes or stale in-memory revision.
+      const ticket=prepareCasIsolatedDelete(
+        expected,controller.snapshot(),draftName,draftDescription,
+      );
+      if(!window.confirm(t(locale,"casIsoDeleteBackupConfirm"))) return;
+      // Exact historical JSON (including AI checkpoints) BEFORE tombstoning.
+      // File handoff must precede a separate operator acknowledgement.
+      const url=URL.createObjectURL(new Blob([ticket.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;link.download=ticket.fileName;
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoDeleteSavedConfirm"))) return;
+      if(!window.confirm(
+        t(locale,"casIsoDeleteFinalConfirm")+"\n\n"+
+        ticket.name.slice(0,120)+"\nID: "+ticket.id+
+        "\nrev. "+ticket.revision
+      )) return;
+      // The controller validates this exact token in a single native IDB
+      // readwrite transaction; no legacy delete, retry or silent resurrection.
+      const tombstone=await controller.delete(expected,true);
+      if(tombstone.id!==ticket.id ||
+        tombstone.revision!==ticket.revision+1)
+        throw Error("CAS tombstone ACK does not match expected revision");
+      active.current=null;
+      setSnapshot(null);
+      setDraftName("");setDraftDescription("");
+      setList(null);
+      // Do not make an already acknowledged delete appear to have failed
+      // solely because a later read-only library refresh is unavailable.
+      try{setList(await listCasProjects());}catch{setList(null);}
+      setNotice(t(locale,"casIsoDeleteDone")+
+        " (rev. "+tombstone.revision+")");
+    });
+  }
+
   function save():void {
     void run(async()=>{
       const controller=active.current, expected=snapshot;
@@ -232,6 +276,10 @@ export default function CasIsolatedEditor({locale}:Props) {
         <button type="button" className="secondary"
           disabled={working || !dirty || !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
+        <button type="button" className="secondary"
+          disabled={working || !active.current || Boolean(dirty)}
+          onClick={deleteSelected}>{t(locale,"casIsoDeleteAction")}</button>
+        <p className="helper">{t(locale,"casIsoDeleteExplain")}</p>
         <button type="button" className="secondary" disabled={working}
           onClick={()=>{active.current=null;setSnapshot(null);setList(null);}}>
           {t(locale,"casIsoDiscard")}
