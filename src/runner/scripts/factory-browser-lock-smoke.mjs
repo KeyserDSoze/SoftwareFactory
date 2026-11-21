@@ -619,6 +619,114 @@ if (!inside) {
         globalName:"FactoryCasReconcile",target:"es2022",
       });
       await page.addScriptTag({content:reconciliationBuild.outputFiles[0].text});
+
+      // #145: standalone, read-only IndexedDB library survives a missing OR
+      // corrupted legacy slot. The UI must not silently restore either one.
+      const orphanId="99999999-9999-4999-8999-999999999999";
+      const brokenLegacyId="dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const recoverySources=await page.evaluate(async ({orphanId,brokenLegacyId})=>{
+        const make=(id,name)=>({
+          id,config:{name,requirements:"Historical AI checkpoint"},stages:[],
+          updatedAt:"2026-11-21T13:00:00.000Z",
+        });
+        const orphan=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make(orphanId,"Orphan standalone"),null);
+        const broken=await window.FactoryProjectCas.compareAndSwapCasProject(
+          make(brokenLegacyId,"Legacy corrupted"),null);
+        localStorage.removeItem("softwarefactory.project.library.v1."+orphanId);
+        localStorage.setItem("softwarefactory.project.library.v1."+brokenLegacyId,"{broken");
+        return {orphan,broken};
+      },{orphanId,brokenLegacyId});
+      const listButton=page.getByRole("button",{
+        name:"Mostra copie IndexedDB recuperabili",
+      });
+      await listButton.click();
+      const recoveryList=page.getByTestId("cas-recovery-library");
+      await expect(recoveryList).toContainText("Orphan standalone");
+      await expect(recoveryList).toContainText("Legacy corrupted");
+      const orphanExport=page.getByRole("button",{
+        name:"Esporta JSON storico: Orphan standalone",
+      });
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await orphanExport.click();
+      await expect(orphanExport).toBeVisible();
+      page.once("dialog",dlg=>void dlg.accept());
+      const orphanDownload=page.waitForEvent("download",{timeout:20000});
+      await orphanExport.click();
+      const orphanFile=await orphanDownload;
+      assert.equal(orphanFile.suggestedFilename(),
+        "softwarefactory-indexeddb-recovery-"+orphanId+"-r1.json");
+      assert.equal((await readFile(await orphanFile.path())).toString("utf8"),
+        recoverySources.orphan.raw,"An orphan IDB copy must download exact JSON");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),orphanId),
+        null,"IDB recovery must not recreate missing legacy data");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),brokenLegacyId),
+        "{broken","IDB recovery must not overwrite corrupt legacy data");
+
+      // A concurrent regular CAS write makes the old listed revision stale.
+      await listButton.click();
+      const updatedOrphan=await page.evaluate(async ticket=>{
+        const p=JSON.parse(ticket.raw);
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          ...p,config:{...p.config,name:"Orphan changed in rival tab"},
+        },ticket);
+      },recoverySources.orphan);
+      await orphanExport.click();
+      await expect(page.getByRole("alert")).toContainText("cambiata dall'elenco");
+      assert.equal(updatedOrphan.revision,2);
+
+      // Even same-revision malicious/noncooperative IDB mutation after
+      // *consent starts* must be rejected by exact raw comparison.
+      await listButton.click();
+      const changedExport=page.getByRole("button",{
+        name:"Esporta JSON storico: Orphan changed in rival tab",
+      });
+      const rival=await staging.newPage();
+      await rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      const badRaw=JSON.stringify({
+        ...JSON.parse(updatedOrphan.raw),config:{
+          ...JSON.parse(updatedOrphan.raw).config,name:"Orphan tampered same revision",
+        },
+      });
+      let unexpectedDownload=false;
+      page.on("download",()=>{unexpectedDownload=true;});
+      page.once("dialog",async dlg=>{
+        // Keep the main-page confirmation pending while an independent tab
+        // modifies IDB WITHOUT incrementing the CAS revision.
+        await rival.evaluate(async ({id,revision,raw})=>{
+          const db=await new Promise((resolve,reject)=>{
+            const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+            request.onsuccess=()=>resolve(request.result);
+            request.onerror=()=>reject(Error("Fixture IDB open failed"));
+          });
+          try {
+            await new Promise((resolve,reject)=>{
+              const tx=db.transaction("projects","readwrite");
+              tx.oncomplete=resolve;
+              tx.onabort=()=>reject(Error("Fixture IDB write failed"));
+              tx.objectStore("projects").put({id,revision,raw},id);
+            });
+          } finally {db.close();}
+        },{id:orphanId,revision:2,raw:badRaw});
+        await dlg.accept();
+      });
+      await changedExport.click();
+      await expect(page.getByRole("alert")).toContainText("Copia IndexedDB cambiata");
+      assert.equal(unexpectedDownload,false,
+        "An unversioned raw change during consent must never download");
+
+      // Tombstones remain excluded from discovery even with corrupt legacy.
+      await page.evaluate(async snapshot=>
+        window.FactoryProjectCas.deleteCasProject(snapshot.id,snapshot),
+        recoverySources.broken);
+      await listButton.click();
+      await expect(recoveryList).not.toContainText("Legacy corrupted");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),brokenLegacyId),
+        "{broken","Tombstone must not change the legacy source");
+      console.log("FACTORY_INDEXEDDB_ORPHAN_RECOVERY_E2E_PASS: missing/corrupt legacy, exact JSON, consent, stale list, same-revision tab tamper and tombstone");
       // Inject the non-UI copy helper in two same-origin pages. Even without
       // Web Locks, the strict readwrite transaction admits only one insert.
       const second=await staging.newPage();
