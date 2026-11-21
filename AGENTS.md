@@ -1072,3 +1072,11 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - insertCasProjectNeverSeen verifica tutte le righe/tombstone e capacità fino a 40 nello stesso readwrite transaction; ID esistente anche tombstone è collisione, sempre add e mai put. Segnalare corruzione, quota, errori IDB senza echo di dati e senza fallback legacy.
 - Doppio recheck dello slot prima e dopo la transazione. Le due memorie non hanno CAS comune: se il legacy cambia durante il copy, non affermare che la copia nuova è autorevole né cancellare o sovrascrivere i record.
 - L'editor live resta su localStorage. Non chiudere #139/#92/#91. CI Chromium marker FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS e ADR 0094.
+
+
+## Riconciliazione locale read-only e export storico (#142/#139)
+
+- Il confronto fra raw legacy e CAS deve leggere due volte entrambe le fonti e rifiutare cambi durante la verifica. La risposta è sempre puntuale, mai un CAS fra storage o un'autorizzazione di salvataggio.
+- readCasProjectSlot distingue missing / tombstone / present: non confondere il record cancellato con una copia assente o ripristinarlo automaticamente. Propagare errori IDB/corruzione senza fallback su localStorage.
+- La UI può mostrare soltanto esito, avviso e revisione, mai JSON contenente checkpoint o segreti. Il download dell'IDB divergente è volontario e usa due letture di revisione+raw per rifiutare una copia sostituita; è storico, non installa o approva nulla.
+- Smoke Chromium: FACTORY_INDEXEDDB_RECONCILE_E2E_PASS. Non cambiare writer legacy senza la migrazione completa #139. #91/#92 ancora aperte. ADR 0095.

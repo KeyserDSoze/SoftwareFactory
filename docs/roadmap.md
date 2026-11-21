@@ -1126,3 +1126,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest e Chromium per file JSON esatto, due prompt, duplicate, race dual-tab, stale source e tombstone; marker FACTORY_INDEXEDDB_LEGACY_COPY_E2E_PASS.
 - [ ] Verificare Factory CI, Pages e Installer candidate su medesimo SHA prima di chiudere #141.
 - [ ] #139 rimane aperta: editor write-path async end-to-end, scelta/reload dall'archivio CAS, rollback e UX di ripristino. #91/#92 non sono complete. ADR 0094.
+
+
+## Riconciliazione snapshot legacy vs IDB (#142 — 21/11/2026)
+
+- [x] Lettura read-only di slot missing/tombstone/present; confronto su JSON esatto con doppia verifica delle due fonti.
+- [x] UI IT/EN per stato puntuale e download volontario di copia IDB storica divergente; rifiuto di rev cambiate, senza overwrite o merge.
+- [x] Test unitari per race e indisponibilità storage; Chromium per uguaglianza, divergenza dopo edit legacy, export originale, rev stale e tombstone; marker FACTORY_INDEXEDDB_RECONCILE_E2E_PASS.
+- [ ] Controllare Factory CI, Pages e Installer sullo stesso commit e chiudere solo #142.
+- [ ] Cutover async live e merge/recovery utente ancora da fare in #139, con #91/#92 aperte. ADR 0095.
