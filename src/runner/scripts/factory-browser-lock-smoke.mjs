@@ -1073,6 +1073,7 @@ if (!inside) {
         await tab.addScriptTag({content:casBundle});
       const legacyBefore=await page.evaluate(()=>({
         active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
         slots:Object.keys(localStorage).filter(k=>
           k.startsWith("softwarefactory.project.library.v1."))
           .sort().map(k=>[k,localStorage.getItem(k)]),
@@ -1128,7 +1129,7 @@ if (!inside) {
       assert.equal(project.githubDestination,undefined);
       assert.equal(await page.evaluate(()=>sessionStorage.getItem(
         "softwarefactory.project.active-tab.v1")),
-        JSON.parse(legacyBefore.active).id,
+        legacyBefore.selected,
         "IDB creation must not select a project in the legacy Factory");
 
       // Opening a newly created project still needs the isolated editor's
@@ -1225,6 +1226,7 @@ if (!inside) {
         window.FactoryProjectCas.listCasProjects())).length,40);
       const legacyAfter=await page.evaluate(()=>({
         active:localStorage.getItem("softwarefactory.project.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
         slots:Object.keys(localStorage).filter(k=>
           k.startsWith("softwarefactory.project.library.v1."))
           .sort().map(k=>[k,localStorage.getItem(k)]),
