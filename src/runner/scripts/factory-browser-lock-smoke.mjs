@@ -1198,6 +1198,12 @@ if (!inside) {
         page.removeAllListeners("dialog");
         page.once("dialog",dlg=>void dlg.accept());
         await panel.getByRole("button",{name:"Apri copia IDB: "+name}).click();
+        // Opening is async (native IDB read before the confirmation).
+        // Wait for the confirmed selection before adding a new dialog
+        // handler: otherwise the next handler may accept the same dialog
+        // a second time while the first once() is still pending.
+        await expect(panel.getByTestId("cas-isolated-active"))
+          .toContainText("rev. 1");
       };
       await pick("Real AI success");
       const runner=page.getByTestId("cas-isolated-ai-stage");
