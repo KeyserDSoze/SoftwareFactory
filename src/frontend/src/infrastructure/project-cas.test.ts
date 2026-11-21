@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
-import { compareAndSwapCasProject, deleteCasProject, readCasProject,
+import { compareAndSwapCasProject, deleteCasProject, restoreCasTombstoneProject, readCasProject,
   serializeCasProject, listCasProjects } from "./project-cas";
 
 describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
@@ -30,6 +30,12 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
       .rejects.toThrow(/Versione CAS/);
     await expect(deleteCasProject(p.id,{id:p.id,revision:0,raw:"secret"}))
       .rejects.toThrow(/Versione CAS/);
+    await expect(restoreCasTombstoneProject(p,{id:p.id,revision:2},
+      serializeCasProject(p),false)).rejects.toThrow(/consenso/);
+    await expect(restoreCasTombstoneProject(p,{id:p.id,revision:0},
+      serializeCasProject(p),true)).rejects.toThrow(/Tombstone/);
+    await expect(restoreCasTombstoneProject(p,{id:p.id,revision:2},
+      "not the same bytes",true)).rejects.toThrow(/non identico/);
     expect(open).not.toHaveBeenCalled();
   });
   it("never downgrades to localStorage when IndexedDB is missing", async () => {
@@ -40,6 +46,8 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
     await expect(readCasProject(p.id)).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(listCasProjects()).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(compareAndSwapCasProject(p,null)).rejects.toThrow(/IndexedDB non disponibile/);
+    await expect(restoreCasTombstoneProject(p,{id:p.id,revision:2},
+      serializeCasProject(p),true)).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(deleteCasProject(p.id,{id:p.id,revision:1,raw:serializeCasProject(p)}))
       .rejects.toThrow(/IndexedDB non disponibile/);
     expect(local).not.toHaveBeenCalled();
