@@ -1438,11 +1438,25 @@ if (!inside) {
       page.removeAllListeners("dialog");
       let releaseFinal;
       const finalDialog=new Promise(resolve=>{releaseFinal=resolve;});
-      let raceDialogs=0;
+      let sawBackup=false,sawSaved=false;
       const onRace=async dlg=>{
-        raceDialogs++;
-        if(raceDialogs<3) await dlg.accept();
-        else releaseFinal(dlg);
+        // Browser dialogs can be delivered while a download event is still
+        // settling. Identify the gate by its content, never by an event count.
+        const prompt=dlg.message();
+        if(prompt.startsWith("ULTIMA CONFERMA:")){
+          assert.ok(sawBackup && sawSaved,
+            "Final destructive consent requires BOTH backup acknowledgements");
+          releaseFinal(dlg);
+        }else if(prompt.startsWith("Scaricare il backup JSON ESATTO")){
+          sawBackup=true;
+          await dlg.accept();
+        }else if(prompt.startsWith("Confermi di aver effettivamente SALVATO")){
+          sawSaved=true;
+          await dlg.accept();
+        }else{
+          await dlg.dismiss();
+          throw Error("Unexpected isolated CAS deletion consent gate");
+        }
       };
       page.on("dialog",onRace);
       const raceDownload=page.waitForEvent("download");
