@@ -1122,6 +1122,147 @@ if (!inside) {
     }
 
 
+    // #158: inspect only a pinned native IndexedDB checkpoint. AI strings
+    // are text (never active HTML); third-party links are HTTPS-only; a
+    // rival CAS write requires explicit reopening, not silent adoption.
+    const inspectContext=await browser.newContext();
+    try{
+      const page=await inspectContext.newPage();
+      const rival=await inspectContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="15815815-1581-4581-8581-158158158158";
+      const original=await rival.evaluate(async id=>{
+        const now="2026-11-22T08:00:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(id=>({
+            id,label:id,status:"pending",output:"",sources:[],
+          }));
+        stages[0].status="complete";
+        stages[0].output="<img src=x onerror=alert('pwn')> AI_MARKDOWN_TEXT";
+        stages[0].sources=[
+          {title:"Trusted HTTPS article",url:"https://example.org/safe?q=1",
+            snippet:"History from outside; not an attestation",query:"q",fetchedAt:now},
+          {title:"Injected JS source",url:"javascript:alert(1)",
+            snippet:"unsafe but inert",query:"q",fetchedAt:now},
+        ];
+        stages[1].status="running";
+        stages[2].status="failed";
+        stages[2].error="SECRET_UNVERIFIED_PROVIDER_ERROR_MUST_NOT_RENDER";
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Stage inspection candidate",
+            description:"Read-only checkpoint inspection",
+            requirements:"Never execute HTML or trust sources"},
+          stages,createdAt:now,updatedAt:now,
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Stage inspection candidate",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const inspector=panel.getByTestId("cas-isolated-stage-inspection");
+      await expect(inspector.locator("li[data-testid^=cas-isolated-stage-]"))
+        .toHaveCount(6);
+      const features=inspector.getByTestId("cas-isolated-stage-features");
+      await expect(features.getByTestId("cas-isolated-stage-status"))
+        .toContainText("Output AI salvato");
+      await features.locator("details").first().locator("summary").click();
+      await expect(features.getByTestId("cas-isolated-stage-output"))
+        .toContainText("<img src=x onerror=alert('pwn')>");
+      assert.equal(await features.locator("img").count(),0,
+        "Model output must never create an active HTML image element");
+      assert.equal(await features.locator("script").count(),0,
+        "Model output must never create script");
+      await features.locator("details").last().locator("summary").click();
+      const good=features.getByTestId("cas-isolated-source-link");
+      await expect(good).toHaveCount(1);
+      await expect(good).toHaveAttribute("href","https://example.org/safe?q=1");
+      await expect(good).toHaveAttribute("rel",/noopener noreferrer nofollow/);
+      await expect(good).toHaveAttribute("target","_blank");
+      await expect(features.getByTestId("cas-isolated-untrusted-source"))
+        .toContainText("link non sicuro");
+      assert.equal(await features.locator("a[href^='javascript:']").count(),0);
+      const running=inspector.getByTestId("cas-isolated-stage-competitors");
+      await expect(running.getByTestId("cas-isolated-stage-status"))
+        .toContainText("In corso o interrotto");
+      await expect(running).toContainText("reset selettivo");
+      await expect(inspector.getByTestId("cas-isolated-stage-technical"))
+        .toContainText("Errore AI registrato");
+      await expect(inspector).not.toContainText(
+        "SECRET_UNVERIFIED_PROVIDER_ERROR_MUST_NOT_RENDER");
+      await panel.getByTestId("cas-isolated-stage-reset").locator("select")
+        .selectOption("competitors");
+      await expect(panel.getByTestId("cas-isolated-stage-reset")
+        .getByRole("button",{name:/Azzera fase/})).toBeEnabled();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original,
+        "Inspecting an orphan running stage cannot reset it automatically");
+      const winner=await rival.evaluate(async expected=>{
+        const project=JSON.parse(expected.raw);
+        project.stages[0].output="RIVAL_NEW_OUTPUT_AFTER_INSPECTION";
+        return window.FactoryProjectCas.compareAndSwapCasProject(project,expected);
+      },original);
+      await panel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      await expect(features.getByTestId("cas-isolated-stage-output"))
+        .not.toContainText("RIVAL_NEW_OUTPUT_AFTER_INSPECTION");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const restored=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.deepEqual(restored,winner,
+        "Reload must preserve the winner, not the pinned historical projection");
+      const panelAgain=page.getByTestId("cas-isolated-editor");
+      await panelAgain.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panelAgain.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panelAgain.getByRole("button",{
+        name:"Apri copia IDB: Stage inspection candidate",
+      }).click();
+      await expect(panelAgain.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      const currentFeatures=panelAgain.getByTestId("cas-isolated-stage-features");
+      await currentFeatures.locator("details").first().locator("summary").click();
+      await expect(currentFeatures.getByTestId("cas-isolated-stage-output"))
+        .toContainText("RIVAL_NEW_OUTPUT_AFTER_INSPECTION");
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Inspecting native stages must not mutate the live legacy workspace");
+      console.log("FACTORY_INDEXEDDB_STAGE_INSPECTION_E2E_PASS: six pinned stages, HTML inert, HTTPS-only links, running recovery guidance, rival read-only reopen and unchanged legacy");
+    }finally{
+      await inspectContext.close();
+    }
+
     // #157: Real SPA opt-in AI stage; network provider is mocked only at
     // HTTP boundary, while ALL IDB CAS transactions use native Chromium.
     const casAiContext=await browser.newContext({acceptDownloads:true});

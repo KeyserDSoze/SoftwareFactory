@@ -29,11 +29,20 @@ import {
 } from "../application/cas-isolated-config";
 import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
+import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
 type Props={locale:FactoryLocale;settings:FactorySettings};
+
+const CAS_INSPECTION_STATUS_KEY={
+  pending:"casIsoInspectPending",
+  running:"casIsoInspectRunning",
+  complete:"casIsoInspectComplete",
+  failed:"casIsoInspectFailed",
+  invalid:"casIsoInspectInconsistent",
+} as const;
 
 function exact(a:CasProjectSnapshot,b:CasProjectSnapshot):boolean {
   return a.id===b.id && a.revision===b.revision && a.raw===b.raw;
@@ -65,6 +74,9 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   const dirty=hasCasIsolatedUnsavedDraft(
     snapshot,draftName,draftDescription,draftRequirements,
   );
+  // This projection is read-only and pinned to the selection's exact CAS
+  // revision; a rival tab cannot silently replace the text being inspected.
+  const inspectedStages=inspectCasIsolatedStages(snapshot);
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
@@ -476,6 +488,75 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
         <button type="button" className="secondary"
           disabled={working || !dirty || !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
+        <div data-testid="cas-isolated-stage-inspection">
+          <h4>{t(locale,"casIsoInspectTitle")}</h4>
+          <p className="helper">{t(locale,"casIsoInspectExplain")}</p>
+          {inspectedStages===null ?
+            <p role="alert">{t(locale,"casIsoInspectInvalidSnapshot")}</p>:
+            <ol>{inspectedStages.map((stage,index)=>
+              <li key={stage.id}
+                data-testid={"cas-isolated-stage-"+stage.id}>
+                <strong>{STAGES[index].label}</strong>{" · "}
+                <span data-testid="cas-isolated-stage-status">
+                  {t(locale,CAS_INSPECTION_STATUS_KEY[stage.status])}
+                </span>
+                {stage.status==="running" &&
+                  <p className="helper">
+                    {t(locale,"casIsoInspectRunningRecovery")}
+                  </p>}
+                {stage.status==="complete" &&
+                  <p className="helper">
+                    {t(locale,"casIsoInspectNotVerified")}
+                  </p>}
+                {stage.status==="failed" &&
+                  <p className="helper">
+                    {t(locale,"casIsoInspectFailedInfo")}
+                  </p>}
+                {stage.status==="invalid" &&
+                  <p className="helper">
+                    {t(locale,"casIsoInspectInconsistentInfo")}
+                  </p>}
+                {stage.output && <details>
+                  <summary>{t(locale,"casIsoInspectOutput")}
+                    {stage.outputTruncated ?
+                      " · "+t(locale,"casIsoInspectTruncated") : ""}
+                  </summary>
+                  {/* React renders historical model text as TEXT, never HTML. */}
+                  <pre data-testid="cas-isolated-stage-output"
+                    style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>
+                    {stage.output}
+                  </pre>
+                </details>}
+                {stage.sourceTotal>0 && <details>
+                  <summary>{t(locale,"casIsoInspectSources")}
+                    {" ("+stage.sourceTotal+")"}
+                    {stage.sourcesTruncated ?
+                      " · "+t(locale,"casIsoInspectTruncated") : ""}
+                  </summary>
+                  <p className="helper">
+                    {t(locale,"casIsoInspectSourcesUntrusted")}
+                  </p>
+                  <ul>{stage.sources.map((source,i)=>
+                    <li key={i}>
+                      {source.href?
+                        <a data-testid="cas-isolated-source-link"
+                          href={source.href} target="_blank"
+                          rel="noopener noreferrer nofollow">
+                          {source.title ||
+                            t(locale,"casIsoInspectUnknownSource")}
+                        </a>:
+                        <span data-testid="cas-isolated-untrusted-source">
+                          {source.title ||
+                            t(locale,"casIsoInspectUnknownSource")}
+                          {" · "+t(locale,"casIsoInspectUnsafeSource")}
+                        </span>}
+                      {source.snippet && <p className="helper">
+                        {source.snippet}
+                      </p>}
+                    </li>)}</ul>
+                </details>}
+              </li>)}</ol>}
+        </div>
         <div data-testid="cas-isolated-stage-reset">
           <p className="helper">{t(locale,"casIsoStageResetExplain")}</p>
           <label>{t(locale,"casIsoStageResetSelection")}

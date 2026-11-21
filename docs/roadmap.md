@@ -1258,3 +1258,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest preflight puro e Chromium vero a due schede con provider HTTP simulato (solo nel test), rifiuti di tutti i consensi, backup, successo, cancel, rival winner, reload e legacy invariato. Marker `FACTORY_INDEXEDDB_AI_STAGE_UI_E2E_PASS`.
 - [ ] Gate di chiusura: Factory CI/Pages/Installer candidate completed/success sullo **stesso SHA main** e marker Chromium confermato.
 - [ ] Cutover coordinato di **tutti** i writer live `App.tsx` e UX crash/restore/rollback/versionchange/quota rimane #139; sync multi-device/provider #91/#92 aperte.
+
+
+## Read-only inspection degli stage AI CAS (#158 — 22 novembre 2026)
+
+- [x] Proiezione pura dello snapshot nativo IDB: ordine e schema sei stage, stato senza false completion, testo visibile limitato, fonti HTTPS non credenzializzate soltanto e nessuna chiamata storage/provider.
+- [x] UI React IT/EN nel pannello CAS opt-in: output AI come testo inerte, stato `running` dopo crash con istruzioni per reset #155 a backup/tre consensi, failure generica e risultati storici non spacciati per test/review.
+- [x] Vitest: canonical raw, source hostile, truncation, stage inconsistent/empty, zero I/O; Chromium due tab con HTML malevolo e fonti malicious, pinned view, rival writer, reload/reopen e localStorage invariato. Marker `FACTORY_INDEXEDDB_STAGE_INSPECTION_E2E_PASS`.
+- [ ] Gate di chiusura #158: Factory CI, Pages, Installer candidate completed/success sullo stesso SHA main e marker browser nel log.
+- [ ] Migrare tutti i writer del LIVE `App.tsx` + bootstrap/switch/GitHub/cloud/Code Agent e UX rollback/quota/versionchange nella #139. #91/#92 non dimostrano CAS multi-device.
