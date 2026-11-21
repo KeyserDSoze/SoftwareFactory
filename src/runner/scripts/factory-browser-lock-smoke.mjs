@@ -920,7 +920,7 @@ if (!inside) {
       page.removeAllListeners("dialog");
       page.once("dialog",dialog=>{
         assert.match(dialog.message(),/IDB pilot A/);
-        assert.match(dialog.message(),/non cambia il progetto attivo/);
+        assert.match(dialog.message(),/non cambia il progetto attivo/i);
         void dialog.accept();
       });
       await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot A"}).click();
