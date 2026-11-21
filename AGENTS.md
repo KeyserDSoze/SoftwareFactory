@@ -1080,3 +1080,11 @@ Oltre ai test di funzioni `github-ack-recovery.test.ts`, il test `factory-browse
 - readCasProjectSlot distingue missing / tombstone / present: non confondere il record cancellato con una copia assente o ripristinarlo automaticamente. Propagare errori IDB/corruzione senza fallback su localStorage.
 - La UI può mostrare soltanto esito, avviso e revisione, mai JSON contenente checkpoint o segreti. Il download dell'IDB divergente è volontario e usa due letture di revisione+raw per rifiutare una copia sostituita; è storico, non installa o approva nulla.
 - Smoke Chromium: FACTORY_INDEXEDDB_RECONCILE_E2E_PASS. Non cambiare writer legacy senza la migrazione completa #139. #91/#92 ancora aperte. ADR 0095.
+
+
+## Sessione editor IndexedDB asincrona NON collegata al live editor (#143/#139)
+
+- `openCasEditorSession` è solo un componente infrastrutturale per il futuro cutover, non una modalità editabile della SPA attuale. Richiede progetto IndexedDB presente e JSON canonico; manca bootstrap/import automatico, tombstone non viene reintrodotta.
+- Un `commit(next, expected)` richiede il token esatto (id, revisione e raw). Rifiutare operazioni simultanee nello stesso handle prima del DB. La nuova revisione può diventare corrente solo dopo il vero `tx.oncomplete` di CAS. Dopo errore, abort, conflitto o ack ambiguo, bloccare l'handle: mai optimistic success, retry automatico, rebase o silent fallback a localStorage.
+- Un'altra scheda che scrive direttamente via IndexedDB CAS deve poter vincere la transazione: il token stale della sessione deve fallire chiuso, richiedendo ispezione e `openCasEditorSession` esplicita. Il Web Lock del browser non è il guard di sicurezza definitivo.
+- Non collegare `App.tsx`, pipeline, Code Agent, GitHub ACK, import/restore o switch a un solo pezzo CAS finché **tutti** i write path siano stati convertiti a un unico source of truth async (#139). L'archivio IDB è nello stesso profilo/browser/origin, non un servizio cloud/multi-device. Gate Chromium `FACTORY_INDEXEDDB_ASYNC_EDITOR_E2E_PASS`. ADR 0096.

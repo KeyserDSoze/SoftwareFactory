@@ -1135,3 +1135,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Test unitari per race e indisponibilità storage; Chromium per uguaglianza, divergenza dopo edit legacy, export originale, rev stale e tombstone; marker FACTORY_INDEXEDDB_RECONCILE_E2E_PASS.
 - [ ] Controllare Factory CI, Pages e Installer sullo stesso commit e chiudere solo #142.
 - [ ] Cutover async live e merge/recovery utente ancora da fare in #139, con #91/#92 aperte. ADR 0095.
+
+
+## Preparazione writer CAS asincrono e fencing su token (#143 — 21/11/2026)
+
+- [x] Sessione IDB esplicita con validazione del JSON canonico, solo progetto presente, nessun auto-import/restore o tombstone revival.
+- [x] `commit` asincrono con token id/revision/raw, rifiuto delle operazioni concorrenti e token aggiornato solo post-commit CAS; errore → handle bloccato senza retry/fallback.
+- [x] Vitest (ack in volo, stale ticket, mancata transazione, noncanonicità e IDB indisponibile) + Chromium due schede, writer non cooperativo, reload, doppio submit, delete/tombstone, nessuna scrittura legacy. Marker `FACTORY_INDEXEDDB_ASYNC_EDITOR_E2E_PASS`.
+- [ ] Confermare Factory CI/Pages/Installer sullo stesso SHA e chiudere solo #143.
+- [ ] **#139 ancora aperta:** convertire tutte le azioni del live editor e le integrazioni GitHub/runner/import/restore a CAS async e selezione da IDB, UX rollback e recovery. #91/#92 ancora aperte. ADR 0096.
