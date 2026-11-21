@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import type { FactoryProject } from "../domain/types";
-import { listCasProjects } from "./project-cas";
+import { deleteCasProject, listCasProjects } from "./project-cas";
 import { openCasEditorSession } from "./project-cas-editor-session";
 import type { CasEditorSession } from "./project-cas-editor-session";
 import { openCasSelectionController } from "./project-cas-selection";
@@ -9,10 +9,11 @@ import { openCasSelectionController } from "./project-cas-selection";
 vi.mock("./project-cas-editor-session",()=>({openCasEditorSession:vi.fn()}));
 vi.mock("./project-cas",async getOriginal=>{
   const original=await getOriginal<typeof import("./project-cas")>();
-  return {...original,listCasProjects:vi.fn()};
+  return {...original,listCasProjects:vi.fn(),deleteCasProject:vi.fn()};
 });
 const open=vi.mocked(openCasEditorSession);
 const list=vi.mocked(listCasProjects);
+const drop=vi.mocked(deleteCasProject);
 const deferred=<T>()=>{
   let resolve!: (value:T)=>void;
   let reject!: (reason:Error)=>void;
@@ -42,7 +43,7 @@ function session(initial:ReturnType<typeof sample>) {
 }
 
 describe("future CAS selection coordinator (#144)",()=>{
-  beforeEach(()=>{open.mockReset();list.mockReset();});
+  beforeEach(()=>{open.mockReset();list.mockReset();drop.mockReset();});
 
   it("prepares source+destination ticket before consent and switches only after exact reread",async()=>{
     const a=sample("A"),b=sample("B");
@@ -152,4 +153,47 @@ describe("future CAS selection coordinator (#144)",()=>{
     list.mockResolvedValueOnce([]);
     await expect(ctrl.list()).resolves.toEqual([]);
   });
+  it("requires explicit deletion consent and exact current token",async()=>{
+    const a=sample("A"), handle=session(a);
+    open.mockResolvedValue(handle.handle);
+    const controller=await openCasSelectionController(a.project.id);
+    await expect(controller.delete(a.snapshot,false)).rejects.toThrow(/consenso/);
+    await expect(controller.delete({...a.snapshot,raw:"other"},true)).rejects.toThrow(/obsoleto/);
+    expect(controller.state()).toBe("ready");
+    expect(drop).not.toHaveBeenCalled();
+  });
+
+  it("fences commit and switch while delete is pending, then stays blocked after tombstone",async()=>{
+    const a=sample("A"),b=sample("B"),slow=deferred<{id:string;revision:number}>();
+    open.mockResolvedValueOnce(session(a).handle);
+    drop.mockReturnValueOnce(slow.promise);
+    const controller=await openCasSelectionController(a.project.id);
+    const deleting=controller.delete(a.snapshot,true);
+    expect(controller.state()).toBe("saving");
+    await expect(controller.commit(a.project,a.snapshot)).rejects.toThrow(/sospesa/);
+    await expect(controller.prepareSwitch(b.project.id)).rejects.toThrow(/sospesa/);
+    await expect(controller.delete(a.snapshot,true)).rejects.toThrow(/sospesa/);
+    expect(controller.snapshot()).toEqual(a.snapshot);
+    slow.resolve({id:a.project.id,revision:2});
+    await expect(deleting).resolves.toEqual({id:a.project.id,revision:2});
+    expect(controller.state()).toBe("blocked");
+    await expect(controller.commit(a.project,a.snapshot)).rejects.toThrow(/sospesa/);
+    expect(drop).toHaveBeenCalledWith(a.project.id,a.snapshot);
+    expect(drop).toHaveBeenCalledOnce();
+  });
+
+  it("blocks ambiguous deletion failure and inconsistent acknowledgement",async()=>{
+    const a=sample("A");
+    open.mockResolvedValue(session(a).handle);
+    drop.mockRejectedValueOnce(Error("SECRET_NATIVE_QUOTA"));
+    const controller=await openCasSelectionController(a.project.id);
+    await expect(controller.delete(a.snapshot,true)).rejects.toThrow(/non confermata/);
+    expect(controller.state()).toBe("blocked");
+    await expect(controller.delete(a.snapshot,true)).rejects.toThrow(/sospesa/);
+    const second=await openCasSelectionController(a.project.id);
+    drop.mockResolvedValueOnce({id:a.project.id,revision:30});
+    await expect(second.delete(a.snapshot,true)).rejects.toThrow(/non confermata/);
+    expect(second.state()).toBe("blocked");
+  });
+
 });

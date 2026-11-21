@@ -7,8 +7,8 @@
  * ID/revision/JSON after consent. Never silently adopt later tab writes.
  */
 import type { FactoryProject } from "../domain/types";
-import { listCasProjects } from "./project-cas";
-import type { CasProjectChoice, CasProjectSnapshot } from "./project-cas";
+import { deleteCasProject, listCasProjects } from "./project-cas";
+import type { CasProjectChoice, CasProjectSnapshot, CasProjectTombstone } from "./project-cas";
 import { openCasEditorSession } from "./project-cas-editor-session";
 import type { CasEditorSession } from "./project-cas-editor-session";
 
@@ -25,6 +25,7 @@ export type CasSelectionController = Readonly<{
   prepareSwitch(id: string): Promise<CasSwitchTicket>;
   confirmSwitch(ticket: CasSwitchTicket): Promise<CasProjectSnapshot>;
   commit(next: FactoryProject, expected: CasProjectSnapshot): Promise<CasProjectSnapshot>;
+  delete(expected: CasProjectSnapshot, consent: boolean): Promise<CasProjectTombstone>;
 }>;
 
 function frozenSnapshot(value: CasProjectSnapshot): CasProjectSnapshot {
@@ -116,6 +117,33 @@ export async function openCasSelectionController(id: string): Promise<CasSelecti
         // ambiguous CAS/conflict blocks until explicit full reopen.
         state = active.state() === "blocked" ? "blocked" : "ready";
         throw Error("Salvataggio IndexedDB non confermato: verifica il progetto prima di continuare.");
+      }
+    },
+    delete: async (expected: CasProjectSnapshot, consent: boolean) => {
+      requireReady(state);
+      if (consent !== true)
+        throw Error("Eliminazione IndexedDB non autorizzata: consenso obbligatorio.");
+      const before=active.snapshot();
+      if (!exact(before, expected))
+        throw Error("Ticket cancellazione IndexedDB obsoleto.");
+      state = "saving";
+      try {
+        // Native deleteCasProject fences against direct noncooperating writers.
+        // No success/advance before the IDB transaction oncomplete.
+        const tombstone=await deleteCasProject(before.id,before);
+        if (tombstone.id !== before.id ||
+            tombstone.revision !== before.revision + 1)
+          throw Error("Conferma tombstone incoerente.");
+        generation++;
+        // The selected project no longer exists. Never leave a writable
+        // controller pointing at deleted state; explicit reopen is required.
+        state = "blocked";
+        return Object.freeze({id:tombstone.id,revision:tombstone.revision});
+      } catch {
+        // An aborted/lost acknowledgement might already have deleted the
+        // project. Do not retry or continue editing with the old token.
+        state = "blocked";
+        throw Error("Eliminazione IndexedDB non confermata: verifica la tombstone prima di proseguire.");
       }
     },
   } satisfies CasSelectionController);
