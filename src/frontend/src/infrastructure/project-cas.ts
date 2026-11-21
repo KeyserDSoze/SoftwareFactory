@@ -5,7 +5,7 @@
  * legacy localStorage writers are fenced.
  *
  * Never await a promise inside a readwrite transaction: IDB will deactivate
- * it between event-loop tasks. The get/compare/put/delete run entirely in
+ * it between event-loop tasks. The get/compare/scan/put/delete run entirely in
  * request callbacks in ONE transaction; acknowledgement is tx.oncomplete.
  */
 import type { FactoryProject } from "../domain/types";
@@ -76,7 +76,9 @@ function checkExpected(id: string, expected: CasProjectSnapshot | null): void {
 }
 
 function matchesExpected(current: Row | null, expected: CasProjectSnapshot | null): boolean {
-  if (expected === null) return current === null || current.raw === null;
+  // A tombstone is NOT a missing row. Only an explicit restore with the
+  // exact tombstone generation, backup and consent may resurrect it (#147).
+  if (expected === null) return current === null;
   return current !== null && current.raw !== null &&
     current.revision === expected.revision && current.raw === expected.raw;
 }
@@ -225,6 +227,8 @@ export async function listCasProjects(): Promise<CasProjectChoice[]> {
 export async function compareAndSwapCasProject(
   project: FactoryProject, expected: CasProjectSnapshot | null,
 ): Promise<CasProjectSnapshot> {
+  // A null ticket is a never-seen insert, NOT permission to resurrect a
+  // deleted/tombstoned record. Use restoreCasTombstoneProject for that.
   // Validation is entirely before opening a readwrite transaction.
   const raw = serializeCasProject(project);
   checkExpected(project.id, expected);
@@ -258,9 +262,42 @@ export async function compareAndSwapCasProject(
           failure = "Limite revisioni IndexedDB raggiunto.";
           tx.abort(); return;
         }
+        if (expected === null) {
+          // New-project capacity, existing row corruption and the insert
+          // must be checked in this SAME readwrite transaction (#147).
+          // Do not make a non-atomic preflight list/read in another tx.
+          let active = 0;
+          const scan = store.openCursor();
+          scan.onsuccess = () => {
+            try {
+              const cursor = scan.result;
+              if (!cursor) {
+                next = {id:project.id,revision,raw};
+                store.add({id:project.id,revision,raw} satisfies Row,project.id);
+                return;
+              }
+              if (typeof cursor.key !== "string") throw Error("Invalid key");
+              checkId(cursor.key);
+              const row = readRow(cursor.value as unknown,cursor.key);
+              if (!row) throw Error("Missing row");
+              if (row.raw !== null) {
+                active++;
+                if (active >= 40) {
+                  failure = "Libreria IndexedDB piena (40 progetti).";
+                  tx.abort(); return;
+                }
+              }
+              cursor.continue();
+            } catch {
+              failure = "Archivio IndexedDB corrotto: insert CAS bloccata.";
+              tx.abort();
+            }
+          };
+          return;
+        }
+        // Update of a previously-present project cannot increase the active
+        // record count and requires the exact revision+raw CAS ticket.
         next = { id: project.id, revision, raw };
-        // No Promise/await between get and put. The single readwrite
-        // transaction serializes even two tabs that ignore Web Locks.
         store.put({id: project.id, revision, raw} satisfies Row, project.id);
       };
     });
@@ -370,7 +407,8 @@ export async function deleteCasProject(
 
 /**
  * Explicit, user-approved resurrection from an EXISTING tombstone (#146).
- * Unlike compareAndSwapCasProject(project, null), this requires the exact
+ * This is the ONLY tombstone restore path: generic CAS with expected=null
+ * now rejects all pre-existing IDs, including tombstones. It requires the exact
  * deletion generation, a byte-identical backup and an explicit positive
  * consent. The read, capacity scan and put use the SAME readwrite IDB
  * transaction. No localStorage fallback, automatic restore or retry.
