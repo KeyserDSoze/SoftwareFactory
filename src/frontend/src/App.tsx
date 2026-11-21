@@ -29,6 +29,7 @@ import { inspectGithubRepository } from "./infrastructure/github-discovery";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
+import { prepareLegacyCasCopy, legacyCasBackupJson, copyLegacyCasTicket } from "./infrastructure/project-cas-migration";
 import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
 import { assertLocalProjectUnchanged, prepareLocalProjectSwitch,
   readConfirmedLocalProjectSwitch } from "./infrastructure/local-project-switch";
@@ -587,6 +588,33 @@ export default function App() {
       setNotice("Versione della libreria locale caricata. Autosync disabilitato per sicurezza.");
     } catch(error) { setError(error instanceof Error ? error.message : String(error)); }
   }
+
+  async function copyActiveProjectToIndexedDb(): Promise<void> {
+    const locale=normalizeLocale(settingsRef.current.language);
+    if (busy || projectSwitchRef.current || localConflict || !writerLeaseReady ||
+        writerLeaseRef.current?.projectId !== projectRef.current.id) {
+      setError(t(locale,"casCopyUnavailable"));
+      return;
+    }
+    try {
+      const ticket=prepareLegacyCasCopy(projectRef.current.id);
+      if (!window.confirm(t(locale,"casCopyConfirmExport"))) return;
+      const raw=legacyCasBackupJson(ticket);
+      const url=URL.createObjectURL(new Blob([raw],{type:"application/json"}));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-pre-indexeddb-"+ticket.id+".json";
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      // Starting a browser download does not verify that the user saved it.
+      if (!window.confirm(t(locale,"casCopyConfirmSaved"))) return;
+      setBusy(true); setOperation(t(locale,"casCopyBusy"));
+      await copyLegacyCasTicket(ticket,true);
+      setNotice(t(locale,"casCopyDone"));
+    } catch(e) {
+      setError(e instanceof Error ? e.message : t(locale,"casCopyFailure"));
+    } finally { setBusy(false); setOperation(""); }
+  }
   function downloadRecoveryProject(project: FactoryProject): void {
     // Explicit single-project recovery file; no PAT, AI API or cloud credentials
     // are included (they are stored in the browser's session/device vault).
@@ -854,6 +882,8 @@ export default function App() {
                 </option>)}
               </select>
             </label>
+            <button className="secondary" disabled={busy || !writerLeaseReady || Boolean(localConflict)} onClick={() => void copyActiveProjectToIndexedDb()}><Download size={15}/>{t(normalizeLocale(settings.language),"casCopyButton")}</button>
+            <p className="helper">{t(normalizeLocale(settings.language),"casCopyExplain")}</p>
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
           </section>
