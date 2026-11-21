@@ -30,6 +30,7 @@ import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 import { prepareLegacyCasCopy, legacyCasBackupJson, copyLegacyCasTicket } from "./infrastructure/project-cas-migration";
+import { inspectLegacyCasCopy, readCasExportSnapshot, type CasCopyInspection } from "./infrastructure/project-cas-reconciliation";
 import { acquireProjectWriterLease, type ProjectWriterLease } from "./infrastructure/project-writer-lease";
 import { assertLocalProjectUnchanged, prepareLocalProjectSwitch,
   readConfirmedLocalProjectSwitch } from "./infrastructure/local-project-switch";
@@ -71,6 +72,7 @@ function SectionHead({ eyebrow, title, text }: { eyebrow: string; title: string;
 export default function App() {
   const [project, setProject] = useState<FactoryProject>(loadProject);
   const [projectIndexRevision, setProjectIndexRevision] = useState(0);
+  const [casInspection, setCasInspection] = useState<CasCopyInspection | null>(null);
   const [settings, setSettings] = useState<FactorySettings>(loadSettings);
   const [tab, setTab] = useState<Tab>("workspace");
   const [selectedStage, setSelectedStage] = useState<StageId>("features");
@@ -156,6 +158,7 @@ export default function App() {
           event.newValue === localStorage.getItem(event.key)) {
         // If this tab never acquired A because the writer is in another tab,
         // retain that knowledge: switching to an unrelated B remains safe.
+        setCasInspection(null);
         setLocalConflict("Un'altra scheda ha modificato il progetto aperto. " +
           "Questa scheda non deve sovrascrivere la versione aggiornata.");
         setPublishConfirmed(false);
@@ -304,6 +307,7 @@ export default function App() {
       const stored = persistProjectIfUnchanged(nextProject, previous);
       localBaselineRef.current.set(nextProject.id, stored);
       projectRef.current = nextProject;
+      setCasInspection(null);
       setProject(nextProject);
       setProjectIndexRevision(v => v + 1);
       return true;
@@ -610,9 +614,53 @@ export default function App() {
       if (!window.confirm(t(locale,"casCopyConfirmSaved"))) return;
       setBusy(true); setOperation(t(locale,"casCopyBusy"));
       await copyLegacyCasTicket(ticket,true);
+      setCasInspection(null);
       setNotice(t(locale,"casCopyDone"));
     } catch(e) {
       setError(e instanceof Error ? e.message : t(locale,"casCopyFailure"));
+    } finally { setBusy(false); setOperation(""); }
+  }
+
+  async function inspectActiveCasCopy(): Promise<void> {
+    if (busy) return;
+    const id=projectRef.current.id;
+    const locale=normalizeLocale(settingsRef.current.language);
+    setCasInspection(null);
+    setBusy(true); setOperation(t(locale,"casInspectBusy"));
+    try {
+      const result=await inspectLegacyCasCopy(id);
+      if (projectRef.current.id !== id)
+        throw Error(t(locale,"casInspectChanged"));
+      setCasInspection(result);
+    } catch(e) {
+      setError(e instanceof Error ? e.message : t(locale,"casInspectFailed"));
+    } finally { setBusy(false); setOperation(""); }
+  }
+
+  async function exportInspectedCasCopy(): Promise<void> {
+    if (busy || !casInspection || casInspection.id !== projectRef.current.id ||
+        casInspection.status !== "diverged" || !casInspection.revision) return;
+    const selected=casInspection;
+    const locale=normalizeLocale(settingsRef.current.language);
+    if (!window.confirm(t(locale,"casExportConfirm"))) return;
+    setBusy(true); setOperation(t(locale,"casExportBusy"));
+    try {
+      // Version and exact source JSON are rechecked in a fresh IDB read.
+      // The result is a HISTORICAL file: no writer or reconciliation occurs.
+      const snapshot=await readCasExportSnapshot(selected.id,selected.revision!);
+      if (projectRef.current.id !== selected.id)
+        throw Error(t(locale,"casInspectChanged"));
+      const url=URL.createObjectURL(new Blob([snapshot.raw],{type:"application/json"}));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-indexeddb-recovery-"+snapshot.id+"-r"+snapshot.revision+".json";
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      setNotice(t(locale,"casExportDone"));
+      setCasInspection(null); // Never retain a stale comparison after export.
+    } catch(e) {
+      setCasInspection(null);
+      setError(e instanceof Error ? e.message : t(locale,"casExportFailed"));
     } finally { setBusy(false); setOperation(""); }
   }
   function downloadRecoveryProject(project: FactoryProject): void {
@@ -884,6 +932,22 @@ export default function App() {
             </label>
             <button className="secondary" disabled={busy || !writerLeaseReady || Boolean(localConflict)} onClick={() => void copyActiveProjectToIndexedDb()}><Download size={15}/>{t(normalizeLocale(settings.language),"casCopyButton")}</button>
             <p className="helper">{t(normalizeLocale(settings.language),"casCopyExplain")}</p>
+            <button className="secondary" disabled={busy} onClick={() => void inspectActiveCasCopy()}>
+              <Search size={15}/>{t(normalizeLocale(settings.language),"casInspectButton")}
+            </button>
+            {casInspection?.id === project.id && <div className="helper" data-testid="cas-inspection-status" role="status">
+              <strong>{t(normalizeLocale(settings.language),
+                casInspection.status === "missing" ? "casInspectMissing" :
+                casInspection.status === "tombstone" ? "casInspectTombstone" :
+                casInspection.status === "identical" ? "casInspectIdentical" : "casInspectDiverged")}</strong>
+              {casInspection.revision ? " (rev. " + casInspection.revision + ")" : ""}
+              <p>{t(normalizeLocale(settings.language),"casInspectDisclaimer")}</p>
+              {casInspection.status === "diverged" && casInspection.revision && <button className="secondary"
+                disabled={busy} onClick={() => void exportInspectedCasCopy()}>
+                <Download size={15}/>{t(normalizeLocale(settings.language),"casExportButton")}
+              </button>}
+            </div>}
+
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
           </section>
