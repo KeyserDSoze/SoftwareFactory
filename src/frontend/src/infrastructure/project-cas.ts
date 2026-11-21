@@ -229,6 +229,62 @@ export async function compareAndSwapCasProject(
   } finally { db.close(); }
 }
 
+
+/** Strict, never-seen IDB insert for operator-approved legacy staging (#141).
+ * A tombstone is an existing ID; all rows and the 40-active capacity are
+ * checked inside the same transaction as the insert, not before it.
+ */
+export async function insertCasProjectNeverSeen(
+  project: FactoryProject, exactRaw: string,
+): Promise<CasProjectSnapshot> {
+  const raw = serializeCasProject(project);
+  if (raw !== exactRaw) throw Error("Snapshot legacy non identico: copia rifiutata.");
+  const db = await openCasDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const store = tx.objectStore(STORE);
+      let failure = "Copia IndexedDB interrotta.";
+      let written = false;
+      tx.oncomplete = () => {
+        if (written) resolve({id: project.id, revision: 1, raw});
+        else reject(Error("Copia IndexedDB non confermata."));
+      };
+      tx.onabort = () => reject(Error(failure));
+      tx.onerror = () => reject(Error("Copia IndexedDB non riuscita."));
+      let active = 0;
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        try {
+          const cursor = req.result;
+          if (!cursor) {
+            written = true;
+            store.add({id: project.id, revision: 1, raw} satisfies Row, project.id);
+            return;
+          }
+          if (typeof cursor.key !== "string") throw Error("Invalid key");
+          checkId(cursor.key);
+          const row = readRow(cursor.value as unknown, cursor.key);
+          if (!row) throw Error("Missing row");
+          if (row.id === project.id) {
+            failure = "Progetto già presente in IndexedDB (anche come tombstone).";
+            tx.abort(); return;
+          }
+          if (row.raw !== null) active++;
+          if (active >= 40) {
+            failure = "Libreria IndexedDB piena (40 progetti).";
+            tx.abort(); return;
+          }
+          cursor.continue();
+        } catch {
+          failure = "Archivio IndexedDB corrotto: copia bloccata.";
+          tx.abort();
+        }
+      };
+    });
+  } finally { db.close(); }
+}
+
 export async function deleteCasProject(
   id: string, expected: CasProjectSnapshot,
 ): Promise<CasProjectTombstone> {
