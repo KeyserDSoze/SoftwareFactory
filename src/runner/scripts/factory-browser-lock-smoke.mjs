@@ -1455,7 +1455,7 @@ if (!inside) {
           await dlg.accept();
         }else{
           await dlg.dismiss();
-          throw Error("Unexpected isolated CAS deletion consent gate");
+          throw Error("Unexpected isolated CAS deletion consent gate: "+JSON.stringify(prompt));
         }
       };
       page.on("dialog",onRace);
