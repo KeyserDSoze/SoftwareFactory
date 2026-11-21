@@ -515,6 +515,151 @@ if (!inside) {
       await selectionContext.close();
     }
 
+
+    // #146: native two-tab transaction lifecycle and explicit tombstone
+    // restore. Never touch the SPA's active localStorage editor.
+    const lifecycleBuild=await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/infrastructure/project-cas-lifecycle.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryCasLifecycle",target:"es2022",
+    });
+    const lifecycleBundle=lifecycleBuild.outputFiles[0].text;
+    const lifecycleContext=await browser.newContext();
+    try {
+      const first=await lifecycleContext.newPage();
+      const second=await lifecycleContext.newPage();
+      await Promise.all([
+        first.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        second.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const page of [first,second]){
+        await page.addScriptTag({content:casBundle});
+        await page.addScriptTag({content:selectionBundle});
+        await page.addScriptTag({content:lifecycleBundle});
+      }
+      const idA="66666666-6666-4666-8666-666666666666";
+      const idB="55555555-5555-4555-8555-555555555555";
+      const backup=await first.evaluate(async({idA,idB})=>{
+        const make=(id,name)=>({id,config:{name},stages:[],
+          updatedAt:"2026-11-21T15:00:00.000Z"});
+        const a=await window.FactoryProjectCas.compareAndSwapCasProject(make(idA,"Before deletion A"),null);
+        const b=await window.FactoryProjectCas.compareAndSwapCasProject(make(idB,"Before deletion B"),null);
+        window.__casLifecycleSelection=await window.FactoryCasSelection.openCasSelectionController(idA);
+        return {a,b};
+      },{idA,idB});
+      const deleted=await first.evaluate(async a=>{
+        const ctrl=window.__casLifecycleSelection;
+        const missingConsent=await ctrl.delete(a,false).then(()=>"unexpected success",String);
+        const promise=ctrl.delete(a,true);
+        const busy=ctrl.state(),old=ctrl.snapshot();
+        const blockedWrite=await ctrl.commit(JSON.parse(a.raw),a)
+          .then(()=>"unexpected success",String);
+        return {missingConsent,busy,old,blockedWrite,tombstone:await promise,
+          state:ctrl.state()};
+      },backup.a);
+      assert.match(deleted.missingConsent,/consenso/);
+      assert.equal(deleted.busy,"saving");
+      assert.deepEqual(deleted.old,backup.a);
+      assert.match(deleted.blockedWrite,/sospesa/);
+      assert.equal(deleted.tombstone.revision,2);
+      assert.equal(deleted.state,"blocked");
+      assert.deepEqual(await second.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),idA),
+        {state:"tombstone",revision:2});
+      const staleWrite=await second.evaluate(async a=>{
+        try{await window.FactoryProjectCas.compareAndSwapCasProject(JSON.parse(a.raw),a);
+          return "unexpected success";}catch(e){return String(e);}
+      },backup.a);
+      assert.match(staleWrite,/Conflitto CAS/);
+
+      // Before restoring, both tabs create tickets from the SAME tombstone.
+      const tickets=await Promise.all([first,second].map(page=>
+        page.evaluate(async({id,raw})=>window.FactoryCasLifecycle
+          .prepareCasTombstoneRestore(id,raw),{id:idA,raw:backup.a.raw})));
+      assert.deepEqual(tickets[0],tickets[1]);
+      const withoutConsent=await first.evaluate(async ticket=>{
+        try{await window.FactoryCasLifecycle.confirmCasTombstoneRestore(ticket,false);
+          return "unexpected success";}catch(e){return String(e);}
+      },tickets[0]);
+      assert.match(withoutConsent,/Conferma/);
+      const contenders=await Promise.all([first,second].map((page,index)=>
+        page.evaluate(async ticket=>{
+          try{
+            const snapshot=await window.FactoryCasLifecycle.confirmCasTombstoneRestore(ticket,true);
+            return {ok:true,snapshot};
+          }catch(e){return {ok:false,error:String(e)};}
+        },tickets[index])));
+      assert.equal(contenders.filter(x=>x.ok).length,1,
+        "Same tombstone generation and backup must have exactly ONE restore winner");
+      const resurrected=contenders.find(x=>x.ok).snapshot;
+      assert.equal(resurrected.revision,3,
+        "Restoring after tombstone must increment revision and prevent ABA");
+      assert.equal(resurrected.raw,backup.a.raw,
+        "Restored raw checkpoint must be byte-exact from user backup");
+      assert.match(contenders.find(x=>!x.ok).error,
+        /tombstone|Tombstone|Conflitto/,
+        "Losing restore must not overwrite the successful rival");
+      const staleTicket=await first.evaluate(async ticket=>{
+        try{await window.FactoryCasLifecycle.confirmCasTombstoneRestore(ticket,true);
+          return "unexpected success";}catch(e){return String(e);}
+      },tickets[0]);
+      assert.match(staleTicket,/cambiata/);
+      assert.deepEqual(await second.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),idA),resurrected);
+
+      // Capacity is checked in the same readwrite transaction. The tombstone
+      // must survive an aborted restore when there are 40 active projects.
+      const tombB=await second.evaluate(async b=>
+        window.FactoryProjectCas.deleteCasProject(b.id,b),backup.b);
+      assert.equal(tombB.revision,2);
+      await second.evaluate(async()=>{
+        const db=await new Promise((resolve,reject)=>{
+          const req=indexedDB.open("softwarefactory.project.cas.v1",1);
+          req.onsuccess=()=>resolve(req.result);
+          req.onerror=()=>reject(Error("Fixture IDB open failed"));
+        });
+        try{
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(Error("Fixture IDB capacity failed"));
+            const store=tx.objectStore("projects");
+            for(let n=0;n<39;n++){
+              const id="44444444-4444-4444-8444-"+String(n).padStart(12,"0");
+              store.put({id,revision:1,raw:JSON.stringify({
+                id,config:{name:"Capacity "+n},stages:[],
+                updatedAt:"2026-11-21T15:01:00.000Z",
+              })},id);
+            }
+          });
+        }finally{db.close();}
+      });
+      assert.equal((await first.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,40);
+      const ticketB=await first.evaluate(async b=>
+        window.FactoryCasLifecycle.prepareCasTombstoneRestore(b.id,b.raw),backup.b);
+      const full=await first.evaluate(async ticket=>{
+        try{await window.FactoryCasLifecycle.confirmCasTombstoneRestore(ticket,true);
+          return "unexpected success";}catch(e){return String(e);}
+      },ticketB);
+      assert.match(full,/piena \(40 progetti\)/);
+      assert.deepEqual(await first.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),idB),
+        {state:"tombstone",revision:2},
+        "Capacity abort must not modify the tombstone or any active project");
+      for(const page of [first,second]){
+        const legacy=await page.evaluate(({idA,idB})=>[
+          localStorage.getItem("softwarefactory.project.library.v1."+idA),
+          localStorage.getItem("softwarefactory.project.library.v1."+idB),
+        ],{idA,idB});
+        assert.deepEqual(legacy,[null,null],
+          "IDB tombstone lifecycle must not read/write the legacy project slots");
+      }
+      console.log("FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS: async delete fence, stale write, dual-tab restore race, exact backup, ABA, capacity and no legacy mutation");
+    }finally{
+      await lifecycleContext.close();
+    }
+
     // Real user-consented, non-destructive localStorage -> IndexedDB staging
     // in a separate browser profile (#141), before any live editor cutover.
     const staging=await browser.newContext({acceptDownloads:true});
