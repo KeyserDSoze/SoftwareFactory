@@ -1193,3 +1193,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Chromium reale UI con upload, consenso negato/positivo, formati raw ed envelope, ID mancante, restore già eseguito, tombstone stale mutata dalla seconda tab e zero modifiche legacy; marker `FACTORY_INDEXEDDB_UI_TOMBSTONE_RESTORE_E2E_PASS`.
 - [ ] Gate Factory CI + Pages + Installer candidate completed/success su uno SHA main prima di chiudere #148.
 - [ ] Cutover editor live di tutti i write path, selezione autoritativa/reload e rollback/UX quota/versionchange ancora nella #139. #91/#92 aperte. ADR 0101.
+
+
+## Primo editor separato IndexedDB con commit async reale (#149 — 21/11/2026)
+
+- [x] Pannello React opt-in IT/EN separato dal live editor legacy, discovery IDB e selezione/revisione preconsent+postconsent; switch tramite controller #144 e controllo bozze non salvate.
+- [x] Editing limitato a nome/descrizione da CAS token esatto, limiti campi, `invalidateStages(updateConfig(...))` sui checkpoint storici; nessuna modifica al progetto localStorage attivo.
+- [x] Due consensi con download raw esatto prima del save; `CasSelectionController.commit` con busy interlock, revision/token aggiornato soltanto a `tx.oncomplete`. Conflitto multi-tab -> fail-closed, refresh/apertura esplicita, niente retry/merge/legacy fallback.
+- [x] Vitest builder puro e Chromium reale end-to-end della SPA, writer rivale non cooperativo, success/decline backup, re-open e separazione legacy. Marker `FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS`.
+- [ ] Factory CI, Pages e Installer candidate completed/success sullo stesso SHA main + log marker prima di chiudere #149.
+- [ ] Il live editor principale resta **sincrono localStorage** e usa ancora Code Agent/pipeline/GitHub/import/restore legacy: migrazione atomica di tutti quei writer e UX rollback/quota/versionchange rimangono #139. #91/#92 aperte. ADR 0102.
