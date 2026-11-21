@@ -195,6 +195,22 @@ if (!inside) {
       });
       assert.match(badList,/corrotto/,"Malformed IDB row must reject entire library");
       assert.doesNotMatch(badList,/not-json/,"Never echo raw storage content");
+      // An invalid existing record makes a new CAS insert fail closed. It
+      // must not silently count only the valid rows or mutate the archive.
+      const corruptInsert=await casA.evaluate(async()=>{
+        const project={id:"99999999-9999-4999-8999-999999999999",
+          config:{name:"Corruption must block insert"},stages:[],
+          updatedAt:"2026-11-21T10:00:00.000Z"};
+        try {
+          await window.FactoryProjectCas.compareAndSwapCasProject(project,null);
+          return "unexpected success";
+        } catch(e) {return String(e);}
+      });
+      assert.match(corruptInsert,/corrotto/);
+      assert.deepEqual(await casB.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),
+        "99999999-9999-4999-8999-999999999999"),{state:"missing"});
+
 
       // Recreate a valid row and then exceed 40 active projects; discovery
       // must refuse rather than silently truncate.
@@ -696,6 +712,7 @@ if (!inside) {
         assert.deepEqual(legacy,[null,null],
           "IDB tombstone lifecycle must not read/write the legacy project slots");
       }
+      console.log("FACTORY_INDEXEDDB_STRICT_INSERT_E2E_PASS: tombstone no-revive, strict 40-capacity generic inserts, corrupted archive rejection and explicit consented restore");
       console.log("FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS: async delete fence, stale write, dual-tab restore race, exact backup, ABA, strict null insert capacity and no legacy mutation");
     }finally{
       await lifecycleContext.close();
