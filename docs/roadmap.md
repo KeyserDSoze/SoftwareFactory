@@ -1203,3 +1203,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest builder puro e Chromium reale end-to-end della SPA, writer rivale non cooperativo, success/decline backup, re-open e separazione legacy. Marker `FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS`.
 - [ ] Factory CI, Pages e Installer candidate completed/success sullo stesso SHA main + log marker prima di chiudere #149.
 - [ ] Il live editor principale resta **sincrono localStorage** e usa ancora Code Agent/pipeline/GitHub/import/restore legacy: migrazione atomica di tutti quei writer e UX rollback/quota/versionchange rimangono #139. #91/#92 aperte. ADR 0102.
+
+
+## Creazione IDB-only senza staging legacy nel pilota React (#150 — 21/11/2026)
+
+- [x] Nuovo ticket immutabile/preflight `prepareCasIsolatedNewProject`: nome/brief limitati, UUID nuovo, progetto canonico completo e sei stage pending senza credenziali né evidenze AI/runner/GitHub.
+- [x] `confirmCasIsolatedNewProject(ticket,true)` esegue un solo insert IDB `expected=null`, con cap 40, collisione/tombstone fail-closed e ACK solo `tx.oncomplete`. Niente retry/merge/legacy fallback.
+- [x] Form React IT/EN nell'editor isolato, consenso esplicito con nome/ID, collisione senza autoripresa, lista IDB riletta dopo conferma; nuovo progetto non diventa automaticamente selezione del live editor o del pilota.
+- [x] Vitest + Chromium browser reale a due tab: rifiuto consenso, insert/rev1, reload, fasi pending, mancata eredità di evidence, tombstone rivale durante consenso, archivio full 40/41, IndexedDB indisponibile e nessuna modifica dei legacy slot. Marker `FACTORY_INDEXEDDB_NATIVE_CREATE_UI_E2E_PASS`.
+- [ ] Factory CI, Pages, Installer candidate `completed/success` **sullo stesso SHA finale main** e verifica marker nei log; poi chiudere #150.
+- [ ] Cutover completo di pipeline/Code Agent/GitHub/import/restore/editor principale a IDB, rollback/quota/versionchange UX rimangono nella #139. #91/#92 ancora aperte. ADR 0103.
