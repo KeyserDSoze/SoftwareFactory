@@ -72,9 +72,12 @@ export default function CasIsolatedEditor({locale}:Props) {
   }
   function refresh():void {
     void run(async()=>{
-      // A refresh is an explicit full re-open of a new read-only library
-      // view. Do not silently advance an existing edit token.
-      active.current=null; setSnapshot(null);
+      // Refreshes the read-only choices, NOT the active CAS token. This
+      // permits explicit ticket-based switching. A blocked/closed session
+      // must be reopened by selecting a fresh library entry (no rebase).
+      if(!active.current || active.current.state()!=="ready") {
+        active.current=null; setSnapshot(null);
+      }
       const available=await listCasProjects();
       setList(available);
     });
@@ -131,9 +134,10 @@ export default function CasIsolatedEditor({locale}:Props) {
       setTimeout(()=>URL.revokeObjectURL(url),30000);
       if(!window.confirm(t(locale,"casIsoSavedConfirm"))) return;
       const committed=await controller.commit(candidate,expected);
-      if(!exact(committed,candidate ?
-        {id:candidate.id,revision:expected.revision+1,
-          raw:JSON.stringify(candidate)} : committed))
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))
         throw Error("Inconsistent CAS acknowledgement");
       accept(committed);setList(null);
       setNotice(t(locale,"casIsoSaved")+" (rev. "+committed.revision+")");
