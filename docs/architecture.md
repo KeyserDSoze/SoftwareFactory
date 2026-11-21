@@ -671,3 +671,8 @@ Il controller infrastrutturale `project-cas-selection.ts` usa `openCasEditorSess
 ## Recovery IDB autonomo dal legacy (#145)
 
 `project-cas-recovery-library.ts` espone un percorso **solo read-only** verso IndexedDB per la UI di export storico, distinto dalle sessioni di scrittura CAS (#143/#144) e dallo staging legacy (#141). `listCasRecoveryCopies` usa la discovery validata IDB; `prepareCasRecoveryTicket(id, revision)` materializza il JSON esatto **prima** del consenso; `confirmCasRecoveryTicket(ticket,true)` verifica due volte revision e raw dopo il consenso e restituisce gli stessi byte. Non legge né riscrive localStorage, non ripristina tombstone e non imposta il progetto attivo. Le future operazioni di restore/cutover dovranno essere progettate separatamente nella #139. Una copia IDB dello stesso origin non è una sincronizzazione cloud, né una garanzia contro modifiche successive ai controlli.
+
+
+## Lifecycle tombstone nel futuro source IndexedDB (#146)
+
+Per una cancellazione intenzionale, il controller CAS di #144 richiede token progetto byte-esatto e consenso e invoca `deleteCasProject` prima di marcare la sessione bloccata. Per un ripristino intenzionale, `project-cas-lifecycle.ts` prepara un ticket read-only da un backup esterno canonico e tombstone revision, poi `restoreCasTombstoneProject` verifica **in un'unica transazione** versione tombstone, cap 40 e raw finale con ACK solo su `tx.oncomplete`. Le operazioni non leggono né mutano localStorage. Non vengono collegate all'editor React finché la migrazione completa #139 non è pronta; il codice CAS legacy `expected=null` rimane un percorso di re-create ma non è il contratto di restore umano.

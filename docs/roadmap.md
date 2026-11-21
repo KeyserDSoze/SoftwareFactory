@@ -1164,3 +1164,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest su legacy assente/corrotto, ticket invalidi, IDB non disponibile e conflitti; Chromium due schede, copia orfana, legacy corrotto, export esatto, modifica IDB con stessa revisione e tombstone. Marker `FACTORY_INDEXEDDB_ORPHAN_RECOVERY_E2E_PASS`.
 - [ ] Verificare Factory CI, Pages e Installer candidate sullo stesso SHA e chiudere #145.
 - [ ] #139 ancora aperta: attivare un **unico** editor async end-to-end con backup, source selection, restore controllato e tutti i writer; #91/#92 aperte per cloud/multi-device. ADR 0098.
+
+
+## Tombstone restore esplicito e cancellazione serializzata (#146 — 21/11/2026)
+
+- [x] Ripristino da JSON di backup esatto e tombstone con revisione verificata, consenso operatore separato e `restoreCasTombstoneProject` atomico con controllo capacità (40) nella stessa readwrite transaction; token solo dopo `tx.oncomplete`.
+- [x] `CasSelectionController.delete` con consenso, ticket id/revision/raw e interlock commit/switch. Controller bloccato dopo successo o ack ambiguo, senza fallback legacy né auto-restore.
+- [x] Vitest di consenso/backup canonico/tombstone stale/errore IDB e delete controller; Chromium dual tab con race restore (un vincitore), writer stale dopo delete, revisione monotona, full library 40 e nessuna modifica legacy. Marker `FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS`.
+- [ ] Factory CI + Pages + Installer candidate successful sullo stesso SHA prima di chiudere #146.
+- [ ] #139 ancora aperta: cutover di **tutti** i writer React/Code Agent/GitHub/import/restore, UI IT/EN, scelta source of truth, rollback e test crash/versionchange. La vecchia CAS insert `expected=null` conserva un comportamento compatibile di tombstone revival da migrare in fase di cutover. #91/#92 aperte. ADR 0099.
