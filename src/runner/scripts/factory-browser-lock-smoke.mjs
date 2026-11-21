@@ -125,17 +125,31 @@ if (!inside) {
       const emptyLibrary=await casA.evaluate(() =>
         window.FactoryProjectCas.listCasProjects());
       assert.deepEqual(emptyLibrary,[],"Tombstones must not appear in the library");
-      // Recreating must advance generation instead of resetting to 1 (ABA).
-      const reinsert=await candidate(casA,"re-created after tombstone",null);
-      assert.equal(reinsert.ok,true);
-      assert.equal(reinsert.snapshot.revision,4);
+      // A generic expected=null insert may NEVER resurrect a tombstone
+      // without the deletion generation, exact backup and consent (#147).
+      const implicitRestore=await candidate(casA,"unsafe tombstone revival",null);
+      assert.equal(implicitRestore.ok,false);
+      assert.match(implicitRestore.error,/Conflitto CAS/);
+      assert.deepEqual(await casB.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),id),
+        {state:"tombstone",revision:3});
+      // The explicit restore primitive is the ONLY allowed revival; it
+      // preserves monotone revisions and the byte-identical approved backup.
+      const restored=await casA.evaluate(async ({id,tombstone})=>{
+        const project={id,config:{name:"explicitly restored after tombstone"},
+          stages:[],updatedAt:"2026-11-20T20:00:00.000Z"};
+        const raw=JSON.stringify(project);
+        return await window.FactoryProjectCas.restoreCasTombstoneProject(
+          project,{id,revision:tombstone.revision},raw,true);
+      },{id,tombstone});
+      assert.equal(restored.revision,4);
       const freshPage=await casContext.newPage();
       await freshPage.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
       await freshPage.addScriptTag({content:casBundle});
       const reopened=await freshPage.evaluate(id =>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.equal(reopened.revision,4,"IndexedDB CAS must survive tab reopen");
-      assert.equal(reopened.raw,reinsert.snapshot.raw);
+      assert.equal(reopened.raw,restored.raw);
       const staleAgain=await candidate(casB,"stale after reopen",updated);
       assert.equal(staleAgain.ok,false);
       assert.match(staleAgain.error,/Conflitto CAS/);
@@ -152,7 +166,7 @@ if (!inside) {
       assert.deepEqual(library,[
         {id:secondId,name:"Second project",updatedAt:"2026-11-21T10:00:00.000Z",
           repository:"example/repo",revision:1},
-        {id,name:"re-created after tombstone",updatedAt:"2026-11-20T20:00:00.000Z",
+        {id,name:"explicitly restored after tombstone",updatedAt:"2026-11-20T20:00:00.000Z",
           repository:"",revision:4},
       ],"The IDB library must be consistent after tab reload");
       assert.equal((await casA.evaluate(() =>
@@ -213,7 +227,7 @@ if (!inside) {
       });
       assert.match(overfull,/oltre 40/,"Never hide a 41st IDB project");
       console.log("FACTORY_INDEXEDDB_LIBRARY_E2E_PASS: two tabs, tombstone, reload, corruption and overfull fail-closed");
-      console.log("FACTORY_INDEXEDDB_CAS_E2E_PASS: Chromium two-tab insert/update races, stale delete, tombstone ABA and tab reopen");
+      console.log("FACTORY_INDEXEDDB_CAS_E2E_PASS: Chromium two-tab insert/update races, strict tombstone no-recreate, explicit restore ABA and tab reopen");
     } finally {
       await casContext.close();
     }
@@ -607,8 +621,9 @@ if (!inside) {
       assert.deepEqual(await second.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),idA),resurrected);
 
-      // Capacity is checked in the same readwrite transaction. The tombstone
-      // must survive an aborted restore when there are 40 active projects.
+      // Capacity is checked in the same readwrite transaction for BOTH
+      // explicit restore and generic never-seen inserts. A tombstone must
+      // survive an aborted restore when there are 40 active projects.
       const tombB=await second.evaluate(async b=>
         window.FactoryProjectCas.deleteCasProject(b.id,b),backup.b);
       assert.equal(tombB.revision,2);
@@ -647,6 +662,32 @@ if (!inside) {
         window.FactoryProjectCas.readCasProjectSlot(id),idB),
         {state:"tombstone",revision:2},
         "Capacity abort must not modify the tombstone or any active project");
+      // Generic null inserts must also enforce capacity atomically. An
+      // update to an existing active project is still allowed at 40.
+      const fullInsert=await second.evaluate(async()=>{
+        const id="77777777-7777-4777-8777-777777777777";
+        const project={id,config:{name:"Forbidden 41st"},stages:[],
+          updatedAt:"2026-11-21T15:03:00.000Z"};
+        try{
+          await window.FactoryProjectCas.compareAndSwapCasProject(project,null);
+          return "unexpected success";
+        }catch(e){return String(e);}
+      });
+      assert.match(fullInsert,/piena \(40 progetti\)/);
+      const missing41=await first.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),
+        "77777777-7777-4777-8777-777777777777");
+      assert.deepEqual(missing41,{state:"missing"});
+      const atCapacityUpdate=await first.evaluate(async snap=>{
+        const project=JSON.parse(snap.raw);
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          ...project,config:{...project.config,name:"Updated at capacity"},
+        },snap);
+      },resurrected);
+      assert.equal(atCapacityUpdate.revision,resurrected.revision+1);
+      assert.equal((await second.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,40);
+
       for(const page of [first,second]){
         const legacy=await page.evaluate(({idA,idB})=>[
           localStorage.getItem("softwarefactory.project.library.v1."+idA),
@@ -655,7 +696,7 @@ if (!inside) {
         assert.deepEqual(legacy,[null,null],
           "IDB tombstone lifecycle must not read/write the legacy project slots");
       }
-      console.log("FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS: async delete fence, stale write, dual-tab restore race, exact backup, ABA, capacity and no legacy mutation");
+      console.log("FACTORY_INDEXEDDB_TOMBSTONE_RESTORE_E2E_PASS: async delete fence, stale write, dual-tab restore race, exact backup, ABA, strict null insert capacity and no legacy mutation");
     }finally{
       await lifecycleContext.close();
     }
