@@ -718,6 +718,7 @@ export default function App() {
   async function restoreDeletedCasCopyFromFile(file: File): Promise<void> {
     if (busy || busyRef.current || casRestoreBusyRef.current) return;
     casRestoreBusyRef.current=true;
+    clearMessages(); // A previous rejected backup must not shadow this attempt.
     const locale=normalizeLocale(settingsRef.current.language);
     setBusy(true);
     setOperation(t(locale,"casRestoreBusy"));
