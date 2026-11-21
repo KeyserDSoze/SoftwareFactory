@@ -132,6 +132,44 @@ export async function readCasProject(id: string): Promise<CasProjectSnapshot | n
   } finally { db.close(); }
 }
 
+
+/** Read-only CAS slot inspection (#142). Do NOT merge absent with a
+ * tombstone: an old legacy snapshot must never mask a deliberate deletion.
+ */
+export type CasProjectSlot =
+  | Readonly<{state: "missing"}>
+  | Readonly<{state: "tombstone"; revision: number}>
+  | Readonly<{state: "present"; snapshot: CasProjectSnapshot}>;
+
+export async function readCasProjectSlot(id: string): Promise<CasProjectSlot> {
+  checkId(id);
+  const db = await openCasDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      let result: CasProjectSlot = {state: "missing"};
+      let failure = "Ricognizione IndexedDB interrotta.";
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(Error(failure));
+      tx.onerror = () => reject(Error("Ricognizione IndexedDB non riuscita."));
+      const request = tx.objectStore(STORE).get(id);
+      request.onsuccess = () => {
+        try {
+          const row = readRow(request.result as unknown, id);
+          if (row) {
+            result = row.raw === null ?
+              {state: "tombstone", revision: row.revision} :
+              {state: "present", snapshot: {id, revision: row.revision, raw: row.raw}};
+          }
+        } catch {
+          failure = "Archivio IndexedDB locale corrotto.";
+          tx.abort();
+        }
+      };
+    });
+  } finally { db.close(); }
+}
+
 /** Read-only IndexedDB library discovery for future opt-in migration (#139/#140).
  * Never use a localStorage index or hide corrupt/overfull IndexedDB data.
  */
