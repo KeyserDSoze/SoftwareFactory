@@ -20,6 +20,7 @@ import {
   CAS_ISOLATED_DESCRIPTION_MAX,CAS_ISOLATED_REQUIREMENTS_MAX,
 } from "../application/cas-isolated-config";
 import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
+import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
 
 type Props={locale:FactoryLocale};
 
@@ -42,12 +43,9 @@ export default function CasIsolatedEditor({locale}:Props) {
   const active=useRef<CasSelectionController|null>(null);
   const inFlight=useRef(false);
 
-  const dirty=snapshot !== null && (() => {
-    const data=JSON.parse(snapshot.raw) as {config:{name:string;description:string;requirements?:string}};
-    return data.config.name !== draftName ||
-      (data.config.description || "") !== draftDescription ||
-      (data.config.requirements ?? "") !== draftRequirements;
-  })();
+  const dirty=hasCasIsolatedUnsavedDraft(
+    snapshot,draftName,draftDescription,draftRequirements,
+  );
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
@@ -76,6 +74,9 @@ export default function CasIsolatedEditor({locale}:Props) {
   }
   function close():void {
     if(inFlight.current) return;
+    // "Close panel" does not mean permission to destroy a human draft.
+    // An explicit rejection keeps both the CAS selection and all text.
+    if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm"))) return;
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
@@ -121,12 +122,17 @@ export default function CasIsolatedEditor({locale}:Props) {
     });
   }
   function refresh():void {
+    if(inFlight.current) return;
+    // A ready controller retains its pinned snapshot and draft on refresh.
+    // After a failed/conflicting CAS write the controller is blocked, while
+    // the rejected human draft is still on screen: never erase it silently.
+    const resetsSelection=!active.current || active.current.state()!=="ready";
+    if(resetsSelection && dirty &&
+       !window.confirm(t(locale,"casIsoRefreshDirtyConfirm"))) return;
     void run(async()=>{
-      // Refreshes the read-only choices, NOT the active CAS token. This
-      // permits explicit ticket-based switching. A blocked/closed session
-      // must be reopened by selecting a fresh library entry (no rebase).
-      if(!active.current || active.current.state()!=="ready") {
+      if(resetsSelection) {
         active.current=null; setSnapshot(null);
+        setDraftName("");setDraftDescription("");setDraftRequirements("");
       }
       const available=await listCasProjects();
       setList(available);

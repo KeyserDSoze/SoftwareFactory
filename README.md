@@ -963,3 +963,8 @@ The explicit IndexedDB-only editor can now change project requirements alongside
 ## Creazione IndexedDB: ACK di scrittura distinto dal readback (#153)
 
 Nel pilota IDB separato, una `create` nativa confermata con `tx.oncomplete` non viene mai riportata come "non confermata" se un successivo readback o refresh dell'elenco fallisce. La UI svuota il modulo, mantiene ID/revisione e mostra un avviso IT/EN per verificare manualmente la libreria **senza creare un altro UUID**. Solo ID+revisione+JSON byte-esatto autorizzano l'esito `verificato`; i writer concorrenti non vengono automaticamente adottati. Nessun retry, localStorage fallback o switch live. Chromium simula un'interruzione del readback **dopo** il commit e controlla l'unicità del record e la recuperabilità. Ciò non completa il cutover #139 né il sync multi-device #91/#92.
+
+
+## Protezione bozze del pilota IndexedDB (#154)
+
+Il pannello CAS separato richiede conferma IT/EN per **chiudere con modifiche non salvate** a nome, descrizione o requisiti. Il refresh di una sessione pronta conserva sempre la bozza; dopo un conflitto che rende la sessione non più scrivibile, il refresh che la cancellerebbe richiede consenso esplicito. Annullando, il testo resta in memoria per copia manuale; confermando, viene abbandonata solo la bozza locale e si deve riaprire manualmente la revisione attuale. Nessuna correzione automatica del conflitto, nessun retry e nessuna mutazione del live editor localStorage. Il pilota non equivale al cutover #139 né al sync multi-device #91/#92.

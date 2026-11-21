@@ -935,7 +935,23 @@ if (!inside) {
       await description.fill("New brief, stage analyses must be reset");
       await requirements.fill("New requirements: no unreviewed publication");
       await expect(save).toBeEnabled();
+      // #154: closing the panel must not silently throw away an unsaved
+      // requirements/name/brief draft. Declining retains editor and text.
       page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/NON SALVATE/);
+        void dlg.dismiss();
+      });
+      await panel.getByRole("button",{name:"Chiudi editor separato"}).click();
+      await expect(name).toHaveValue("IDB pilot A revised");
+      await expect(description).toHaveValue("New brief, stage analyses must be reset");
+      await expect(requirements).toHaveValue("New requirements: no unreviewed publication");
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 1");
+      // Refresh on a READY controller is read-only and must keep the draft
+      // without prompting, even if there are unsaved edits.
+      page.removeAllListeners("dialog");
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(requirements).toHaveValue("New requirements: no unreviewed publication");
       page.once("dialog",dlg=>void dlg.dismiss());
       await save.click();
       assert.deepEqual(await rival.evaluate(id=>
@@ -1035,9 +1051,25 @@ if (!inside) {
       assert.deepEqual(await page.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
         "Rival-tab CAS winner must never be overwritten or auto-merged");
-      // Explicit refresh and open reestablishes a new token; no automatic
-      // rebase onto the rival revision or retaining the stale draft.
+      // #154: after blocked CAS, the rejected draft remains valuable human
+      // text. A normal refresh must NOT erase it without another consent.
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/NON SALVATA/);
+        void dlg.dismiss();
+      });
       await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(requirements).toHaveValue("Unsaved requirements must lose to rival");
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 1");
+      // Consent permits discarding ONLY this local draft; the newer rival
+      // record is never auto-adopted or overwritten.
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/NON SALVATA/);
+        void dlg.accept();
+      });
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      await expect(page.getByTestId("cas-isolated-active")).toHaveCount(0);
       page.removeAllListeners("dialog");
       page.once("dialog",dlg=>void dlg.accept());
       await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
@@ -1045,6 +1077,22 @@ if (!inside) {
       await expect(description).toHaveValue("Written first by noncooperating tab");
       await expect(requirements).toHaveValue("Rival constraints take precedence");
       await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      // Confirming close with a fresh dirty draft drops only React state,
+      // never the stored project or the active localStorage Factory.
+      await requirements.fill("Close with intentional discard after warning");
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/NON SALVATE/);
+        void dlg.accept();
+      });
+      await panel.getByRole("button",{name:"Chiudi editor separato"}).click();
+      await expect(page.getByTestId("cas-isolated-active")).toHaveCount(0);
+      await expect(panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      })).toBeVisible();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
+        "Explicit close must not commit or overwrite unreviewed draft");
 
       const localAfter=await page.evaluate(()=>({
         active:localStorage.getItem("softwarefactory.project.v1"),
@@ -1062,6 +1110,7 @@ if (!inside) {
         "Confirmed async CAS edits survive Chromium reload and cannot be lost");
       console.log("FACTORY_INDEXEDDB_ISOLATED_EDITOR_E2E_PASS: opt-in CAS name/brief/requirements, two backup consents, exact raw download, stage invalidation, guarded selection, rival-tab conflict, reopen and legacy unchanged");
       console.log("FACTORY_INDEXEDDB_REQUIREMENTS_E2E_PASS: requirements persisted after tx.oncomplete, stale requirements rejected, native rival winner and legacy unchanged");
+      console.log("FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS: close cancel preserves all fields, ready refresh retains draft, blocked refresh refuses discard until consent, accepted discard preserves rival CAS record and legacy unchanged");
     } finally {
       await isolatedContext.close();
     }

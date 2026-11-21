@@ -717,3 +717,8 @@ The explicit IndexedDB-only editor can now change project requirements alongside
 ## Creazione IndexedDB: ACK di scrittura distinto dal readback (#153)
 
 Nel pilota IDB separato, una `create` nativa confermata con `tx.oncomplete` non viene mai riportata come "non confermata" se un successivo readback o refresh dell'elenco fallisce. La UI svuota il modulo, mantiene ID/revisione e mostra un avviso IT/EN per verificare manualmente la libreria **senza creare un altro UUID**. Solo ID+revisione+JSON byte-esatto autorizzano l'esito `verificato`; i writer concorrenti non vengono automaticamente adottati. Nessun retry, localStorage fallback o switch live. Chromium simula un'interruzione del readback **dopo** il commit e controlla l'unicità del record e la recuperabilità. Ciò non completa il cutover #139 né il sync multi-device #91/#92.
+
+
+### Draft IndexedDB fail-closed su close/refresh (#154, ADR 0107)
+
+L'editor CAS isolato mantiene un form in memoria e un token ID/revisione/raw. `hasCasIsolatedUnsavedDraft` compara nome, brief e requisiti allo snapshot canonico; quando il raw è malformato o la configurazione inattesa, la bozza si considera sporca, non eliminabile implicitamente. Il comando di chiusura del pannello richiede consenso se dirty. Il refresh con controller `ready` mantiene selezione e bozza; in stato `blocked` o assenza controller il refresh può smontare una selezione sporca **solo dopo consenso umano**. Un annullamento non avvia né CAS write né list refresh e non azzera il testo. Il consenso al discard autorizza esclusivamente l'azzeramento dello state React, mai un overwrite del writer vincitore. Test Chromium reale a due schede con failure di commit stale, `FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS`. #139/#91/#92 restano aperte.

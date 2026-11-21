@@ -1163,3 +1163,8 @@ L'editor CAS isolato permette modifiche di `config.requirements` fino a 12.000 c
 ## Creazione CAS con lettura post-ACK separata (#153)
 
 Una volta confermata `compareAndSwapCasProject(project,null)` su `tx.oncomplete`, l'esito write è definitivo anche se `openCasSelectionController` o `listCasProjects` successivamente falliscono. Mai propagare l'errore read-only al gestore generico "creazione non confermata", né ripetere automaticamente con altro UUID. Mostrare ID/revisione e warning IT/EN; riapertura e recupero sono azioni manuali con verifica ID/rev/raw. Marker Chromium `FACTORY_INDEXEDDB_CREATE_POSTACK_E2E_PASS`. Restano separati editor legacy e pilota IDB; #139/#91/#92 aperte.
+
+
+## No silent draft loss in opt-in CAS editor (#154 / ADR 0107)
+
+Non azzerare una bozza umana IndexedDB sporca tramite chiusura o refresh di una selezione bloccata senza un consenso esplicito IT/EN. Il confronto usa ID/revisione/raw canonico e nome/brief/requisiti; dato malformato è dirty fail-closed. Se il controller è `ready`, il refresh conserva token e draft. Dopo conflitto CAS, un refresh consentito elimina solo il form locale, non aggiorna né riscrive automaticamente la revisione vincente. Nessun retry, fallback legacy o doppia source-of-truth. Marker `FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS`; #139/#91/#92 restano aperte.

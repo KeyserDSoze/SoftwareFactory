@@ -1223,3 +1223,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Restore volontario da JSON via #148, senza resurrection implicita; backup custodito dall'utente, evidence storica. Chromium reale con second tab e race, decline 3 dialog, dirty draft, reload, no legacy writes; marker `FACTORY_INDEXEDDB_ISOLATED_DELETE_UI_E2E_PASS`.
 - [ ] Gate di chiusura: Factory CI + Pages + Installer candidate completed/success stesso SHA main e marker log confermato; solo allora chiudere #151.
 - [ ] Migrazione completa writer live React/pipeline/Code Agent/GitHub/import/cloud/restore, quota/versionchange/rollback con source of truth IDB, ancora #139. #91/#92 aperte; ADR 0104.
+
+
+## Protezione bozze e conflitti del pilota CAS (#154 — 21/11/2026)
+
+- [x] Rilevazione pura, fail-closed, di variazioni ai tre campi nome/brief/requisiti, con storico optional mancante gestito esplicitamente e fixture anomale considerate dirty.
+- [x] Conferma IT/EN su chiusura con draft non salvato e refresh di una sessione non pronta/blocked: decline conserva tutto il testo, accept perde solo la bozza React senza riscrivere IDB.
+- [x] Refresh di una sessione pronta non cancella la bozza; race CAS del tab rivale non si risolve con rebase automatico. Vitest e Chromium due tab `FACTORY_INDEXEDDB_DIRTY_DRAFT_E2E_PASS`.
+- [ ] Verificare Factory CI, Pages, Installer candidate completed/success **stesso SHA main** e marker Chromium prima di chiudere #154.
+- [ ] #139 ancora aperta: migrazione totale di writer live/Code Agent/pipeline/GitHub/import/cloud/restore, UX rollback/quota/versionchange. #91/#92 ancora aperte.
