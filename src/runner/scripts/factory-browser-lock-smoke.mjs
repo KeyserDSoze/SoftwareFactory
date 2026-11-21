@@ -1122,6 +1122,134 @@ if (!inside) {
     }
 
 
+    // #159: exact selected IndexedDB JSON export, read-only and consented.
+    // All CAS reads/writes are real Chromium transactions; download bytes
+    // must never come from a stale selected tab after a rival change.
+    const selectedExportContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await selectedExportContext.newPage();
+      const rival=await selectedExportContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="15915915-1591-4591-8591-159159159159";
+      const original=await rival.evaluate(async id=>{
+        const now="2026-11-22T00:30:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(stage=>({
+          id:stage,label:stage,status:"pending",output:"",sources:[],
+        }));
+        stages[0].status="complete";
+        stages[0].output="PREVIOUS_AI_HISTORY_WITH_UNTRUSTED_HTML_<img src=x>";
+        stages[0].sources=[{title:"Unverified history",
+          url:"https://example.org/old",snippet:"source as historic text",
+          query:"historical",fetchedAt:now}];
+        return await window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Selected IDB export fixture",
+            description:"Backup exact IDB, never legacy",
+            requirements:"No silent rebase after race"},
+          stages,createdAt:now,updatedAt:now,
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Selected IDB export fixture",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+
+      const action=panel.getByTestId("cas-isolated-full-export")
+        .getByRole("button",{name:"Esporta backup JSON COMPLETO della revisione IndexedDB"});
+      await expect(action).toBeEnabled();
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await action.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original,
+        "Declined download cannot change native IDB state");
+
+      // The operator may need a backup while their unsaved config draft
+      // is on screen. Export durable revision only, preserve draft exactly.
+      const nameField=panel.getByTestId("cas-isolated-active")
+        .locator("input").first();
+      await nameField.fill("UNSAVED HUMAN DRAFT KEEP ME");
+      await expect(action).toBeEnabled();
+      let confirms=0;
+      const allow=async dialog=>{confirms++;await dialog.accept();};
+      page.on("dialog",allow);
+      const filePending=page.waitForEvent("download");
+      await action.click();
+      const download=await filePending;
+      assert.equal(download.suggestedFilename(),
+        "softwarefactory-idb-project-"+id+"-r1.json");
+      assert.equal((await readFile(await download.path())).toString("utf8"),
+        original.raw,"Download bytes must equal pinned native CAS raw exactly");
+      await expect(panel.getByRole("status"))
+        .toContainText("Esportazione JSON IndexedDB confermata");
+      assert.equal(confirms,2,
+        "Separate download consent and saved-file acknowledgement");
+      await expect(nameField).toHaveValue("UNSAVED HUMAN DRAFT KEEP ME");
+      page.off("dialog",allow);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original,
+        "Export with dirty draft cannot mutate IDB");
+
+      // Race while the operator is reading the confirmation. A native rival
+      // bumps revision; the old selected raw is NEVER exported as current.
+      let winner=null,staleDownloads=0;
+      page.on("download",()=>{staleDownloads++;});
+      page.once("dialog",async dialog=>{
+        winner=await rival.evaluate(async expected=>{
+          const p=JSON.parse(expected.raw);
+          p.config.description="RIVAL UPDATED DURING EXPORT CONSENT";
+          return await window.FactoryProjectCas.compareAndSwapCasProject(
+            p,expected);
+        },original);
+        await dialog.accept();
+      });
+      await action.click();
+      await expect(panel.getByRole("status"))
+        .toContainText("Export IndexedDB BLOCCATO");
+      assert.equal(staleDownloads,0,
+        "Rival revision change must prevent any stale export download");
+      assert.equal(winner.revision,2);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winner);
+      await expect(nameField).toHaveValue("UNSAVED HUMAN DRAFT KEEP ME");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      page.removeAllListeners("dialog");
+
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winner);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Selected export must never mutate the active legacy workspace");
+      console.log("FACTORY_INDEXEDDB_SELECTED_EXPORT_E2E_PASS: exact selected raw, two consents, dirty draft preserved, native rival during dialog prevents download, reload and legacy unchanged");
+    }finally{
+      await selectedExportContext.close();
+    }
+
     // #158: inspect only a pinned native IndexedDB checkpoint. AI strings
     // are text (never active HTML); third-party links are HTTPS-only; a
     // rival CAS write requires explicit reopening, not silent adoption.

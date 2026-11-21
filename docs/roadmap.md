@@ -1267,3 +1267,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest: canonical raw, source hostile, truncation, stage inconsistent/empty, zero I/O; Chromium due tab con HTML malevolo e fonti malicious, pinned view, rival writer, reload/reopen e localStorage invariato. Marker `FACTORY_INDEXEDDB_STAGE_INSPECTION_E2E_PASS`.
 - [ ] Gate di chiusura #158: Factory CI, Pages, Installer candidate completed/success sullo stesso SHA main e marker browser nel log.
 - [ ] Migrare tutti i writer del LIVE `App.tsx` + bootstrap/switch/GitHub/cloud/Code Agent e UX rollback/quota/versionchange nella #139. #91/#92 non dimostrano CAS multi-device.
+
+
+## Backup completo indipendente dall'editor IDB (#159 — 22 novembre 2026)
+
+- [x] Preparazione ticket JSON canonico ID/revisione/raw pure + nome file sicuro e immutable; prima del consenso niente storage I/O.
+- [x] Conferma esplicita e triplice readback storico nativo per impedire export di revisioni stale; UI del solo pilota CAS con bozza dirty preservata, JSON completo e secondo ACK umano su file salvato; nessuna scrittura.
+- [x] Vitest preflight/invalid/race/consenso; Chromium due tab con backup byte-esatto, dirty draft, writer rivale durante dialog, reload e zero mutazioni legacy; marker `FACTORY_INDEXEDDB_SELECTED_EXPORT_E2E_PASS`.
+- [ ] Gate finale #159: Factory CI, Pages, Installer candidate `completed/success` sullo stesso SHA main + marker nel log prima di chiudere.
+- [ ] Migrare *tutti* i writer e i percorsi bootstrap/import/Code Agent/GitHub/restore del live in #139, inclusi quota/versionchange/rollback. #91/#92 restano aperte per sync multi-device.

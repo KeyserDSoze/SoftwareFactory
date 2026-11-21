@@ -31,6 +31,9 @@ import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
+  prepareCasIsolatedExport,confirmCasIsolatedExport,
+} from "../application/cas-isolated-export";
+import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
@@ -279,6 +282,49 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     });
   }
 
+  function exportSelected():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      // An unsaved human draft must NOT be lost just to export its pinned
+      // durable revision. This operation is read-only and never calls accept().
+      if(!controller || !expected || controller.state()!=="ready" ||
+         !exact(controller.snapshot(),expected))
+        throw Error("CAS selection unavailable for exact export");
+      const ticket=prepareCasIsolatedExport(expected);
+      if(!window.confirm(t(locale,"casIsoExportConsent")+"\n"+
+         ticket.id+" / rev. "+ticket.revision))return;
+
+      let raw:string;
+      try{
+        // Native read-only checks: matching pinned revision/raw, twice more
+        // before acknowledging the backup. No stale draft or legacy fallback.
+        raw=await confirmCasIsolatedExport(ticket,true);
+      }catch{
+        setNotice(t(locale,"casIsoExportStale")+
+          " ID: "+ticket.id+" / rev. "+ticket.revision);
+        return;
+      }
+
+      const url=URL.createObjectURL(new Blob([raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;link.download=ticket.fileName;
+        document.body.appendChild(link);link.click();link.remove();
+        // The browser's download handoff isn't proof of saved disk bytes.
+        if(window.confirm(t(locale,"casIsoExportSavedConfirm")))
+          setNotice(t(locale,"casIsoExportSaved")+
+            " ID: "+ticket.id+" / rev. "+ticket.revision);
+        else
+          setNotice(t(locale,"casIsoExportUnverified")+
+            " ID: "+ticket.id+" / rev. "+ticket.revision);
+      }finally{
+        setTimeout(()=>URL.revokeObjectURL(url),30000);
+      }
+    });
+  }
+
   function resetStage():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot;
@@ -488,6 +534,15 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
         <button type="button" className="secondary"
           disabled={working || !dirty || !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
+        <div data-testid="cas-isolated-full-export">
+          <p className="helper">{t(locale,"casIsoExportExplain")}</p>
+          <button type="button" className="secondary"
+            disabled={working || !active.current ||
+              active.current.state()!=="ready" || !snapshot}
+            onClick={exportSelected}>
+            {t(locale,"casIsoExportAction")}
+          </button>
+        </div>
         <div data-testid="cas-isolated-stage-inspection">
           <h4>{t(locale,"casIsoInspectTitle")}</h4>
           <p className="helper">{t(locale,"casIsoInspectExplain")}</p>
