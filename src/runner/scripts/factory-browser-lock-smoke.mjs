@@ -484,7 +484,7 @@ if (!inside) {
       await expect(page.getByTestId("cas-root-handoff-hint")).toBeVisible();
       await page.getByTestId("cas-root-handoff-open").click();
       await expect(page.getByRole("alert"))
-        .toContainText("copia trasferita non più uguale");
+        .toContainText(/copia trasferita non più uguale/i);
       assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original.id),winner);
