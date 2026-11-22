@@ -1385,10 +1385,16 @@ if (!inside) {
       // one-shot handlers survive page reload. Scope this race to exactly one
       // dialog listener, so no stale accept() handles its confirmations.
       page.removeAllListeners("dialog");
-      let discardRaceDialogs=0,discardWinner=null;
+      const discardRaceKinds=[];
+      let discardWinner=null;
       page.on("dialog",async dialog=>{
-        discardRaceDialogs++;
-        if(discardRaceDialogs===3){
+        const message=dialog.message();
+        const kind=message.startsWith("Scaricare un backup JSON byte-esatto PRIMA")
+          ?"backup":message.startsWith("Confermi di avere SALVATO il backup JSON")
+          ?"saved":message.startsWith("ULTIMA CONFERMA: scartare SOLO")
+          ?"final":"unexpected";
+        discardRaceKinds.push(kind);
+        if(kind==="final"){
           discardWinner=await rival.evaluate(async expected=>{
             const candidate=JSON.parse(expected.raw);
             candidate.config.description="RIVAL_DISCARD_WINNER";
@@ -1405,7 +1411,8 @@ if (!inside) {
         .toString("utf8"),beforeDiscardRace.raw);
       await expect(discardPanel.getByRole("alert"))
         .toContainText("Operazione IndexedDB non confermata");
-      assert.equal(discardRaceDialogs,3);
+      assert.deepEqual(discardRaceKinds,["backup","saved","final"],
+        "Discard race must have precisely three distinct human consents");
       const afterDiscardRace=await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.deepEqual(afterDiscardRace,discardWinner);
