@@ -5,8 +5,10 @@
  */
 import {useEffect,useMemo,useRef,useState} from "react";
 import {strToU8,zipSync} from "fflate";
-import {STAGES} from "../domain/defaults";
-import type {FactoryProject,FactorySettings,StageId} from "../domain/types";
+import {STAGES,SERVICE_KINDS,SERVICE_LABELS,SERVICE_OPTIONS} from "../domain/defaults";
+import type {FactoryProject,FactorySettings,StageId,ProjectConfig,
+  FrontendKind,DeploymentTarget,EnvironmentName}
+  from "../domain/types";
 import {runStage} from "../application/pipeline";
 import {resolveAgentRoute,stageAgentRole} from "../domain/agent-roles";
 import {validateAiEndpoint} from "../infrastructure/ai";
@@ -33,6 +35,10 @@ import {
   CAS_ISOLATED_DESCRIPTION_MAX,CAS_ISOLATED_REQUIREMENTS_MAX,
 } from "../application/cas-isolated-config";
 import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
+import {
+  buildCasIsolatedStackConfigEdit,readCasIsolatedStackConfig,
+  hasCasIsolatedStackDraft,
+} from "../application/cas-isolated-stack-config";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
@@ -60,6 +66,13 @@ type Props={
   onRequestLegacy?:()=>void;
 };
 
+const CAS_STACK_FRONTENDS:ReadonlyArray<FrontendKind>=
+  ["react","react-native","android","ios","unity"];
+const CAS_STACK_DEPLOYMENTS:ReadonlyArray<DeploymentTarget>=
+  ["docker","kubernetes","azure","aws","gcp"];
+const CAS_STACK_DATABASES:ReadonlyArray<ProjectConfig["database"]>=
+  ["postgresql","sqlserver","mysql","sqlite"];
+
 const CAS_INSPECTION_STATUS_KEY={
   pending:"casIsoInspectPending",
   running:"casIsoInspectRunning",
@@ -81,6 +94,7 @@ export default function CasIsolatedEditor({
   const [draftName,setDraftName]=useState("");
   const [draftDescription,setDraftDescription]=useState("");
   const [draftRequirements,setDraftRequirements]=useState("");
+  const [draftStack,setDraftStack]=useState<ProjectConfig|null>(null);
   const [stageToReset,setStageToReset]=useState<StageId>("features");
   const [stageToRun,setStageToRun]=useState<StageId>("features");
   const [manualStage,setManualStage]=useState<StageId>("features");
@@ -101,9 +115,10 @@ export default function CasIsolatedEditor({
   // automatically completed or rolled back after browser crash/reload.
   useEffect(()=>()=>{pipelineAbort.current?.abort();},[]);
 
+  const stackDirty=hasCasIsolatedStackDraft(snapshot,draftStack);
   const configDirty=hasCasIsolatedUnsavedDraft(
     snapshot,draftName,draftDescription,draftRequirements,
-  );
+  ) || stackDirty;
   // Human stage text is a draft too: close/switch/refresh must not discard
   // it without explicit consent. Saving config must not silently erase it.
   const dirty=configDirty || manualOutput.length>0 ||
@@ -125,6 +140,9 @@ export default function CasIsolatedEditor({
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
     setDraftRequirements(p.config.requirements ?? "");
+    // Strict validated stack projection. Malformed historic config is
+    // read-only in this form; never "fix" missing fields by guessing.
+    setDraftStack(readCasIsolatedStackConfig(current));
     setPipelineStatus("");
     setManualOutput("");
     setCodeRequest("");setCodeProposalJson("");
@@ -169,6 +187,7 @@ export default function CasIsolatedEditor({
     active.current=null; setExpanded(false);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
+    setDraftStack(null);
     setStageToReset("features");setStageToRun("features");
     setManualStage("features");setManualOutput("");
     setCodeRequest("");setCodeProposalJson("");
@@ -285,6 +304,7 @@ export default function CasIsolatedEditor({
       if(resetsSelection) {
         active.current=null;setSnapshot(null);
         setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setDraftStack(null);
         setManualOutput("");setCodeRequest("");setCodeProposalJson("");
       }
       setList(available);
@@ -357,6 +377,7 @@ export default function CasIsolatedEditor({
       active.current=null;
       setSnapshot(null);
       setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setDraftStack(null);
       setList(null);
       // Do not make an already acknowledged delete appear to have failed
       // solely because a later read-only library refresh is unavailable.
@@ -375,8 +396,16 @@ export default function CasIsolatedEditor({
       if(!controller || !expected || controller.state()!=="ready" ||
         !exact(controller.snapshot(),expected))
         throw Error("Stale CAS session");
-      const candidate=buildCasIsolatedConfigEdit(
-        expected,draftName,draftDescription,draftRequirements);
+      if(stackDirty && !draftStack)
+        throw Error("Missing stack draft");
+      // A single transaction saves text + stack together. A text-only edit
+      // stays compatible with historical IDB fixtures lacking stack keys.
+      const candidate=stackDirty ?
+        buildCasIsolatedStackConfigEdit(expected,{
+          ...draftStack!,name:draftName,description:draftDescription,
+          requirements:draftRequirements,
+        }) : buildCasIsolatedConfigEdit(
+          expected,draftName,draftDescription,draftRequirements);
       if(!window.confirm(t(locale,"casIsoBackupConfirm"))) return;
       // The file contains the original exact raw, BEFORE the stage reset and
       // new candidate are persisted. No upload or automatic migration.
@@ -743,6 +772,7 @@ export default function CasIsolatedEditor({
       }catch{
         active.current=null;setSnapshot(null);setList(null);
         setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setDraftStack(null);
         setNotice(t(locale,"casIsoPipelinePostAckWarning")+identity);
       }
     });
@@ -814,6 +844,98 @@ export default function CasIsolatedEditor({
             disabled={working || !active.current}
             onChange={e=>setDraftRequirements(e.target.value)}/>
         </label>
+        <div data-testid="cas-isolated-full-stack">
+          <h4>{t(locale,"casIsoStackTitle")}</h4>
+          <p className="helper">{t(locale,"casIsoStackExplain")}</p>
+          {draftStack===null ?
+            <p className="helper" data-testid="cas-isolated-stack-unavailable">
+              {t(locale,"casIsoStackUnavailable")}
+            </p>:
+            <details>
+              <summary>{t(locale,"casIsoStackExpand")}</summary>
+              <fieldset>
+                <legend>{t(locale,"casIsoStackFrontend")}</legend>
+                {CAS_STACK_FRONTENDS.map(frontend=>
+                  <label key={frontend} className="checkline">
+                    <input type="checkbox"
+                      data-testid={"cas-isolated-stack-frontend-"+frontend}
+                      disabled={working || !active.current}
+                      checked={draftStack.frontends.includes(frontend)}
+                      onChange={e=>setDraftStack(current=>{
+                        if(!current)return current;
+                        return {...current,
+                          frontends:e.target.checked ?
+                            [...current.frontends,frontend] :
+                            current.frontends.filter(f=>f!==frontend),
+                        };
+                      })}/>
+                    {frontend}
+                  </label>)}
+              </fieldset>
+              <label>{t(locale,"casIsoStackDeployment")}
+                <select data-testid="cas-isolated-stack-deployment"
+                  disabled={working || !active.current}
+                  value={draftStack.deployment}
+                  onChange={e=>setDraftStack(current=>current?
+                    {...current,deployment:e.target.value as DeploymentTarget}:
+                    current)}>
+                  {CAS_STACK_DEPLOYMENTS.map(value=>
+                    <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label>{t(locale,"casIsoStackDotnet")}
+                <select data-testid="cas-isolated-stack-dotnet"
+                  disabled={working || !active.current}
+                  value={draftStack.dotnetVersion}
+                  onChange={e=>setDraftStack(current=>current?
+                    {...current,dotnetVersion:e.target.value as
+                      ProjectConfig["dotnetVersion"]}:current)}>
+                  <option value="11.0">.NET 11</option>
+                  <option value="10.0">.NET 10</option>
+                </select>
+              </label>
+              <label>{t(locale,"casIsoStackDatabase")}
+                <select data-testid="cas-isolated-stack-database"
+                  disabled={working || !active.current}
+                  value={draftStack.database}
+                  onChange={e=>setDraftStack(current=>current?
+                    {...current,database:e.target.value as
+                      ProjectConfig["database"]}:current)}>
+                  {CAS_STACK_DATABASES.map(value=>
+                    <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <h4>{t(locale,"casIsoStackServices")}</h4>
+              {SERVICE_KINDS.map(kind=><div
+                data-testid={"cas-isolated-stack-service-"+kind}
+                key={kind}>
+                <strong>{SERVICE_LABELS[kind]}</strong>
+                {(["development","production"] as EnvironmentName[])
+                  .map(env=><label key={env}>
+                    {t(locale,env==="development" ?
+                      "casIsoStackDev":"casIsoStackProd")}
+                    <select
+                      data-testid={"cas-isolated-stack-"+kind+"-"+env}
+                      disabled={working || !active.current}
+                      value={draftStack.services[kind][env]}
+                      onChange={e=>setDraftStack(current=>{
+                        if(!current)return current;
+                        const services={...current.services,
+                          [kind]:{...current.services[kind],
+                            [env]:e.target.value}};
+                        return {...current,services};
+                      })}>
+                      {SERVICE_OPTIONS[kind].map(value=>
+                        <option key={value} value={value}>{value}</option>)}
+                    </select>
+                  </label>)}
+              </div>)}
+              {stackDirty && <p className="helper"
+                data-testid="cas-isolated-stack-dirty">
+                {t(locale,"casIsoStackDirty")}
+              </p>}
+            </details>}
+        </div>
         <p className="helper">{t(locale,"casIsoInvalidate")}</p>
         <button type="button" className="secondary"
           disabled={working || !configDirty || manualOutput.length>0 ||
@@ -1074,6 +1196,7 @@ export default function CasIsolatedEditor({
               return;
             active.current=null;setSnapshot(null);setList(null);
             setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setDraftStack(null);
             setManualOutput("");setCodeRequest("");setCodeProposalJson("");
           }}>
           {t(locale,"casIsoDiscard")}

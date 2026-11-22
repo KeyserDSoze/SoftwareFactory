@@ -140,6 +140,124 @@ if (!inside) {
         window.FactoryProjectCas.readCasProject(id),created[0].id);
       assert.equal(JSON.parse(stored.raw).config.name,
         "CAS-only native project 167");
+
+      // #168: real CAS-root stack composer. A previously completed stage
+      // must become pending after an explicitly backed-up stack change.
+      const withStage=await page.evaluate(async expected=>{
+        const p=JSON.parse(expected.raw);
+        p.stages[0].status="complete";
+        p.stages[0].output="PRE_STACK_HISTORICAL_UNVERIFIED_168";
+        p.stages[0].completionOrigin="manual";
+        return await window.FactoryProjectCas.compareAndSwapCasProject(
+          p,expected);
+      },stored);
+      await panel.getByRole("button",{
+        name:/Refresh IndexedDB library/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Open IDB copy: CAS-only native project 167",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      const stack=panel.getByTestId("cas-isolated-full-stack");
+      await stack.locator("summary").click();
+      await stack.getByTestId("cas-isolated-stack-frontend-react-native")
+        .check();
+      await stack.getByTestId("cas-isolated-stack-frontend-react")
+        .uncheck();
+      await stack.getByTestId("cas-isolated-stack-deployment")
+        .selectOption("aws");
+      await stack.getByTestId("cas-isolated-stack-dotnet")
+        .selectOption("10.0");
+      await stack.getByTestId("cas-isolated-stack-database")
+        .selectOption("mysql");
+      await stack.getByTestId("cas-isolated-stack-database-production")
+        .selectOption("aws-rds");
+      await stack.getByTestId("cas-isolated-stack-cache-development")
+        .selectOption("redis");
+      await expect(stack.getByTestId("cas-isolated-stack-dirty"))
+        .toBeVisible();
+      const stackSave=panel.getByRole("button",{
+        name:"Save IndexedDB edit with backup",
+      });
+      await expect(stackSave).toBeEnabled();
+      // Explicitly declining backup consent means no revision change.
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await stackSave.click();
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),created[0].id),
+        withStage);
+      let editConsents=0;
+      const approveStack=async dialog=>{
+        editConsents++;
+        await dialog.accept();
+      };
+      page.on("dialog",approveStack);
+      const sourceBackup=page.waitForEvent("download");
+      await stackSave.click();
+      const file=await sourceBackup;
+      assert.equal(file.suggestedFilename(),
+        "softwarefactory-cas-before-edit-"+created[0].id+"-r2.json");
+      assert.equal((await readFile(await file.path())).toString("utf8"),
+        withStage.raw,"CAS stack backup must match byte-exact source rev");
+      assert.equal(editConsents,2);
+      page.off("dialog",approveStack);
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      const edited=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),created[0].id);
+      const savedStack=JSON.parse(edited.raw);
+      assert.deepEqual(savedStack.config.frontends,["react-native"]);
+      assert.equal(savedStack.config.deployment,"aws");
+      assert.equal(savedStack.config.dotnetVersion,"10.0");
+      assert.equal(savedStack.config.database,"mysql");
+      assert.equal(savedStack.config.services.database.production,"aws-rds");
+      assert.equal(savedStack.config.services.cache.development,"redis");
+      assert.ok(savedStack.stages.every(stage=>stage.status==="pending" &&
+        stage.output==="" && !stage.completionOrigin));
+      assert.ok(!edited.raw.includes("PRE_STACK_HISTORICAL_UNVERIFIED_168"));
+
+      // Rival noncooperating writer updates this same ID during the SECOND
+      // human consent. An obsolete native CAS stack draft must be retained
+      // on-screen; no stale overwrite, merge or automatic retry.
+      const rival=await standaloneContext.newPage();
+      await rival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await rival.addScriptTag({content:casBundle});
+      await stack.getByTestId("cas-isolated-stack-deployment")
+        .selectOption("gcp");
+      let raceDialogs=0,winner=null;
+      page.on("dialog",async dialog=>{
+        raceDialogs++;
+        if(raceDialogs===2){
+          winner=await rival.evaluate(async expected=>{
+            const p=JSON.parse(expected.raw);
+            p.config.description="RIVAL_STACK_168_WINNER";
+            return await window.FactoryProjectCas.compareAndSwapCasProject(
+              p,expected);
+          },edited);
+        }
+        await dialog.accept();
+      });
+      const racedBackup=page.waitForEvent("download");
+      await stackSave.click();
+      assert.equal((await readFile(await (await racedBackup).path()))
+        .toString("utf8"),edited.raw);
+      await expect(panel.getByRole("alert"))
+        .toContainText("IndexedDB operation not confirmed");
+      assert.equal(raceDialogs,2);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),created[0].id),winner);
+      await expect(stack.getByTestId("cas-isolated-stack-deployment"))
+        .toHaveValue("gcp");
+      await expect(stack.getByTestId("cas-isolated-stack-dirty"))
+        .toBeVisible();
+      assert.ok(!winner.raw.includes('"deployment":"gcp"'),
+        "Rejected human draft is not silently accepted in DB");
+      page.removeAllListeners("dialog");
+      console.log("FACTORY_INDEXEDDB_FULL_STACK_EDIT_E2E_PASS: CAS-only composer edits complete stack, exact JSON backup + 2 consents, source rev and stage evidence invalidation, rival wins second consent without overwriting human draft or legacy");
+
       assert.deepEqual(await page.evaluate(()=>({
         pointer:localStorage.getItem("softwarefactory.project.v1"),
         slot:localStorage.getItem(
