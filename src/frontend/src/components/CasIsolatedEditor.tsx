@@ -36,6 +36,11 @@ import {
   CAS_MANUAL_STAGE_MAX_CHARS,
 } from "../application/cas-isolated-manual-stage";
 import {
+  buildCasIsolatedPendingCodePatch,canStageCasIsolatedCodePatch,
+  inspectCasIsolatedPendingCodePatch,
+  CAS_PENDING_PATCH_MAX_REQUEST,CAS_PENDING_PATCH_MAX_JSON,
+} from "../application/cas-isolated-code-patch";
+import {
   prepareCasIsolatedExport,confirmCasIsolatedExport,
 } from "../application/cas-isolated-export";
 import {
@@ -67,6 +72,8 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   const [stageToRun,setStageToRun]=useState<StageId>("features");
   const [manualStage,setManualStage]=useState<StageId>("features");
   const [manualOutput,setManualOutput]=useState("");
+  const [codeRequest,setCodeRequest]=useState("");
+  const [codeProposalJson,setCodeProposalJson]=useState("");
   const [pipelineRunning,setPipelineRunning]=useState(false);
   const [pipelineStatus,setPipelineStatus]=useState("");
   const [newProjectName,setNewProjectName]=useState("");
@@ -86,10 +93,12 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   );
   // Human stage text is a draft too: close/switch/refresh must not discard
   // it without explicit consent. Saving config must not silently erase it.
-  const dirty=configDirty || manualOutput.length>0;
+  const dirty=configDirty || manualOutput.length>0 ||
+    codeRequest.length>0 || codeProposalJson.length>0;
   // This projection is read-only and pinned to the selection's exact CAS
   // revision; a rival tab cannot silently replace the text being inspected.
   const inspectedStages=inspectCasIsolatedStages(snapshot);
+  const inspectedCodePatch=inspectCasIsolatedPendingCodePatch(snapshot);
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
@@ -100,6 +109,7 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     setDraftRequirements(p.config.requirements ?? "");
     setPipelineStatus("");
     setManualOutput("");
+    setCodeRequest("");setCodeProposalJson("");
   }
   async function run(action:()=>Promise<void>):Promise<void> {
     if(inFlight.current) return;
@@ -134,6 +144,7 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
     setStageToReset("features");setStageToRun("features");
     setManualStage("features");setManualOutput("");
+    setCodeRequest("");setCodeProposalJson("");
     setPipelineStatus("");
     setNewProjectName(""); setNewProjectDescription("");
   }
@@ -185,11 +196,16 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     if(resetsSelection && dirty &&
        !window.confirm(t(locale,"casIsoRefreshDirtyConfirm"))) return;
     void run(async()=>{
-      if(resetsSelection) {
-        active.current=null; setSnapshot(null);
-        setDraftName("");setDraftDescription("");setDraftRequirements("");
-      }
+      // Do the read FIRST: if IndexedDB is unavailable, retain even a
+      // blocked selected project and its human/Code Agent drafts. An
+      // explicit discard consent must not destroy the only draft if read
+      // failed. Clear only after the verified read-only refresh succeeds.
       const available=await listCasProjects();
+      if(resetsSelection) {
+        active.current=null;setSnapshot(null);
+        setDraftName("");setDraftDescription("");setDraftRequirements("");
+        setManualOutput("");setCodeRequest("");setCodeProposalJson("");
+      }
       setList(available);
     });
   }
@@ -271,8 +287,9 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
 
   function save():void {
     void run(async()=>{
-      if(manualOutput.length>0)
-        throw Error("Uncommitted human stage draft must be handled first");
+      if(manualOutput.length>0 || codeRequest.length>0 ||
+         codeProposalJson.length>0)
+        throw Error("Uncommitted stage/Code Agent draft must be handled first");
       const controller=active.current, expected=snapshot;
       if(!controller || !expected || controller.state()!=="ready" ||
         !exact(controller.snapshot(),expected))
@@ -349,7 +366,8 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     void run(async()=>{
       const controller=active.current,expected=snapshot,stage=manualStage;
       if(!controller || !expected || controller.state()!=="ready" ||
-         configDirty || !exact(controller.snapshot(),expected))
+         configDirty || codeRequest.length>0 || codeProposalJson.length>0 ||
+         !exact(controller.snapshot(),expected))
         throw Error("Stale/dirty CAS manual stage commit");
       // Build before the first dialog: reject blank/oversize, running and
       // unready predecessors, never fabricate AI/runner/test evidence.
@@ -379,6 +397,45 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
       accept(committed);setList(null);
       setNotice(t(locale,"casIsoManualDone")+
         " ("+stage+", rev. "+committed.revision+")");
+    });
+  }
+
+  function stageCodeProposal():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         configDirty || manualOutput.length>0 ||
+         !exact(controller.snapshot(),expected))
+        throw Error("Stale/dirty CAS Code Agent pending write");
+      // Validate using the SAME domain allowlist and workspace conflict
+      // checks as the real Code Agent, but do not call any AI provider,
+      // review service, test runner, GitHub or live localStorage writer.
+      const candidate=buildCasIsolatedPendingCodePatch(
+        expected,codeRequest,codeProposalJson);
+      if(!window.confirm(t(locale,"casIsoCodeBackupConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-code-pending-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoCodeBackupSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoCodeFinalConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision))return;
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent Code Agent pending CAS ACK");
+      // Never clear the pasted code draft or advance the selected revision
+      // before native IndexedDB transaction oncomplete.
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoCodeDone")+
+        " (rev. "+committed.revision+")");
     });
   }
 
@@ -590,6 +647,7 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
         <p className="helper">{t(locale,"casIsoInvalidate")}</p>
         <button type="button" className="secondary"
           disabled={working || !configDirty || manualOutput.length>0 ||
+              codeRequest.length>0 || codeProposalJson.length>0 ||
               !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
         <div data-testid="cas-isolated-full-export">
@@ -695,9 +753,43 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
           </label>
           <button type="button" className="secondary"
             disabled={working || configDirty ||
+              codeRequest.length>0 || codeProposalJson.length>0 ||
               active.current?.state()!=="ready" ||
               !canCommitCasIsolatedManualStage(snapshot,manualStage,manualOutput)}
             onClick={saveManualStage}>{t(locale,"casIsoManualAction")}</button>
+        </div>
+        <div data-testid="cas-isolated-code-proposal">
+          <h4>{t(locale,"casIsoCodeTitle")}</h4>
+          <p className="helper">{t(locale,"casIsoCodeExplain")}</p>
+          {inspectedCodePatch && <div
+            data-testid="cas-isolated-code-pending-preview">
+            <p><strong>{t(locale,"casIsoCodeAlreadyPending")}</strong></p>
+            <p>{inspectedCodePatch.summary}</p>
+            <p className="helper">
+              {t(locale,"casIsoCodePatchStatus")} ·
+              {" "+inspectedCodePatch.editCount+" file · "}
+              rev. {inspectedCodePatch.revision}
+            </p>
+          </div>}
+          <label>{t(locale,"casIsoCodeRequest")}
+            <textarea value={codeRequest} maxLength={CAS_PENDING_PATCH_MAX_REQUEST}
+              rows={3} disabled={working}
+              data-testid="cas-isolated-code-request"
+              onChange={e=>setCodeRequest(e.target.value)}/>
+          </label>
+          <label>{t(locale,"casIsoCodeJson")}
+            <textarea value={codeProposalJson} maxLength={CAS_PENDING_PATCH_MAX_JSON}
+              rows={6} disabled={working}
+              data-testid="cas-isolated-code-json"
+              onChange={e=>setCodeProposalJson(e.target.value)}/>
+          </label>
+          <button type="button" className="secondary"
+            disabled={working || configDirty || manualOutput.length>0 ||
+              active.current?.state()!=="ready" ||
+              !canStageCasIsolatedCodePatch(snapshot,codeRequest,codeProposalJson)}
+            onClick={stageCodeProposal}>
+            {t(locale,"casIsoCodeAction")}
+          </button>
         </div>
         <div data-testid="cas-isolated-stage-reset">
           <p className="helper">{t(locale,"casIsoStageResetExplain")}</p>
@@ -744,7 +836,13 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
           onClick={deleteSelected}>{t(locale,"casIsoDeleteAction")}</button>
         <p className="helper">{t(locale,"casIsoDeleteExplain")}</p>
         <button type="button" className="secondary" disabled={working}
-          onClick={()=>{active.current=null;setSnapshot(null);setList(null);}}>
+          onClick={()=>{
+            if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm")))
+              return;
+            active.current=null;setSnapshot(null);setList(null);
+            setDraftName("");setDraftDescription("");setDraftRequirements("");
+            setManualOutput("");setCodeRequest("");setCodeProposalJson("");
+          }}>
           {t(locale,"casIsoDiscard")}
         </button>
       </div>}

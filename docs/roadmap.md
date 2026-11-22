@@ -1295,3 +1295,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest su stage preflight/provenance/invalidation/no I/O; Chromium due tab con completamento umano, correzione, backup, writer rivale durante consenso e legacy immutato. Marker `FACTORY_INDEXEDDB_MANUAL_STAGE_UI_E2E_PASS`.
 - [ ] Gate di chiusura #161: Factory CI, Pages, Installer candidate completed/success stesso SHA `main`, marker Chromium nel log e issue aggiornata.
 - [ ] Migrare **in modo coordinato** tutti i writer del live `App.tsx` su async IDB + bootstrap/switch/import/Code Agent/GitHub/cloud/rollback: parent #139 ancora aperta. #91/#92 restano aperte per sync multi-device/provider.
+
+
+## Code Agent proposal pending nel pilota CAS (#162 — 22 novembre 2026)
+
+- [x] Adattatore puro del dominio Code Agent (`validateProposal` + `setPending`) con ID/rev/raw esatti, stage validi, allowlist di 1–8 path, replacements e dimensioni bounded, senza segreti o false review; rifiuto di pending duplicato e snapshot corrotto.
+- [x] UI opt-in per richiesta e JSON umano con vista inerte di un pending non approvato, tre consensi (backup raw, file salvato, commit pending) e solo CAS transaction `tx.oncomplete`; nessun runner, AI, review indipendente, apply patch, GitHub o cloud.
+- [x] Protezione bozze Code Agent nei percorsi close/switch/discard e refresh dopo guasto: leggere il DB **prima** di eliminare dati locali se il refresh fallisce.
+- [x] Vitest validazione/no I/O e Chromium multi-tab con backup byte-esatto, no-review/no-runner, race durante ultimo dialog e draft preservato su storage failure; marker `FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS`.
+- [ ] Chiusura issue #162 solo dopo Factory CI, Pages e Installer candidate `completed/success` allo stesso SHA main e marker Chromium verificato nel log.
+- [ ] Successivo parent #139: completare tutti i writer live in un unico cutover IndexedDB (bootstrap, CodeAgentPanel, pipeline, GitHub, cloud, import, recovery); #91/#92 per provider/cross-device e #113/#109 per review attestata non cambiano.

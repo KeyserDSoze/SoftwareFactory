@@ -1122,6 +1122,204 @@ if (!inside) {
     }
 
 
+    // #162: real IndexedDB Code Agent JSON patch staging, without AI,
+    // review, test runner or GitHub operations. Two tab native CAS fencing.
+    const codePatchContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await codePatchContext.newPage();
+      const rival=await codePatchContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="16216216-2162-4162-8162-162162162162";
+      const conflictId="16216216-2162-4162-8162-162162162163";
+      const seed=async (id,name)=>rival.evaluate(async ({id,name})=>{
+        const now="2026-11-22T08:30:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(stage=>({
+            id:stage,label:stage,status:"pending",output:"",sources:[],
+          }));
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name,description:"Only CAS pilot, never live",
+            requirements:"Do not fabricate approvals/runner proof"},
+          stages,createdAt:now,updatedAt:now,
+        },null);
+      },{id,name});
+      const original=await seed(id,"Code Agent pending fixture");
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Code Agent pending fixture",
+      }).click();
+      const form=panel.getByTestId("cas-isolated-code-proposal");
+      const request=form.getByTestId("cas-isolated-code-request");
+      const json=form.getByTestId("cas-isolated-code-json");
+      const action=form.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      });
+      const summary="<img src=x onerror=alert('CODE_AGENT_XSS')> Unreviewed human patch";
+      const proposal=JSON.stringify({
+        summary,
+        files:[{path:"src/frontend/web/src/HumanFeature162.tsx",
+          content:"export const HumanFeature162=()=> <p>Not executed</p>;",
+          reason:"Operator supplied full replacement, not executed"}],
+        tests:["web-build"],assumptions:["No actual AI/review/build/test was run"],
+      });
+      await request.fill("Add a human-proposed component");
+      await json.fill(proposal);
+      await expect(action).toBeEnabled();
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await action.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original);
+      await expect(json).toHaveValue(proposal);
+
+      let consents=0;
+      const acceptDialogs=async dialog=>{consents++;await dialog.accept();};
+      page.on("dialog",acceptDialogs);
+      const downloadEvent=page.waitForEvent("download");
+      await action.click();
+      const download=await downloadEvent;
+      assert.equal(download.suggestedFilename(),
+        "softwarefactory-cas-before-code-pending-"+id+"-r1.json");
+      assert.equal((await readFile(await download.path())).toString("utf8"),
+        original.raw,"Pending Code Agent pre-write backup must be exact IDB raw");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      assert.equal(consents,3,
+        "Only 3 consents may permit Code Agent pending CAS write");
+      const pending=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const stored=JSON.parse(pending.raw);
+      assert.equal(pending.revision,2);
+      assert.equal(stored.development.revision,0);
+      assert.equal(stored.development.pending.summary,summary);
+      assert.equal(stored.development.pending.edits.length,1);
+      assert.equal(stored.development.pending.review,undefined);
+      assert.equal(stored.development.pending.repairTrail,undefined);
+      assert.equal(stored.development.lastRunnerEvidence,undefined);
+      assert.equal(stored.development.history.length,0);
+      assert.equal(stored.githubTestReceipt,undefined);
+      assert.equal(stored.githubSync,undefined);
+      assert.deepEqual(stored.stages,JSON.parse(original.raw).stages);
+      await expect(form.getByTestId("cas-isolated-code-pending-preview"))
+        .toContainText("pending, NON approvato");
+      await expect(form.getByTestId("cas-isolated-code-pending-preview"))
+        .toContainText(summary);
+      assert.equal(await form.locator("img").count(),0,
+        "Untrusted Code Agent JSON summary must never render as HTML");
+      await expect(request).toHaveValue("");
+      await expect(json).toHaveValue("");
+      await expect(action).toBeDisabled();
+      page.off("dialog",acceptDialogs);
+
+      // Reload retains only durable IDB pending and never copies it to
+      // localStorage, provider, runner or a presumed reviewed workspace.
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const loaded=page.getByTestId("cas-isolated-editor");
+      await loaded.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await loaded.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await loaded.getByRole("button",{
+        name:"Apri copia IDB: Code Agent pending fixture",
+      }).click();
+      await expect(loaded.getByTestId("cas-isolated-code-pending-preview"))
+        .toContainText(summary);
+
+      // A second never-seen ID enables a fresh pending candidate while the
+      // rival commits a DIFFERENT valid raw during the FINAL consent.
+      const fresh=await seed(conflictId,"Code Agent conflict fixture");
+      await loaded.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await loaded.getByRole("button",{
+        name:"Apri copia IDB: Code Agent conflict fixture",
+      }).click();
+      const form2=loaded.getByTestId("cas-isolated-code-proposal");
+      const request2=form2.getByTestId("cas-isolated-code-request");
+      const json2=form2.getByTestId("cas-isolated-code-json");
+      const action2=form2.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      });
+      await request2.fill("CONCURRENT_CODE_AGENT_HUMAN_DRAFT");
+      await json2.fill(proposal);
+      let raceDialogs=0,winner=null;
+      page.on("dialog",async dialog=>{
+        raceDialogs++;
+        if(raceDialogs===3){
+          winner=await rival.evaluate(async expected=>{
+            const candidate=JSON.parse(expected.raw);
+            candidate.config.description="NATIVE_COMPETING_CAS_WINNER";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              candidate,expected);
+          },fresh);
+        }
+        await dialog.accept();
+      });
+      const backup2=page.waitForEvent("download");
+      await action2.click();
+      assert.equal((await readFile(await (await backup2).path())).toString("utf8"),
+        fresh.raw);
+      await expect(loaded.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      await expect(request2).toHaveValue("CONCURRENT_CODE_AGENT_HUMAN_DRAFT");
+      await expect(json2).toHaveValue(proposal);
+      await expect(action2).toBeDisabled();
+      assert.equal(raceDialogs,3);
+      assert.equal(winner.revision,2);
+      const winnerNow=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),conflictId);
+      assert.deepEqual(winnerNow,winner,
+        "Never silently merge a human Code Agent patch onto rival CAS winner");
+      assert.equal(JSON.parse(winnerNow.raw).development,undefined,
+        "Rival winner must not inherit a stale unreviewed code proposal");
+      page.removeAllListeners("dialog");
+
+      // A failed refresh after discard consent must not erase draft values.
+      await page.evaluate(()=>Object.defineProperty(window,"indexedDB",{
+        configurable:true,value:undefined,
+      }));
+      page.once("dialog",dialog=>void dialog.accept());
+      await loaded.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      await expect(loaded.getByRole("alert"))
+        .toContainText("IndexedDB non disponibile");
+      await expect(json2).toHaveValue(proposal);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Code Agent pending CAS pilot must never touch legacy localStorage");
+      console.log("FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS: real CAS pending unreviewed patch, exact backup and three consents, inert summary, reload, rival final-dialog fencing, outage preserves human draft, legacy unchanged");
+    }finally{
+      await codePatchContext.close();
+    }
+
     // #161: real Chromium native CAS commit of HUMAN stage output with
     // revision-fenced manual provenance, 3 consents, predecessor/downstream
     // lifecycle and a competing noncooperating tab on final consent.
