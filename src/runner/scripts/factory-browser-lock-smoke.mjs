@@ -527,7 +527,7 @@ if (!inside) {
       await action.click();
       assert.equal((await readFile(await (await downloaded).path()))
         .toString("utf8"),sourceRaw);
-      await expect(page.getByRole("alert"))
+      await expect(page.locator(".alert.error"))
         .toContainText("non confermato");
       assert.equal(dialogs,3);
       assert.equal(new URL(page.url()).searchParams.get("workspace"),null);
@@ -541,7 +541,7 @@ if (!inside) {
         winner);
       assert.equal(tomb.revision,2);
       await action.click();
-      await expect(page.getByRole("alert"))
+      await expect(page.locator(".alert.error"))
         .toContainText("non confermato");
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProjectSlot(id),id),
@@ -590,7 +590,7 @@ if (!inside) {
       await page.getByTestId("cas-root-handoff-start").click();
       assert.equal((await readFile(await (await backup).path()))
         .toString("utf8"),current.raw);
-      await expect(page.getByRole("alert"))
+      await expect(page.locator(".alert.error"))
         .toContainText("non confermato");
       assert.equal(n,3);
       assert.ok(newRaw && newRaw!==current.raw);
