@@ -37,6 +37,7 @@ if (!inside) {
   const require = createRequire(path.join(root,
     "src/frontend/generated-fixture/src/frontend/web/package.json"));
   const { chromium, expect } = require("@playwright/test");
+  const { unzipSync, strFromU8 } = require("fflate");
   // A minimal static server never writes to the read-only checkout. Vite's
   // preview command would attempt a .vite-temp config file under node_modules.
   const dist = path.join(root,"src/frontend/dist");
@@ -1272,6 +1273,35 @@ if (!inside) {
       }).click();
       await expect(loaded.getByTestId("cas-isolated-code-pending-preview"))
         .toContainText(summary);
+      await expect(loaded.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      // #165: source ZIP is generated from the pinned IDB-only scaffold,
+      // not from the active legacy App, pending JSON, or unaudited review.
+      const sourceZipAction=loaded.getByTestId("cas-isolated-source-zip-action");
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await sourceZipAction.click();
+      let zipConsents=0;
+      const allowZip=async dialog=>{zipConsents++;await dialog.accept();};
+      page.on("dialog",allowZip);
+      const zipEvent=page.waitForEvent("download");
+      await sourceZipAction.click();
+      const zipped=await zipEvent;
+      assert.equal(zipped.suggestedFilename(),
+        "softwarefactory-idb-sources-"+id+"-r2.zip");
+      const zipFiles=unzipSync(new Uint8Array(await readFile(await zipped.path())));
+      assert.ok(zipFiles["README.md"],
+        "Native IDB source ZIP must have generated scaffold files");
+      assert.ok(zipFiles["docs/cas-idb-export-provenance.md"],
+        "Local source ZIP must mark review and test as unverified");
+      assert.ok(strFromU8(zipFiles["docs/cas-idb-export-provenance.md"])
+        .includes("Unreviewed Code Agent pending edits were NOT included"));
+      assert.equal(zipFiles["src/frontend/web/src/HumanFeature162.tsx"],undefined,
+        "Never include an unreviewed human pending source in a ZIP");
+      assert.ok(zipConsents===2,"ZIP requires consent and disk-save ACK");
+      page.off("dialog",allowZip);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),pending,
+        "Source ZIP readback must never write the IDB project");
 
       // #163: only three consents allow discarding an unreviewed pending.
       const discardButton=loaded.getByTestId("cas-isolated-code-discard-action");
@@ -1460,8 +1490,103 @@ if (!inside) {
       console.log("FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS: real CAS pending unreviewed patch, exact backup and three consents, inert summary, reload, rival final-dialog fencing, outage preserves human draft, legacy unchanged");
       console.log("FACTORY_INDEXEDDB_CODE_DISCARD_UI_E2E_PASS: native CAS pending discard with exact raw backup, 3 consents, restaging, rival final-consent fencing and zero legacy writes");
       console.log("FACTORY_INDEXEDDB_CODE_DIFF_PREVIEW_E2E_PASS: inert bounded source before/after preview, path allowlist, HTML injection escaped, pinned rev after noncooperating writer, reload and zero legacy writes");
+      console.log("FACTORY_INDEXEDDB_SOURCE_ZIP_STAGE_E2E_PASS: IDB-only source ZIP includes generated scaffold/provenance, never pending JSON, exact pinned filename and two consents, no DB writes");
     }finally{
       await codePatchContext.close();
+    }
+
+    // #165: stale native IndexedDB source ZIP must never download/auto-rebase.
+    const zipRaceContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await zipRaceContext.newPage();
+      const rival=await zipRaceContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="16516516-5165-4165-8165-165165165165";
+      const now="2026-11-22T17:10:00.000Z";
+      const original=await rival.evaluate(async ({id,now})=>{
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(name=>({
+          id:name,label:name,status:"pending",output:"",sources:[],
+        }));
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,createdAt:now,updatedAt:now,
+          config:{name:"Native ZIP concurrency fixture",
+            description:"Only IndexedDB native source export",
+            requirements:"No stale downloads",
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"none",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            },
+          },stages,
+        },null);
+      },{id,now});
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Native ZIP concurrency fixture",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const zipAction=panel.getByTestId("cas-isolated-source-zip-action");
+      await expect(zipAction).toBeEnabled();
+      // Noncooperating tab wins while the human grants permission to read:
+      // the native confirmCasIsolatedExport readback must detect it.
+      let winner=null,consents=0,downloads=0;
+      page.on("download",()=>{downloads++;});
+      page.on("dialog",async dialog=>{
+        consents++;
+        if(consents===1){
+          winner=await rival.evaluate(async expected=>{
+            const updated=JSON.parse(expected.raw);
+            updated.config.description="Native rival won before ZIP readback";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              updated,expected);
+          },original);
+        }
+        await dialog.accept();
+      });
+      await zipAction.click();
+      await expect(panel.getByText(/ZIP annullato: la copia IndexedDB/))
+        .toBeVisible();
+      assert.equal(consents,1,"Do not acknowledge a ZIP never downloaded");
+      assert.equal(downloads,0,"No stale ZIP on rival CAS win");
+      const current=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.deepEqual(current,winner);
+      assert.equal(current.revision,2);
+      assert.deepEqual(await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      })),legacyBefore);
+      console.log("FACTORY_INDEXEDDB_SOURCE_ZIP_E2E_PASS: real Chromium zipped scaffold excludes pending, native revision/raw readback rejects rival writer and never writes legacy");
+    }finally{
+      await zipRaceContext.close();
     }
 
     // #161: real Chromium native CAS commit of HUMAN stage output with

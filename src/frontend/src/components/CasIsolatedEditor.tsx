@@ -4,6 +4,7 @@
  * live setProject, localStorage, GitHub or cloud operations are reachable here.
  */
 import {useEffect,useMemo,useRef,useState} from "react";
+import {strToU8,zipSync} from "fflate";
 import {STAGES} from "../domain/defaults";
 import type {FactoryProject,FactorySettings,StageId} from "../domain/types";
 import {runStage} from "../application/pipeline";
@@ -45,6 +46,7 @@ import {
 import {
   prepareCasIsolatedExport,confirmCasIsolatedExport,
 } from "../application/cas-isolated-export";
+import {prepareCasIsolatedSourceZip} from "../application/cas-isolated-source-zip";
 import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
@@ -362,6 +364,57 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
             " ID: "+ticket.id+" / rev. "+ticket.revision);
         else
           setNotice(t(locale,"casIsoExportUnverified")+
+            " ID: "+ticket.id+" / rev. "+ticket.revision);
+      }finally{
+        setTimeout(()=>URL.revokeObjectURL(url),30000);
+      }
+    });
+  }
+
+  function exportSourceZip():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         !exact(controller.snapshot(),expected))
+        throw Error("Stale CAS source export session");
+      // No session settings, PAT, GitHub or pending patch from the live editor.
+      // The pure builder includes only the generated baseline + persisted
+      // overrides and deliberately drops the unverified history log.
+      const ticket=prepareCasIsolatedSourceZip(expected);
+      if(!window.confirm(t(locale,"casIsoSourceZipConsent")+"\n"+
+         ticket.id+" / rev. "+ticket.revision))return;
+      try{
+        const verified=await confirmCasIsolatedExport(
+          prepareCasIsolatedExport(expected),true);
+        if(verified!==ticket.raw)
+          throw Error("Stale native IDB source ticket");
+      }catch{
+        setNotice(t(locale,"casIsoSourceZipStale")+
+          " ID: "+ticket.id+" / rev. "+ticket.revision);
+        return;
+      }
+
+      // No pending proposal in this map. Archive generation is client-side,
+      // after native IDB revision+raw readback; there are no project writes.
+      const entries:Record<string,Uint8Array>={};
+      for(const [file,body] of Object.entries(ticket.files).sort(
+        ([a],[b])=>a.localeCompare(b)))
+        entries[file]=strToU8(body);
+      const zipped=zipSync(entries,{level:6});
+      const bytes=new Uint8Array(zipped.length);bytes.set(zipped);
+      const url=URL.createObjectURL(new Blob([bytes],{
+        type:"application/zip",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;link.download=ticket.fileName;
+        document.body.appendChild(link);link.click();link.remove();
+        // Browser handoff is NOT evidence of persistence on disk.
+        if(window.confirm(t(locale,"casIsoSourceZipSavedConfirm")))
+          setNotice(t(locale,"casIsoSourceZipSaved")+
+            " ID: "+ticket.id+" / rev. "+ticket.revision);
+        else
+          setNotice(t(locale,"casIsoSourceZipUnverified")+
             " ID: "+ticket.id+" / rev. "+ticket.revision);
       }finally{
         setTimeout(()=>URL.revokeObjectURL(url),30000);
@@ -696,6 +749,16 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
               active.current.state()!=="ready" || !snapshot}
             onClick={exportSelected}>
             {t(locale,"casIsoExportAction")}
+          </button>
+        </div>
+        <div data-testid="cas-isolated-source-zip">
+          <p className="helper">{t(locale,"casIsoSourceZipExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-isolated-source-zip-action"
+            disabled={working || !active.current ||
+              active.current.state()!=="ready" || !snapshot}
+            onClick={exportSourceZip}>
+            {t(locale,"casIsoSourceZipAction")}
           </button>
         </div>
         <div data-testid="cas-isolated-stage-inspection">
