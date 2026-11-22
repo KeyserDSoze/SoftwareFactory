@@ -63,7 +63,7 @@ describe("native human-applied CAS code #169",()=>{
     const p=p0(),staged=patch(p),dev=staged.development!;
     for(const changed of [
       {...staged,development:{...dev,pending:{...dev.pending!,
-        review:{verdict:"pass",report:"unverified",completedAt:"now"}}}},
+        review:{verdict:"pass" as const,report:"unverified",completedAt:"now"}}}},
       {...staged,development:{...dev,pending:{...dev.pending!,
         repairCount:1}}},
       {...staged,development:{...dev,lastRunnerJobId:"123"}},
