@@ -9,6 +9,7 @@
  * request callbacks in ONE transaction; acknowledgement is tx.oncomplete.
  */
 import type { FactoryProject } from "../domain/types";
+import {CasStorageFault,nativeCasStorageFault} from "./project-cas-storage-fault";
 
 const DATABASE = "softwarefactory.project.cas.v1";
 const STORE = "projects";
@@ -85,20 +86,26 @@ function matchesExpected(current: Row | null, expected: CasProjectSnapshot | nul
 
 async function openCasDb(): Promise<IDBDatabase> {
   if (!globalThis.indexedDB)
-    throw Error("IndexedDB non disponibile: salvataggio CAS non eseguito.");
+    throw new CasStorageFault("unsupported");
   return await new Promise((resolve, reject) => {
     let request: IDBOpenDBRequest;
     try { request = indexedDB.open(DATABASE, 1); }
-    catch { reject(Error("Impossibile aprire IndexedDB CAS.")); return; }
+    catch(error) {
+      reject(nativeCasStorageFault(error) ??
+        Error("Impossibile aprire IndexedDB CAS."));
+      return;
+    }
     let blocked = false;
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE))
         request.result.createObjectStore(STORE);
     };
-    request.onerror = () => reject(Error("Impossibile aprire IndexedDB CAS."));
+    request.onerror = () => reject(
+      nativeCasStorageFault(request.error) ??
+        Error("Impossibile aprire IndexedDB CAS."));
     request.onblocked = () => {
       blocked = true;
-      reject(Error("Archivio CAS bloccato da un'altra scheda."));
+      reject(new CasStorageFault("blocked"));
     };
     request.onsuccess = () => {
       if (blocked) { request.result.close(); return; }
@@ -236,14 +243,21 @@ export async function compareAndSwapCasProject(
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
-      let failure = "Scrittura CAS IndexedDB interrotta.";
+      let failure: string | CasStorageFault = "Scrittura CAS IndexedDB interrotta.";
       let next: CasProjectSnapshot | null = null;
       tx.oncomplete = () => {
         if (next) resolve(next);
         else reject(Error("Scrittura CAS IndexedDB non confermata."));
       };
-      tx.onabort = () => reject(Error(failure));
-      tx.onerror = () => reject(Error("Scrittura CAS IndexedDB non riuscita."));
+      tx.onabort = () => reject(
+        failure instanceof CasStorageFault ? failure :
+          nativeCasStorageFault(tx.error) ?? Error(failure));
+      // A request error is non-terminal until the transaction aborts.
+      // Native quota is handled onabort, never as a successful save.
+      tx.onerror = () => {
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
       const store = tx.objectStore(STORE);
       const req = store.get(project.id);
       req.onsuccess = () => {
@@ -288,8 +302,9 @@ export async function compareAndSwapCasProject(
                 }
               }
               cursor.continue();
-            } catch {
-              failure = "Archivio IndexedDB corrotto: insert CAS bloccata.";
+            } catch(error) {
+              failure = nativeCasStorageFault(error) ??
+                "Archivio IndexedDB corrotto: insert CAS bloccata.";
               tx.abort();
             }
           };
@@ -298,7 +313,13 @@ export async function compareAndSwapCasProject(
         // Update of a previously-present project cannot increase the active
         // record count and requires the exact revision+raw CAS ticket.
         next = { id: project.id, revision, raw };
-        store.put({id: project.id, revision, raw} satisfies Row, project.id);
+        try{
+          store.put({id: project.id, revision, raw} satisfies Row, project.id);
+        }catch(error){
+          failure=nativeCasStorageFault(error) ??
+            "Scrittura CAS IndexedDB non riuscita.";
+          tx.abort();
+        }
       };
     });
   } finally { db.close(); }
@@ -319,14 +340,21 @@ export async function insertCasProjectNeverSeen(
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
       const store = tx.objectStore(STORE);
-      let failure = "Copia IndexedDB interrotta.";
+      let failure: string | CasStorageFault = "Copia IndexedDB interrotta.";
       let written = false;
       tx.oncomplete = () => {
         if (written) resolve({id: project.id, revision: 1, raw});
         else reject(Error("Copia IndexedDB non confermata."));
       };
-      tx.onabort = () => reject(Error(failure));
-      tx.onerror = () => reject(Error("Copia IndexedDB non riuscita."));
+      tx.onabort = () => reject(
+        failure instanceof CasStorageFault ? failure :
+          nativeCasStorageFault(tx.error) ?? Error(failure));
+      // A request error is non-terminal until the transaction aborts.
+      // Native quota is handled onabort, never as a successful save.
+      tx.onerror = () => {
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
       let active = 0;
       const req = store.openCursor();
       req.onsuccess = () => {
@@ -351,8 +379,9 @@ export async function insertCasProjectNeverSeen(
             tx.abort(); return;
           }
           cursor.continue();
-        } catch {
-          failure = "Archivio IndexedDB corrotto: copia bloccata.";
+        } catch(error) {
+          failure = nativeCasStorageFault(error) ??
+            "Archivio IndexedDB corrotto: copia bloccata.";
           tx.abort();
         }
       };
@@ -370,14 +399,21 @@ export async function deleteCasProject(
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
-      let failure = "Eliminazione CAS IndexedDB interrotta.";
+      let failure: string | CasStorageFault = "Eliminazione CAS IndexedDB interrotta.";
       let deleted: CasProjectTombstone | null = null;
       tx.oncomplete = () => {
         if (deleted) resolve(deleted);
         else reject(Error("Eliminazione CAS IndexedDB non confermata."));
       };
-      tx.onabort = () => reject(Error(failure));
-      tx.onerror = () => reject(Error("Eliminazione CAS IndexedDB non riuscita."));
+      tx.onabort = () => reject(
+        failure instanceof CasStorageFault ? failure :
+          nativeCasStorageFault(tx.error) ?? Error(failure));
+      // A request error is non-terminal until the transaction aborts.
+      // Native quota is handled onabort, never as a successful save.
+      tx.onerror = () => {
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
       const store = tx.objectStore(STORE);
       const req = store.get(id);
       req.onsuccess = () => {
@@ -398,7 +434,13 @@ export async function deleteCasProject(
         }
         // Keep a tombstone to avoid reset-to-revision-1 ABA on re-create.
         deleted = {id, revision};
-        store.put({id, revision, raw: null} satisfies Row, id);
+        try{
+          store.put({id, revision, raw: null} satisfies Row, id);
+        }catch(error){
+          failure=nativeCasStorageFault(error) ??
+            "Eliminazione CAS IndexedDB non riuscita.";
+          tx.abort();
+        }
       };
     });
   } finally { db.close(); }
@@ -435,14 +477,21 @@ export async function restoreCasTombstoneProject(
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
       const store = tx.objectStore(STORE);
-      let failure = "Ripristino IndexedDB interrotto.";
+      let failure: string | CasStorageFault = "Ripristino IndexedDB interrotto.";
       let confirmed: CasProjectSnapshot | null = null;
       tx.oncomplete = () => {
         if (confirmed) resolve(confirmed);
         else reject(Error("Ripristino IndexedDB non confermato."));
       };
-      tx.onabort = () => reject(Error(failure));
-      tx.onerror = () => reject(Error("Ripristino IndexedDB non riuscito."));
+      tx.onabort = () => reject(
+        failure instanceof CasStorageFault ? failure :
+          nativeCasStorageFault(tx.error) ?? Error(failure));
+      // A request error is non-terminal until the transaction aborts.
+      // Native quota is handled onabort, never as a successful save.
+      tx.onerror = () => {
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
       const read = store.get(project.id);
       read.onsuccess = () => {
         let existing: Row | null;
@@ -487,8 +536,9 @@ export async function restoreCasTombstoneProject(
               }
             }
             cursor.continue();
-          } catch {
-            failure = "Archivio IndexedDB corrotto: ripristino bloccato.";
+          } catch(error) {
+            failure = nativeCasStorageFault(error) ??
+              "Archivio IndexedDB corrotto: ripristino bloccato.";
             tx.abort();
           }
         };

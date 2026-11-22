@@ -9,6 +9,7 @@ import type {FactoryProject,FactorySettings,StageId} from "../domain/types";
 import {runStage} from "../application/pipeline";
 import {resolveAgentRoute,stageAgentRole} from "../domain/agent-roles";
 import {validateAiEndpoint} from "../infrastructure/ai";
+import {casStorageFaultCode} from "../infrastructure/project-cas-storage-fault";
 import {
   openCasPipelineSession,canBeginCasPipelineStage,
 } from "../application/cas-pipeline-session";
@@ -95,9 +96,15 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     inFlight.current=true;
     setWorking(true); setError(""); setNotice("");
     try { await action(); }
-    catch {
-      // Never expose raw project JSON / native IDB provider errors.
-      setError(t(locale,"casIsoFailure"));
+    catch(error) {
+      // Display only stable non-secret native storage categories, never raw
+      // DOMException / project JSON / remote provider error messages.
+      const nativeCode=casStorageFaultCode(error);
+      const reason=nativeCode==="unsupported"?"casIsoStorageUnsupported":
+        nativeCode==="upgrade"?"casIsoStorageUpgrade":
+        nativeCode==="quota"?"casIsoStorageQuota":
+        nativeCode==="blocked"?"casIsoStorageBlocked":"casIsoFailure";
+      setError(t(locale,reason));
       if(active.current?.state()==="blocked") {
         active.current=null;
         setNotice(t(locale,"casIsoBlocked"));

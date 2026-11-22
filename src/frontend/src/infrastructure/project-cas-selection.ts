@@ -7,6 +7,7 @@
  * ID/revision/JSON after consent. Never silently adopt later tab writes.
  */
 import type { FactoryProject } from "../domain/types";
+import {casStorageFaultCode} from "./project-cas-storage-fault";
 import { deleteCasProject, listCasProjects } from "./project-cas";
 import type { CasProjectChoice, CasProjectSnapshot, CasProjectTombstone } from "./project-cas";
 import { openCasEditorSession } from "./project-cas-editor-session";
@@ -112,10 +113,11 @@ export async function openCasSelectionController(id: string): Promise<CasSelecti
         generation++;
         state = "ready";
         return frozenSnapshot(acknowledged);
-      } catch {
-        // Invalid drafts remain retryable only when no transaction started;
-        // ambiguous CAS/conflict blocks until explicit full reopen.
+      } catch(error) {
+        // Native storage diagnostics must cross both session boundaries.
+        // A blocked session never silently retries a quota/versionchange.
         state = active.state() === "blocked" ? "blocked" : "ready";
+        if(casStorageFaultCode(error))throw error;
         throw Error("Salvataggio IndexedDB non confermato: verifica il progetto prima di continuare.");
       }
     },
@@ -139,10 +141,11 @@ export async function openCasSelectionController(id: string): Promise<CasSelecti
         // controller pointing at deleted state; explicit reopen is required.
         state = "blocked";
         return Object.freeze({id:tombstone.id,revision:tombstone.revision});
-      } catch {
+      } catch(error) {
         // An aborted/lost acknowledgement might already have deleted the
         // project. Do not retry or continue editing with the old token.
         state = "blocked";
+        if(casStorageFaultCode(error))throw error;
         throw Error("Eliminazione IndexedDB non confermata: verifica la tombstone prima di proseguire.");
       }
     },

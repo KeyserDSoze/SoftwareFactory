@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { compareAndSwapCasProject, readCasProjectSlot } from "./project-cas";
 import { openCasEditorSession } from "./project-cas-editor-session";
+import {CasStorageFault} from "./project-cas-storage-fault";
 
 vi.mock("./project-cas",async getActual=>{
   const original=await getActual<typeof import("./project-cas")>();
@@ -90,6 +91,25 @@ describe("async CAS editor session preflight (#143)",()=>{
       .rejects.toThrow(/obsoleta/);
     expect(h.state()).toBe("ready");
     expect(cas).not.toHaveBeenCalled();
+  });
+
+  it("propagates classified quota/upgrade failures but fences the CAS token",async()=>{
+    const {project,snapshot}=original();
+    load.mockResolvedValue({state:"present",snapshot});
+    const quota=await openCasEditorSession(project.id);
+    cas.mockRejectedValueOnce(new CasStorageFault("quota"));
+    await expect(quota.commit(next(project,"quota"),snapshot))
+      .rejects.toMatchObject({code:"quota"});
+    expect(quota.state()).toBe("blocked");
+    expect(quota.snapshot()).toEqual(snapshot);
+    await expect(quota.commit(next(project,"no retry"),snapshot))
+      .rejects.toThrow(/bloccata/);
+    const upgraded=await openCasEditorSession(project.id);
+    cas.mockRejectedValueOnce(new CasStorageFault("upgrade"));
+    await expect(upgraded.commit(next(project,"upgrade"),snapshot))
+      .rejects.toMatchObject({code:"upgrade"});
+    expect(upgraded.state()).toBe("blocked");
+    expect(cas).toHaveBeenCalledTimes(2);
   });
 
   it("blocks on incoherent backend acknowledgement rather than treating it as saved",async()=>{

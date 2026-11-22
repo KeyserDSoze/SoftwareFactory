@@ -1276,3 +1276,12 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest preflight/invalid/race/consenso; Chromium due tab con backup byte-esatto, dirty draft, writer rivale durante dialog, reload e zero mutazioni legacy; marker `FACTORY_INDEXEDDB_SELECTED_EXPORT_E2E_PASS`.
 - [ ] Gate finale #159: Factory CI, Pages, Installer candidate `completed/success` sullo stesso SHA main + marker nel log prima di chiudere.
 - [ ] Migrare *tutti* i writer e i percorsi bootstrap/import/Code Agent/GitHub/restore del live in #139, inclusi quota/versionchange/rollback. #91/#92 restano aperte per sync multi-device.
+
+
+## Diagnostica transazionale quota/versionchange IndexedDB nel pilota (#160 — 22/11/2026)
+
+- [x] Fault tipizzati `unsupported/upgrade/quota/blocked` su nomi nativi, senza leak di eccezioni native, e controllo `VersionError` di `indexedDB.open`.
+- [x] Propagazione categorie da CAS DB a sessione/controller/UI senza perdere lo stato `blocked`, `tx.onabort` autorevole per fault quota e catch sincroni su `add/put`; nessun fallback a writer live.
+- [x] UI IT/EN con istruzioni di recovery non distruttive e draft preservato. Vitest su failure classification e token fencing, Chromium due tab con quota iniettata, upgrade **reale** v1→v2 nella sola fixture effimera, API assente e localStorage invariato. Marker `FACTORY_INDEXEDDB_STORAGE_FAULT_E2E_PASS`.
+- [ ] Chiusura #160 solo dopo Factory CI, Pages e Installer candidate `completed/success` stesso SHA main e marker nel log.
+- [ ] #139 ancora aperta per tutti i writer live, selezione/bootstrap/restore/rollback migrazione coordinata. #91/#92 ancora aperte per sync multi-device/provider.

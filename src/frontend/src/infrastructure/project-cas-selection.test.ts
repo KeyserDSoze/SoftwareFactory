@@ -5,6 +5,7 @@ import { deleteCasProject, listCasProjects } from "./project-cas";
 import { openCasEditorSession } from "./project-cas-editor-session";
 import type { CasEditorSession } from "./project-cas-editor-session";
 import { openCasSelectionController } from "./project-cas-selection";
+import {CasStorageFault} from "./project-cas-storage-fault";
 
 vi.mock("./project-cas-editor-session",()=>({openCasEditorSession:vi.fn()}));
 vi.mock("./project-cas",async getOriginal=>{
@@ -180,6 +181,27 @@ describe("future CAS selection coordinator (#144)",()=>{
     await expect(controller.commit(a.project,a.snapshot)).rejects.toThrow(/sospesa/);
     expect(drop).toHaveBeenCalledWith(a.project.id,a.snapshot);
     expect(drop).toHaveBeenCalledOnce();
+  });
+
+  it("passes sanitized quota/upgrade through the controller without retrying",async()=>{
+    const a=sample("Quota fixture"),h=session(a);
+    h.commit.mockImplementationOnce(async()=>{
+      h.block();
+      throw new CasStorageFault("quota");
+    });
+    open.mockResolvedValue(h.handle);
+    const ctrl=await openCasSelectionController(a.project.id);
+    await expect(ctrl.commit(a.project,a.snapshot))
+      .rejects.toMatchObject({code:"quota"});
+    expect(ctrl.state()).toBe("blocked");
+    expect(ctrl.snapshot()).toEqual(a.snapshot);
+    await expect(ctrl.commit(a.project,a.snapshot)).rejects.toThrow(/sospesa/);
+    expect(h.commit).toHaveBeenCalledTimes(1);
+    const second=await openCasSelectionController(a.project.id);
+    drop.mockRejectedValueOnce(new CasStorageFault("upgrade"));
+    await expect(second.delete(a.snapshot,true))
+      .rejects.toMatchObject({code:"upgrade"});
+    expect(second.state()).toBe("blocked");
   });
 
   it("blocks ambiguous deletion failure and inconsistent acknowledgement",async()=>{

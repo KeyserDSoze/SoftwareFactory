@@ -7,6 +7,7 @@
  * retry after an IndexedDB conflict. One in-flight mutation per session.
  */
 import type { FactoryProject } from "../domain/types";
+import {casStorageFaultCode} from "./project-cas-storage-fault";
 import { compareAndSwapCasProject, readCasProjectSlot, serializeCasProject } from "./project-cas";
 import type { CasProjectSnapshot } from "./project-cas";
 
@@ -75,10 +76,12 @@ export async function openCasEditorSession(id: string): Promise<CasEditorSession
         token = copySnapshot(confirmed);
         status = "ready";
         return copySnapshot(token);
-      } catch {
-        // Lost / aborted acknowledgement is indeterminate. No retry on the
-        // same session: the user must inspect and explicitly reopen it.
+      } catch(error) {
+        // A quota/upgrade/blocked storage failure remains machine-readable
+        // and sanitized; the session still requires an explicit reopen.
+        // No optimistic retry even if native tx.onabort confirmed failure.
         status = "blocked";
+        if(casStorageFaultCode(error))throw error;
         throw Error("Salvataggio CAS IndexedDB non confermato: possibile conflitto. Riapri esplicitamente dopo verifica.");
       }
     },

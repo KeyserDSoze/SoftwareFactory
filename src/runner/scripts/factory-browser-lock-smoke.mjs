@@ -1122,6 +1122,142 @@ if (!inside) {
     }
 
 
+    // #160: native IndexedDB operational faults. A quota-like synchronous
+    // store.put exception is INJECTED at the browser API boundary; the
+    // transaction and rollback are real. Schema v2 upgrade is real and
+    // isolated to this ephemeral browser context, not a production migration.
+    const storageFaultContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await storageFaultContext.newPage();
+      const rival=await storageFaultContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      const id="16016016-0160-4160-8160-160160160160";
+      const original=await rival.evaluate(async id=>{
+        const now="2026-11-22T00:45:00.000Z";
+        return await window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Storage fault candidate",
+            description:"IDB quota/versionchange is never a successful commit",
+            requirements:"Preserve the draft and legacy source"},
+          stages:["features","competitors","technical","architecture",
+            "adversarial","implementation"].map(stage=>({
+            id:stage,label:stage,status:"pending",output:"",sources:[],
+          })),
+          createdAt:now,updatedAt:now,
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Storage fault candidate",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const draft=panel.getByTestId("cas-isolated-active").locator("input").first();
+      await draft.fill("UNSAVED USER DRAFT AFTER QUOTA");
+      const save=panel.getByRole("button",{
+        name:"Salva modifica in IndexedDB con backup",
+      });
+      // A browser's native quota error is named QuotaExceededError.
+      // Injection exercises the synchronous request-scheduling exception
+      // without requiring a destructive browser-wide disk quota change.
+      await page.evaluate(()=>{
+        const prior=IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put=function(...args){
+          if(this.transaction.db.name==="softwarefactory.project.cas.v1")
+            throw new DOMException(
+              "NEVER_LEAK_NATIVE_QUOTA_SECRET","QuotaExceededError");
+          return prior.apply(this,args);
+        };
+      });
+      page.on("dialog",dlg=>void dlg.accept());
+      const backup=page.waitForEvent("download");
+      await save.click();
+      assert.equal((await readFile(await (await backup).path())).toString("utf8"),
+        original.raw,"Pre-save snapshot backup must still be byte exact");
+      await expect(panel.getByRole("alert"))
+        .toContainText("Spazio/quota IndexedDB esaurita");
+      await expect(panel.getByRole("alert"))
+        .not.toContainText("NEVER_LEAK_NATIVE_QUOTA_SECRET");
+      await expect(draft).toHaveValue("UNSAVED USER DRAFT AFTER QUOTA");
+      await expect(save).toBeDisabled();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original,
+        "Native quota fault must abort the transaction with no revision advance");
+      page.removeAllListeners("dialog");
+
+      // Actually advance the IDB database version to v2 in the other tab,
+      // while leaving the projects store/data untouched. The real v1-only
+      // app must refuse opening it and MUST NOT downgrade or delete it.
+      await rival.evaluate(()=>new Promise((resolve,reject)=>{
+        const req=indexedDB.open("softwarefactory.project.cas.v1",2);
+        req.onerror=()=>reject(Error("Test schema v2 upgrade failed"));
+        req.onblocked=()=>reject(Error("Old v1 connection was not closed"));
+        req.onsuccess=()=>{req.result.close();resolve(true);};
+      }));
+      await page.reload({waitUntil:"networkidle"});
+      const reopened=page.getByTestId("cas-isolated-editor");
+      await reopened.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await reopened.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      await expect(reopened.getByRole("alert"))
+        .toContainText("Versione IndexedDB incompatibile");
+      await expect(reopened.getByRole("alert"))
+        .toContainText("NON cancellare il database");
+      const afterUpgrade=await rival.evaluate(id=>new Promise((resolve,reject)=>{
+        const request=indexedDB.open("softwarefactory.project.cas.v1",2);
+        request.onerror=()=>reject(Error("Cannot reopen v2"));
+        request.onsuccess=()=>{
+          const db=request.result;
+          const tx=db.transaction("projects","readonly");
+          let row;
+          tx.objectStore("projects").get(id).onsuccess=e=>{
+            row=e.target.result;
+          };
+          tx.oncomplete=()=>{db.close();resolve(row);};
+          tx.onabort=()=>{db.close();reject(Error("v2 read aborted"));};
+        };
+      }),id);
+      assert.equal(afterUpgrade.revision,1);
+      assert.equal(afterUpgrade.raw,original.raw,
+        "Actual schema upgrade must retain the old project verbatim");
+
+      // Simulate a privacy-restricted browser with no IndexedDB surface.
+      // The pilot still refuses to fall back to live localStorage.
+      await page.evaluate(()=>Object.defineProperty(window,"indexedDB",{
+        configurable:true,value:undefined,
+      }));
+      await reopened.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      await expect(reopened.getByRole("alert"))
+        .toContainText("IndexedDB non disponibile");
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore);
+      console.log("FACTORY_INDEXEDDB_STORAGE_FAULT_E2E_PASS: quota-like native abort fenced token and preserved draft, real schema v2 upgrade refused without data loss, unavailable IDB no fallback, legacy unchanged");
+    }finally{
+      await storageFaultContext.close();
+    }
+
     // #159: exact selected IndexedDB JSON export, read-only and consented.
     // All CAS reads/writes are real Chromium transactions; download bytes
     // must never come from a stale selected tab after a rival change.
