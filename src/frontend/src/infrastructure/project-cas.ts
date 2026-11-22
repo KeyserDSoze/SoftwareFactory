@@ -389,6 +389,121 @@ export async function insertCasProjectNeverSeen(
   } finally { db.close(); }
 }
 
+/**
+ * #166: atomic source-fenced, never-seen configuration fork.
+ * One readwrite tx checks source revision/raw, destination never-seen,
+ * capacity and the insert. ACK is only tx.oncomplete.
+ */
+export async function forkCasProjectConfiguration(
+  source:CasProjectSnapshot,project:FactoryProject,consent:boolean,
+):Promise<CasProjectSnapshot> {
+  if(consent!==true)throw Error("Duplicazione IndexedDB non autorizzata.");
+  if(!source || !project || source.id===project.id)
+    throw Error("Sorgente IndexedDB non valida.");
+  checkId(source.id);
+  checkExpected(source.id,source);
+  checkId(project.id);
+  const raw=serializeCasProject(project);
+  const cleanStages=[
+    ["features","Piano feature"],["competitors","Analisi competitor"],
+    ["technical","Ricerca tecnica"],["architecture","Architettura"],
+    ["adversarial","Adversarial review"],
+    ["implementation","Piano implementativo"],
+  ];
+  const keys=Object.keys(project).sort().join(",");
+  if(keys!=="config,createdAt,id,stages,updatedAt" ||
+     project.createdAt!==project.updatedAt ||
+     typeof project.config?.name!=="string" ||
+     !project.config.name.trim() || project.config.name.length>120 ||
+     !Array.isArray(project.stages) ||
+     project.stages.length!==cleanStages.length ||
+     project.stages.some((stage,i)=>!stage ||
+       Object.keys(stage).sort().join(",")!=="id,label,output,sources,status" ||
+       stage.id!==cleanStages[i][0] ||
+       stage.label!==cleanStages[i][1] ||
+       stage.status!=="pending" || stage.output!=="" ||
+       !Array.isArray(stage.sources) || stage.sources.length!==0))
+    throw Error("Destinazione duplicazione IndexedDB non pulita.");
+  try{
+    const decoded=JSON.parse(source.raw) as FactoryProject;
+    if(decoded.id!==source.id ||
+       serializeCasProject(decoded)!==source.raw)
+      throw Error("Invalid source");
+  }catch{
+    throw Error("Snapshot sorgente IndexedDB non canonico.");
+  }
+  const db=await openCasDb();
+  try{
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(STORE,"readwrite"),store=tx.objectStore(STORE);
+      let failure:string|CasStorageFault="Duplicazione IndexedDB interrotta.";
+      let committed:CasProjectSnapshot|null=null;
+      tx.oncomplete=()=>{
+        if(committed)resolve(committed);
+        else reject(Error("Duplicazione IndexedDB non confermata."));
+      };
+      tx.onabort=()=>reject(failure instanceof CasStorageFault ? failure :
+        nativeCasStorageFault(tx.error)??Error(failure));
+      tx.onerror=()=>{
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
+      const lookup=store.get(source.id);
+      lookup.onsuccess=()=>{
+        try{
+          const current=readRow(lookup.result as unknown,source.id);
+          if(!matchesExpected(current,source)) {
+            failure="Sorgente IndexedDB cambiata: duplicazione annullata.";
+            tx.abort();return;
+          }
+          const parsed=JSON.parse(current!.raw!) as FactoryProject;
+          if(JSON.stringify({...parsed.config,name:project.config.name})!==
+             JSON.stringify(project.config)){
+            failure="Configurazione duplicata diversa dalla sorgente.";
+            tx.abort();return;
+          }
+          let active=0;
+          const scan=store.openCursor();
+          scan.onsuccess=()=>{
+            try{
+              const cursor=scan.result;
+              if(!cursor){
+                committed={id:project.id,revision:1,raw};
+                store.add({id:project.id,revision:1,raw} satisfies Row,project.id);
+                return;
+              }
+              if(typeof cursor.key!=="string")throw Error("Invalid key");
+              checkId(cursor.key);
+              const row=readRow(cursor.value as unknown,cursor.key);
+              if(!row)throw Error("Missing row");
+              if(cursor.key===project.id){
+                failure="Destinazione IndexedDB già vista, anche tombstone.";
+                tx.abort();return;
+              }
+              if(row.raw!==null){
+                active++;
+                if(active>=40){
+                  failure="Libreria IndexedDB piena (40 progetti).";
+                  tx.abort();return;
+                }
+              }
+              cursor.continue();
+            }catch(error){
+              failure=nativeCasStorageFault(error)??
+                "Archivio IndexedDB corrotto: duplicazione bloccata.";
+              tx.abort();
+            }
+          };
+        }catch(error){
+          failure=nativeCasStorageFault(error)??
+            "Sorgente IndexedDB corrotta: duplicazione bloccata.";
+          tx.abort();
+        }
+      };
+    });
+  }finally{db.close();}
+}
+
 export async function deleteCasProject(
   id: string, expected: CasProjectSnapshot,
 ): Promise<CasProjectTombstone> {

@@ -23,6 +23,9 @@ import {
   verifyCasIsolatedCreatedReadback,
 } from "../application/cas-isolated-create";
 import {
+  prepareCasIsolatedConfigFork,confirmCasIsolatedConfigFork,
+} from "../application/cas-isolated-config-fork";
+import {
   openCasSelectionController,type CasSelectionController,
 } from "../infrastructure/project-cas-selection";
 import {
@@ -196,6 +199,60 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
       }
     });
   }
+  function forkConfig():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected))
+        throw Error("Stale/dirty CAS fork session");
+      const ticket=prepareCasIsolatedConfigFork(expected);
+      if(!window.confirm(t(locale,"casIsoForkBackupConfirm")+"\n"+
+          ticket.source.id+" / rev. "+ticket.source.revision))return;
+      // Byte-exact source backup is offered BEFORE either the saved-file
+      // acknowledgement or permission to create the new ID.
+      const url=URL.createObjectURL(new Blob([ticket.source.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-cas-before-fork-"+ticket.source.id+
+          "-r"+ticket.source.revision+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{
+        setTimeout(()=>URL.revokeObjectURL(url),30000);
+      }
+      if(!window.confirm(t(locale,"casIsoForkSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoForkFinalConfirm")+"\n"+
+        ticket.name+"\nID: "+ticket.id+"\nsource: "+ticket.source.id+
+        " / rev. "+ticket.source.revision))return;
+
+      // Native transaction checks SOURCE revision/raw and target never-seen
+      // + capacity atomically. A stale source or existing destination aborts
+      // all changes without retrying under a different UUID.
+      const acknowledged=await confirmCasIsolatedConfigFork(ticket,true);
+      setList(null);
+      const identity=" ID: "+acknowledged.id+
+        " (rev. "+acknowledged.revision+")";
+      // Post-ACK observations MUST NOT change an already committed create
+      // to a false failure, and must not silently switch the source editor.
+      const verified=await verifyCasIsolatedCreatedReadback(
+        acknowledged,async id=>(await openCasSelectionController(id)).snapshot(),
+      );
+      if(!verified){
+        setNotice(t(locale,"casIsoForkReadbackWarning")+identity);
+        return;
+      }
+      try{
+        setList(await listCasProjects());
+        setNotice(t(locale,"casIsoForkDone")+identity);
+      }catch{
+        setList(null);
+        setNotice(t(locale,"casIsoForkReadbackWarning")+identity);
+      }
+    });
+  }
+
   function refresh():void {
     if(inFlight.current) return;
     // A ready controller retains its pinned snapshot and draft on refresh.
@@ -742,6 +799,16 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
               codeRequest.length>0 || codeProposalJson.length>0 ||
               !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
+        <div data-testid="cas-isolated-config-fork">
+          <p className="helper">{t(locale,"casIsoForkExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-isolated-config-fork-action"
+            disabled={working || Boolean(dirty) || !active.current ||
+              active.current.state()!=="ready" || !snapshot}
+            onClick={forkConfig}>
+            {t(locale,"casIsoForkAction")}
+          </button>
+        </div>
         <div data-testid="cas-isolated-full-export">
           <p className="helper">{t(locale,"casIsoExportExplain")}</p>
           <button type="button" className="secondary"

@@ -1589,6 +1589,241 @@ if (!inside) {
       await zipRaceContext.close();
     }
 
+    // #166: two real tabs; an atomic native IDB SOURCE read + never-seen
+    // target insert. The fork is config-only, no historical AI/Code Agent
+    // review/runner/GitHub evidence, no adoption by the active legacy App.
+    const forkContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await forkContext.newPage();
+      const rival=await forkContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="16616616-6166-4166-8166-166166166166";
+      const original=await rival.evaluate(async id=>{
+        const now="2026-11-22T18:25:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map((s,i)=>({
+          id:s,label:s,status:i===0?"complete":"pending",
+          output:i===0?"Unverified historical model research":"",
+          sources:[],...(i===0?{completionOrigin:"ai"}:{}),
+        }));
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,createdAt:now,updatedAt:now,stages,
+          config:{name:"Configuration fork source",
+            description:"Only native IndexedDB source",
+            requirements:"No inherited evidence or GitHub bindings",
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"redis",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            }},
+          development:{revision:1,overrides:{},originals:{},history:[],
+            lastRunnerJobId:"historic-runner-not-copyable",
+            pending:{id:"stale-pending",request:"Not verified",
+              summary:"No automatic approval",createdAt:now,revision:1,
+              edits:[],tests:[],assumptions:[]}},
+          githubDestination:{owner:"legacy",repo:"old",
+            branch:"main",privateRepo:false,authMode:"pat",appGateway:""},
+          githubSync:{owner:"legacy",repo:"old",branch:"main",
+            lastCommit:"historic",syncedLocalUpdatedAt:now,
+            syncedAt:now,publicConsent:true},
+          githubTestReceipt:{requestId:"old",repository:"legacy/old",
+            branch:"main",commitSha:"historic",createdAt:now,
+            selected:["web-build"],runId:15},
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Configuration fork source",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const fork=panel.getByTestId("cas-isolated-config-fork-action");
+      await expect(fork).toBeEnabled();
+      // Declining the initial backup consent never creates a new ID.
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await fork.click();
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,1);
+
+      let consentCount=0,createdId=null;
+      const acceptAll=async dialog=>{
+        consentCount++;
+        if(consentCount===3){
+          const match=/ID: ([0-9a-f-]{36})/i.exec(dialog.message());
+          assert.ok(match,"Final fork consent contains the new immutable ID");
+          createdId=match[1];
+        }
+        await dialog.accept();
+      };
+      page.on("dialog",acceptAll);
+      const downloadPromise=page.waitForEvent("download");
+      await fork.click();
+      const backup=await downloadPromise;
+      assert.equal(backup.suggestedFilename(),
+        "softwarefactory-cas-before-fork-"+id+"-r1.json");
+      assert.equal((await readFile(await backup.path())).toString("utf8"),
+        original.raw,"Fork backup must be byte-exact source JSON");
+      await expect(panel.getByText(/Nuovo progetto di configurazione IndexedDB/))
+        .toBeVisible();
+      assert.equal(consentCount,3,"Fork requires three distinct consents");
+      page.off("dialog",acceptAll);
+      assert.ok(createdId && createdId!==id);
+      const clone=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),createdId);
+      assert.equal(clone.revision,1);
+      const fresh=JSON.parse(clone.raw),src=JSON.parse(original.raw);
+      assert.deepEqual(fresh.config,{...src.config,name:src.config.name+" (copy)"});
+      assert.ok(fresh.stages.every(s=>s.status==="pending" &&
+        s.output==="" && s.sources.length===0 &&
+        s.completionOrigin===undefined));
+      assert.equal(fresh.development,undefined);
+      assert.equal(fresh.githubDestination,undefined);
+      assert.equal(fresh.githubSync,undefined);
+      assert.equal(fresh.githubTestReceipt,undefined);
+      assert.equal(fresh.createdAt,fresh.updatedAt);
+      assert.equal(fresh.id,createdId);
+      assert.ok(!clone.raw.includes("historic-runner-not-copyable"));
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText(id);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),original);
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,2);
+
+      // The uncooperative writer changes SOURCE while the third human
+      // consent is open: atomic source CAS must abort target insert, not
+      // create a copy of an obsolete configuration.
+      let racedId=null,raceWinner=null,raceDialogs=0;
+      page.on("dialog",async dialog=>{
+        raceDialogs++;
+        if(raceDialogs===3){
+          const match=/ID: ([0-9a-f-]{36})/i.exec(dialog.message());
+          assert.ok(match);racedId=match[1];
+          raceWinner=await rival.evaluate(async expected=>{
+            const next=JSON.parse(expected.raw);
+            next.config.description="SOURCE_RIVAL_WON_DURING_FORK";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              next,expected);
+          },original);
+        }
+        await dialog.accept();
+      });
+      const racedBackupEvent=page.waitForEvent("download");
+      await fork.click();
+      assert.equal((await readFile(await (await racedBackupEvent).path()))
+        .toString("utf8"),original.raw);
+      await expect(panel.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      assert.equal(raceDialogs,3);
+      assert.equal((await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),racedId)).state,
+        "missing","Stale fork never creates a target");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),raceWinner);
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,2);
+      page.removeAllListeners("dialog");
+      assert.deepEqual(await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      })),legacyBefore);
+
+      // Independent reopen can adopt the fork intentionally. It is NOT
+      // silently made the active IDB project after successful creation.
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const reopened=page.getByTestId("cas-isolated-editor");
+      await reopened.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await reopened.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await reopened.getByRole("button",{
+        name:"Apri copia IDB: Configuration fork source (copy)",
+      }).click();
+      await expect(reopened.getByTestId("cas-isolated-active"))
+        .toContainText(createdId);
+      // The new native primitive also rejects an existing destination
+      // tombstone and enforces cap40 in the SAME transaction as the insert.
+      const targetId="16616616-6166-4166-8166-166166166167";
+      const nativeFixture=await rival.evaluate(async ({id,template})=>{
+        const created=await window.FactoryProjectCas.compareAndSwapCasProject(
+          {...template,id},null);
+        return window.FactoryProjectCas.deleteCasProject(id,created);
+      },{id:targetId,template:fresh});
+      assert.equal(nativeFixture.revision,2);
+      const refusedTombstone=await rival.evaluate(async ({source,template,id})=>{
+        const target={...template,id,
+          config:{...JSON.parse(source.raw).config,name:"Tombstone fork"}};
+        try{
+          await window.FactoryProjectCas.forkCasProjectConfiguration(
+            source,target,true);
+          return "unexpected_success";
+        }catch{return "refused";}
+      },{source:raceWinner,template:fresh,id:targetId});
+      assert.equal(refusedTombstone,"refused");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),targetId),
+        {state:"tombstone",revision:2});
+
+      const capacity=await rival.evaluate(async template=>{
+        for(let i=1;i<=38;i++){
+          const id="16616616-6166-4166-8166-a"+
+            String(i).padStart(11,"0");
+          await window.FactoryProjectCas.compareAndSwapCasProject(
+            {...template,id},null);
+        }
+        return (await window.FactoryProjectCas.listCasProjects()).length;
+      },fresh);
+      assert.equal(capacity,40);
+      const refusedCapacity=await rival.evaluate(async ({source,template})=>{
+        const target={...template,
+          id:"16616616-6166-4166-8166-166166166168",
+          config:{...JSON.parse(source.raw).config,name:"Overflow fork"}};
+        try{
+          await window.FactoryProjectCas.forkCasProjectConfiguration(
+            source,target,true);
+          return "unexpected_success";
+        }catch{return "refused";}
+      },{source:raceWinner,template:fresh});
+      assert.equal(refusedCapacity,"refused");
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,40);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),raceWinner);
+      console.log("FACTORY_INDEXEDDB_CONFIG_FORK_E2E_PASS: atomic native source revision/raw + never-seen fork, exact backup, 3 consents, stage and external evidence reset, rival third-consent abort, explicit reopen, tombstone/cap40 fencing and zero legacy writes");
+    }finally{
+      await forkContext.close();
+    }
+
     // #161: real Chromium native CAS commit of HUMAN stage output with
     // revision-fenced manual provenance, 3 consents, predecessor/downstream
     // lifecycle and a competing noncooperating tab on final consent.
