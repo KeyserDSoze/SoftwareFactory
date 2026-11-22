@@ -1,6 +1,8 @@
 import {describe,expect,it} from "vitest";
 import {
   factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas,
+  factoryCasHandoffUrl,factoryCasHandoffHint,casHandoffRawDigest,
+  matchesCasHandoffHint,
 } from "./cas-root-workspace";
 
 const id="11111111-1111-4111-8111-111111111111";
@@ -55,5 +57,64 @@ describe("factory root CAS-only workspace routing #167",()=>{
     expect(canNavigateLegacyToCas({...eligible(),
       expectedRaw:"z".repeat(1_000_001),persistedRaw:"z".repeat(1_000_001)}))
       .toBe(false);
+  });
+});
+
+describe("explicit CAS-only legacy handoff link #171",()=>{
+  const digest="a".repeat(64);
+  const hint={id,revision:1,digest};
+  it("preserves Pages base and unrelated query while adding only a bounded fingerprint",()=>{
+    const href="https://keyserdsoze.github.io/SoftwareFactory/?a=1#danger";
+    const target=factoryCasHandoffUrl(href,hint);
+    expect(target).toBe("https://keyserdsoze.github.io/SoftwareFactory/"+
+      "?a=1&workspace=cas&casHandoff="+id+"&casRevision=1&casDigest="+digest);
+    expect(factoryCasHandoffHint(new URL(target).search)).toEqual(hint);
+    expect(factoryWorkspaceUrl(target,"legacy"))
+      .toBe("https://keyserdsoze.github.io/SoftwareFactory/?a=1");
+    expect(factoryWorkspaceUrl(target,"cas"))
+      .toBe("https://keyserdsoze.github.io/SoftwareFactory/?a=1&workspace=cas");
+    expect(factoryCasHandoffHint("?workspace=legacy&casHandoff="+id+
+      "&casRevision=1&casDigest="+digest)).toBeNull();
+  });
+  it("rejects crafted, duplicate, missing, ambiguous and oversized hints",()=>{
+    const good="?workspace=cas&casHandoff="+id+
+      "&casRevision=1&casDigest="+digest;
+    for(const bad of [
+      good+"&casHandoff="+id,
+      good+"&casRevision=1",
+      good+"&casDigest="+digest,
+      good.replace("casRevision=1","casRevision=0"),
+      good.replace("casRevision=1","casRevision=01"),
+      good.replace("casRevision=1","casRevision=1.1"),
+      good.replace("casRevision=1","casRevision=9007199254740992"),
+      good.replace(id,"../../secret"),
+      good.replace(digest,"zzz"),
+      good.replace("workspace=cas","workspace=CAS"),
+      "?casHandoff="+id+"&casRevision=1&casDigest="+digest,
+    ])expect(factoryCasHandoffHint(bad)).toBeNull();
+    expect(()=>factoryCasHandoffUrl("https://example.com/",{
+      ...hint,digest:"secret",
+    })).toThrow();
+    expect(()=>factoryCasHandoffUrl("https://example.com/",{
+      ...hint,revision:0,
+    })).toThrow();
+  });
+  it("SHA-256 binds exact JSON bytes, ID and revision without leaking raw in URL",async()=>{
+    const raw='{"id":"'+id+'","secret":"sensitive unlinked text"}';
+    const hash=await casHandoffRawDigest(raw);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    const proof={id,revision:7,digest:hash};
+    expect(await matchesCasHandoffHint(proof,{id,revision:7,raw}))
+      .toBe(true);
+    expect(await matchesCasHandoffHint(proof,{id,revision:8,raw}))
+      .toBe(false);
+    expect(await matchesCasHandoffHint(proof,{id,revision:7,raw:raw+" "}))
+      .toBe(false);
+    expect(await matchesCasHandoffHint(proof,{id:"other",revision:7,raw}))
+      .toBe(false);
+    const url=factoryCasHandoffUrl("https://example.com/",proof);
+    expect(url).not.toContain("sensitive");
+    expect(url).not.toContain("%7B");
+    await expect(casHandoffRawDigest("x".repeat(1_000_001))).rejects.toThrow();
   });
 });

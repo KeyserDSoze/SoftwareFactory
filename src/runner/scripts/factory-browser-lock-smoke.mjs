@@ -353,6 +353,254 @@ if (!inside) {
       await transitionContext.close();
     }
 
+    // #171: assisted legacy→CAS-only project transfer. A real live SPA
+    // produces an exact per-ID backup, native insert-only IDB copy and
+    // full page reload with only an ID/rev/SHA-256 URL hint. The CAS page
+    // does not open the copy until a SECOND explicit operator decision.
+    const handoffContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await handoffContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      await page.addScriptTag({content:casBundle});
+      const original=await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1")||"{}");
+        const raw=localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id);
+        return {id:active.id,raw,
+          settings:localStorage.getItem("softwarefactory.settings.v1")};
+      });
+      assert.ok(original.raw && original.id);
+      const backupRaw=JSON.parse(original.raw);
+      const assisted=page.getByTestId("cas-root-handoff-start");
+      await expect(assisted).toBeEnabled();
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),original.id)).state,
+        "missing");
+      page.once("dialog",d=>void d.dismiss());
+      await assisted.click();
+      assert.equal(new URL(page.url()).searchParams.get("workspace"),null);
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),original.id)).state,
+        "missing");
+      let consents=0;
+      const approve=async d=>{consents++;await d.accept();};
+      page.on("dialog",approve);
+      const backupEvent=page.waitForEvent("download");
+      const navigation=page.waitForURL(u=>
+        new URL(u).searchParams.get("workspace")==="cas" &&
+        new URL(u).searchParams.get("casHandoff")===original.id,
+        {timeout:15000});
+      await assisted.click();
+      const sourceBackup=await backupEvent;
+      await navigation;
+      assert.equal(sourceBackup.suggestedFilename(),
+        "softwarefactory-before-cas-handoff-"+original.id+".json");
+      assert.equal((await readFile(await sourceBackup.path()))
+        .toString("utf8"),original.raw,
+        "Assisted migration backup must be exact pre-insert per-ID source raw");
+      assert.equal(consents,3);
+      page.removeAllListeners("dialog");
+      const casHref=page.url(),hint=new URL(casHref);
+      assert.equal(hint.searchParams.get("casRevision"),"1");
+      assert.match(hint.searchParams.get("casDigest"),/^[0-9a-f]{64}$/);
+      assert.equal(casHref.includes("source\""),false);
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      await expect(page.getByTestId("cas-root-handoff-hint"))
+        .toContainText(original.id);
+      assert.equal(await page.getByTestId("cas-root-entry").count(),0);
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0,
+        "A URL hint alone must NOT auto-select the IDB project");
+      assert.equal(await page.getByRole("button",{
+        name:"Nuovo progetto",
+      }).count(),0);
+      await page.addScriptTag({content:casBundle});
+      const native=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id);
+      assert.equal(native.revision,1);
+      assert.equal(native.raw,original.raw,
+        "Handoff must preserve exact historical raw, no sanitizing claims");
+      assert.equal(JSON.stringify(JSON.parse(native.raw).config),
+        JSON.stringify(backupRaw.config));
+      const handoffOpen=page.getByTestId("cas-root-handoff-open");
+      await expect(handoffOpen).toBeEnabled();
+      page.once("dialog",d=>void d.dismiss());
+      await handoffOpen.click();
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
+      let opened=0;
+      page.on("dialog",d=>{opened++;void d.accept();});
+      await handoffOpen.click();
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      assert.equal(opened,1);
+      page.removeAllListeners("dialog");
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText(original.id);
+      const copiedName=JSON.parse(original.raw).config.name;
+      await expect(page.getByTestId("cas-isolated-active").locator("input")
+        .first()).toHaveValue(copiedName);
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem(
+          "softwarefactory.project.library.v1."+id),original.id),
+        original.raw,"CAS handoff may not change legacy authoritative slot");
+      // Explicit return to legacy strips ALL three untrusted hint fields.
+      page.once("dialog",d=>void d.accept());
+      const returned=page.waitForURL(u=>{
+        const x=new URL(u);
+        return !x.searchParams.has("workspace") &&
+          !x.searchParams.has("casHandoff") &&
+          !x.searchParams.has("casRevision") &&
+          !x.searchParams.has("casDigest");
+      },{timeout:15000});
+      await page.getByTestId("cas-root-return-action").click();
+      await returned;
+      await expect(page.getByTestId("cas-root-entry")).toBeVisible();
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem(
+          "softwarefactory.project.library.v1."+id),original.id),
+        original.raw,"Returning to legacy must not auto-merge CAS source");
+
+      // If a non-cooperating native writer modifies the imported copy
+      // *after* reload but *before* hinted open, never adopt its new rev.
+      const rival=await handoffContext.newPage();
+      await rival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await rival.addScriptTag({content:casBundle});
+      const winner=await rival.evaluate(async previous=>{
+        const p=JSON.parse(previous.raw);
+        p.config.description="RIVAL_AFTER_HANDOFF_171";
+        return window.FactoryProjectCas.compareAndSwapCasProject(
+          p,previous);
+      },native);
+      assert.equal(winner.revision,2);
+      await page.goto(casHref,{waitUntil:"networkidle"});
+      await expect(page.getByTestId("cas-root-handoff-hint")).toBeVisible();
+      await page.getByTestId("cas-root-handoff-open").click();
+      await expect(page.getByRole("alert"))
+        .toContainText("copia trasferita non più uguale");
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),winner);
+      console.log("FACTORY_INDEXEDDB_ASSISTED_HANDOFF_E2E_PASS: exact legacy raw backup + 3 consents, native same-ID insert-only, SHA-256 query hint without code/token, full reload CAS-only no automatic IDB project selection, explicit double-read open, return strips hint, rival later revision rejected and legacy unchanged");
+    }finally{
+      await handoffContext.close();
+    }
+
+    // #171: rival insert and stale legacy writer DURING third consent
+    // must NOT create an overwritten/tombstoned IDB source or navigate.
+    const deniedHandoffContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await deniedHandoffContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      await page.addScriptTag({content:casBundle});
+      const id=await page.evaluate(()=>JSON.parse(localStorage.getItem(
+        "softwarefactory.project.v1")).id);
+      const sourceRaw=await page.evaluate(id=>
+        localStorage.getItem(
+          "softwarefactory.project.library.v1."+id),id);
+      const rival=await deniedHandoffContext.newPage();
+      await rival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await rival.addScriptTag({content:casBundle});
+      const action=page.getByTestId("cas-root-handoff-start");
+      await expect(action).toBeEnabled();
+      let dialogs=0,winner=null;
+      page.on("dialog",async d=>{
+        dialogs++;
+        if(dialogs===3){
+          winner=await rival.evaluate(async raw=>
+            window.FactoryProjectCas.compareAndSwapCasProject(
+              JSON.parse(raw),null),sourceRaw);
+        }
+        await d.accept();
+      });
+      const downloaded=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await downloaded).path()))
+        .toString("utf8"),sourceRaw);
+      await expect(page.getByRole("alert"))
+        .toContainText("non confermato");
+      assert.equal(dialogs,3);
+      assert.equal(new URL(page.url()).searchParams.get("workspace"),null);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winner);
+      assert.equal(winner.revision,1);
+      page.removeAllListeners("dialog");
+      // Tombstoned IDs must never be silently resurrected by a stale copy.
+      const tomb=await rival.evaluate(async previous=>
+        window.FactoryProjectCas.deleteCasProject(previous.id,previous),
+        winner);
+      assert.equal(tomb.revision,2);
+      await action.click();
+      await expect(page.getByRole("alert"))
+        .toContainText("non confermato");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),id),
+        {state:"tombstone",revision:2});
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),
+        id),sourceRaw);
+    }finally{
+      await deniedHandoffContext.close();
+    }
+
+    // #171: mutate exact legacy per-ID raw during FINAL consent. The copy
+    // must never insert the old revision, even if a rival bypasses Web Locks.
+    const staleLegacyHandoffContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await staleLegacyHandoffContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      await page.addScriptTag({content:casBundle});
+      const current=await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1"));
+        return {id:active.id,raw:localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id)};
+      });
+      const rival=await staleLegacyHandoffContext.newPage();
+      await rival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      let n=0,newRaw=null;
+      page.on("dialog",async d=>{
+        n++;
+        if(n===3){
+          newRaw=await rival.evaluate(({id,raw})=>{
+            const p=JSON.parse(raw);
+            p.config.description="RIVAL_CHANGED_LEGACY_DURING_CONSENT_171";
+            const next=JSON.stringify(p);
+            localStorage.setItem(
+              "softwarefactory.project.library.v1."+id,next);
+            return next;
+          },current);
+        }
+        await d.accept();
+      });
+      const backup=page.waitForEvent("download");
+      await page.getByTestId("cas-root-handoff-start").click();
+      assert.equal((await readFile(await (await backup).path()))
+        .toString("utf8"),current.raw);
+      await expect(page.getByRole("alert"))
+        .toContainText("non confermato");
+      assert.equal(n,3);
+      assert.ok(newRaw && newRaw!==current.raw);
+      assert.equal(new URL(page.url()).searchParams.get("workspace"),null);
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),
+        current.id)).state,"missing",
+        "Stale legacy source must not be inserted as a new IndexedDB copy");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem(
+          "softwarefactory.project.library.v1."+id),current.id),newRaw);
+    }finally{
+      await staleLegacyHandoffContext.close();
+    }
+
     const casPipelineBuild=await require("esbuild").build({
       entryPoints:[path.join(root,"src/frontend/src/application/cas-pipeline-session.ts")],
       bundle:true,write:false,platform:"browser",format:"iife",

@@ -4,6 +4,8 @@
  * live setProject, localStorage, GitHub or cloud operations are reachable here.
  */
 import {useEffect,useMemo,useRef,useState} from "react";
+import {matchesCasHandoffHint} from "../application/cas-root-workspace";
+import type {CasHandoffHint} from "../application/cas-root-workspace";
 import {strToU8,zipSync} from "fflate";
 import {STAGES,SERVICE_KINDS,SERVICE_LABELS,SERVICE_OPTIONS} from "../domain/defaults";
 import type {FactoryProject,FactorySettings,StageId,ProjectConfig,
@@ -71,6 +73,8 @@ type Props={
   locale:FactoryLocale;settings:FactorySettings;
   /** Used only by the standalone CAS root (#167). */
   onRequestLegacy?:()=>void;
+  /** #171: untrusted, opt-in URL hint. No automatic IndexedDB open. */
+  handoff?:CasHandoffHint|null;
 };
 
 const CAS_STACK_FRONTENDS:ReadonlyArray<FrontendKind>=
@@ -93,7 +97,7 @@ function exact(a:CasProjectSnapshot,b:CasProjectSnapshot):boolean {
 }
 
 export default function CasIsolatedEditor({
-  locale,settings,onRequestLegacy,
+  locale,settings,onRequestLegacy,handoff,
 }:Props) {
   const [expanded,setExpanded]=useState(false);
   const [list,setList]=useState<CasProjectChoice[]|null>(null);
@@ -195,6 +199,33 @@ export default function CasIsolatedEditor({
     if(dirty && !window.confirm(t(locale,"casRootExitDirtyConsent")))return;
     if(!window.confirm(t(locale,"casRootExitFinalConsent")))return;
     onRequestLegacy();
+  }
+  function openHandoffHint():void {
+    if(!handoff || snapshot || active.current || inFlight.current)return;
+    void run(async()=>{
+      // Only a human click may trigger the FIRST IndexedDB read on the
+      // dedicated CAS route. Hint alone must never mount legacy or IDB.
+      const before=await openCasSelectionController(handoff.id);
+      const source=before.snapshot();
+      if(!await matchesCasHandoffHint(handoff,source)){
+        setError(t(locale,"casHandoffStale"));return;
+      }
+      if(!window.confirm(t(locale,"casHandoffOpenConsent")+"\nID: "+
+         source.id+" / rev. "+source.revision))return;
+      // A rival may update IDB while the browser dialog is open.
+      const after=await openCasSelectionController(handoff.id);
+      const exactSource=after.snapshot();
+      if(!exact(source,exactSource) ||
+         !await matchesCasHandoffHint(handoff,exactSource)){
+        setError(t(locale,"casHandoffStale"));return;
+      }
+      active.current=after;
+      accept(exactSource);
+      setExpanded(true);
+      setList(null);
+      setNotice(t(locale,"casHandoffOpened")+" ID: "+exactSource.id+
+        " (rev. "+exactSource.revision+")");
+    });
   }
   function close():void {
     if(inFlight.current) return;
@@ -881,6 +912,16 @@ export default function CasIsolatedEditor({
       <h3>{t(locale,"casIsoTitle")}</h3>
     </div></div>
     <p className="helper">{t(locale,"casIsoExplain")}</p>
+    {handoff && <div data-testid="cas-root-handoff-hint">
+      <p className="helper">{t(locale,"casHandoffHintExplain")}</p>
+      <p><strong>ID:</strong> {handoff.id} · rev. {handoff.revision}</p>
+      <button type="button" className="secondary"
+        data-testid="cas-root-handoff-open"
+        disabled={working || Boolean(snapshot) || Boolean(active.current)}
+        onClick={openHandoffHint}>
+        {t(locale,"casHandoffOpenAction")}
+      </button>
+    </div>}
     {!expanded ? <button type="button" className="secondary"
       onClick={()=>setExpanded(true)}>{t(locale,"casIsoOpenPanel")}</button> : <>
       <div className="row">

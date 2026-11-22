@@ -7,8 +7,11 @@ import {
 import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
 import CasIsolatedEditor from "./components/CasIsolatedEditor";
-import {factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas}
+import {factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas,
+  factoryCasHandoffUrl,factoryCasHandoffHint}
   from "./application/cas-root-workspace";
+import {prepareLegacyCasHandoff,commitLegacyCasHandoff}
+  from "./application/cas-legacy-handoff";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
 import AgentHandoffBoard from "./components/AgentHandoffBoard";
@@ -107,6 +110,7 @@ function LegacyFactoryApp() {
   const writerLeaseRef = useRef<ProjectWriterLease | null>(null);
   const projectSwitchRef = useRef(false);
   const casRestoreBusyRef = useRef(false);
+  const casHandoffBusyRef = useRef(false);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -819,6 +823,79 @@ function LegacyFactoryApp() {
     }
   }
 
+  /**
+   * #171: explicit legacy → CAS-only handoff, not a second live writer.
+   * Native insert is NEVER an overwrite/restore of present or tombstoned ID.
+   * Source backup is per-ID canonical bytes, not a pretty wrapper.
+   */
+  async function handoffLegacyToCas():Promise<void> {
+    if(casHandoffBusyRef.current)return;
+    const original=projectRef.current;
+    const locale=normalizeLocale(settingsRef.current.language);
+    let raw:string;
+    try{raw=JSON.stringify(original);}
+    catch{setError(t(locale,"casHandoffBlocked"));return;}
+    const stable=()=>canNavigateLegacyToCas({
+      // Only our OWN native insert is allowed to hold the busy state;
+      // any preceding task must have stopped before claiming this gate.
+      busy:casHandoffBusyRef.current?false:busyRef.current||busy,
+      writerReady:writerLeaseReady,
+      editingOutput,
+      switching:projectSwitchRef.current||casRestoreBusyRef.current,
+      localConflict:Boolean(localConflict),
+      writerContended,
+      githubAutoSync:Boolean(settingsRef.current.githubAutoSync),
+      otherDraft:Boolean(runnerVaultPassphrase),
+      projectId:original.id,
+      leaseProjectId:writerLeaseRef.current?.projectId??null,
+      expectedRaw:raw,
+      persistedRaw:localProjectSnapshot(original.id),
+    }) && projectRef.current===original;
+    try{
+      if(!stable()){
+        setError(t(locale,"casHandoffBlocked"));
+        return;
+      }
+      casHandoffBusyRef.current=true;
+      setBusy(true);setOperation(t(locale,"casHandoffBusy"));
+      const ticket=await prepareLegacyCasHandoff(original);
+      if(!stable() || ticket.raw!==raw)
+        throw Error("CAS source changed after read-only preflight");
+      if(!window.confirm(t(locale,"casHandoffBackupConsent")+"\nID: "+
+         ticket.id))return;
+      const exact=legacyCasBackupJson(ticket);
+      const url=URL.createObjectURL(new Blob([exact],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-before-cas-handoff-"+ticket.id+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
+      if(!window.confirm(t(locale,"casHandoffSavedConsent")))return;
+      if(!window.confirm(t(locale,"casHandoffFinalConsent")+"\nID: "+
+         ticket.id))return;
+      if(!stable())
+        throw Error("CAS source changed during consent");
+      const result=await commitLegacyCasHandoff(ticket,true,stable);
+      if(result.status!=="ready" || !result.hint || !stable()){
+        // A native insert may already have ACKed. It must NEVER be retried
+        // under a new ID or relabeled failed because readback raced.
+        setError(t(locale,"casHandoffCopiedUnverified"));
+        return;
+      }
+      window.location.assign(factoryCasHandoffUrl(
+        window.location.href,result.hint));
+    }catch{
+      // No inference about whether a prior native IDB write ACKed.
+      setError(t(locale,"casHandoffCheckLibrary"));
+    }finally{
+      casHandoffBusyRef.current=false;
+      setBusy(false);setOperation("");
+    }
+  }
+
   async function recoverLostGithubAck() {
     const active = projectRef.current;
     if (busy || localConflict || !writerLeaseReady ||
@@ -1142,6 +1219,18 @@ function LegacyFactoryApp() {
               onClick={enterCasStandalone}>
               {t(normalizeLocale(settings.language),"casRootEnterAction")}
             </button>
+            <button type="button" className="secondary"
+              data-testid="cas-root-handoff-start"
+              disabled={busy || !writerLeaseReady || writerContended ||
+                Boolean(localConflict) || editingOutput ||
+                projectSwitchRef.current || casRestoreBusyRef.current ||
+                Boolean(settings.githubAutoSync) ||
+                Boolean(runnerVaultPassphrase)}
+              onClick={()=>void handoffLegacyToCas()}>
+              {t(normalizeLocale(settings.language),"casHandoffAction")}
+            </button>
+            <p className="helper">{t(normalizeLocale(settings.language),
+              "casHandoffExplain")}</p>
           </section>
           <CasIsolatedEditor locale={normalizeLocale(settings.language)} settings={settings}/>
           <section className="hero"><div className="hero-copy"><div className="hero-pill"><Sparkles size={14} /> THE AUTONOMOUS SOFTWARE STUDIO</div>
@@ -1390,6 +1479,7 @@ function LegacyFactoryApp() {
 function CasRootWorkspace() {
   const [settings]=useState<FactorySettings>(loadSettings);
   const locale=normalizeLocale(settings.language);
+  const handoff=factoryCasHandoffHint(window.location.search);
   return <div className="shell" data-testid="cas-root-shell">
     <main className="main">
       <header className="topbar">
@@ -1407,6 +1497,7 @@ function CasRootWorkspace() {
           <p className="helper">{t(locale,"casRootStandaloneLegacyWarn")}</p>
         </section>
         <CasIsolatedEditor locale={locale} settings={settings}
+          handoff={handoff}
           onRequestLegacy={()=>
             window.location.assign(factoryWorkspaceUrl(
               window.location.href,"legacy"))}/>
