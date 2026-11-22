@@ -1378,6 +1378,13 @@ if (!inside) {
       await discardPanel.getByRole("button",{
         name:"Apri copia IDB: Code Agent pending fixture",
       }).click();
+      // choose() opens asynchronously after the click event. Wait for the
+      // confirmed pinned selection, not merely the button click returning,
+      // before installing consent handlers for the NEXT action.
+      await expect(discardPanel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      await expect(discardPanel.getByTestId("cas-isolated-code-discard-action"))
+        .toBeEnabled();
       const beforeDiscardRace=await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.equal(beforeDiscardRace.revision,4);
