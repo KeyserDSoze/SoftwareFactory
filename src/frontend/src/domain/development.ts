@@ -57,14 +57,25 @@ export type RunnerJobEvidence = {
 };
 /** CAS-only manual application is NOT a FeatureReview or a test result.
  * Independent reviewer approval belongs only to the legacy typed history. */
+/** Full before/after code provenance is bounded by the human preview limit
+ * (1600 characters per side). This is an operator record, never a review. */
+export type HumanAppliedFile = {
+  path: string;
+  before: string | null;
+  after: string;
+};
 export type HumanAppliedChange = {
   id: string;
   summary: string;
   appliedAt: string;
-  /** Revision of the native Code Agent workspace after commit. */
+  /** Revision of the native Code Agent workspace after the original apply. */
   revision: number;
   paths: string[];
-  status: "operator-unverified";
+  /** #170: source-bound undo. Historical #169 records lack this field. */
+  files?: HumanAppliedFile[];
+  status: "operator-unverified" | "reverted";
+  /** Explicit human undo date; never implies independent verification. */
+  revertedAt?: string;
 };
 export type DevelopmentWorkspace = {
   revision: number;

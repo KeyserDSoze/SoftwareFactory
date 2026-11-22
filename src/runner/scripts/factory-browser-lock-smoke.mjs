@@ -2005,6 +2005,331 @@ if (!inside) {
       await applyContext.close();
     }
 
+    // #170: full native CAS human patch apply->UNDO, no arbitrary source
+    // reconstruction; only exact before/after metadata or proven legacy
+    // additions may be restored. Two tabs fence the FINAL human consent.
+    const undoContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await undoContext.newPage();
+      const rival=await undoContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const id="17017017-0170-4170-8170-170170170170";
+      const filePath="src/frontend/web/src/HumanUndo170.tsx";
+      const fileBody="export const HumanUndo170=()=> <p>HUMAN_SOURCE_170</p>;";
+      const original=await rival.evaluate(async ({id})=>{
+        const now="2026-11-22T20:30:00.000Z";
+        const project={
+          id,createdAt:now,updatedAt:now,config:{
+            name:"CAS human undo 170",
+            description:"Human source undo only",requirements:"No review",
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"none",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            },
+          },
+          stages:["features","competitors","technical","architecture",
+            "adversarial","implementation"].map((stage,i)=>({
+            id:stage,label:stage,status:i===0?"complete":"pending",
+            output:i===0?"PRE_UNDO_MANUAL_170":"",
+            ...(i===0?{completionOrigin:"manual"}:{}),sources:[],
+          })),
+        };
+        return window.FactoryProjectCas.compareAndSwapCasProject(
+          project,null);
+      },{id});
+      const legacyBefore=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",d=>void d.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: CAS human undo 170",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const form=panel.getByTestId("cas-isolated-code-proposal");
+      const stage=async(body,summary)=>{
+        await form.getByTestId("cas-isolated-code-request")
+          .fill("Apply an operator supplied source file");
+        await form.getByTestId("cas-isolated-code-json").fill(JSON.stringify({
+          summary,files:[{path:filePath,content:body,
+            reason:"Human source is not reviewed"}],
+        }));
+        let count=0;
+        const dialogs=d=>{count++;void d.accept();};
+        page.on("dialog",dialogs);
+        await form.getByRole("button",{
+          name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+        }).click();
+        page.off("dialog",dialogs);
+        assert.equal(count,3);
+      };
+      const apply=async()=>{
+        let count=0;
+        const dialogs=d=>{count++;void d.accept();};
+        page.on("dialog",dialogs);
+        await form.getByTestId(
+          "cas-isolated-code-human-apply-action").click();
+        page.off("dialog",dialogs);
+        assert.equal(count,3);
+      };
+      await stage(fileBody,"First operator unreviewed application");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      await apply();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      const applied=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const before=JSON.parse(applied.raw);
+      assert.equal(before.development.overrides[filePath],fileBody);
+      assert.deepEqual(before.development.humanApplications[0].files,
+        [{path:filePath,before:null,after:fileBody}]);
+      const undoPanel=panel.getByTestId("cas-isolated-human-undo");
+      const undoAction=undoPanel.getByTestId("cas-isolated-human-undo-action");
+      await expect(undoAction).toBeEnabled();
+      const undoPreview=undoPanel.getByTestId(
+        "cas-isolated-human-undo-preview");
+      await undoPreview.locator("summary").click();
+      await expect(undoPreview.getByTestId(
+        "cas-isolated-human-undo-current")).toContainText(fileBody);
+      await expect(undoPreview.getByTestId(
+        "cas-isolated-human-undo-remove"))
+        .toContainText("RIMOSSO");
+      page.once("dialog",d=>void d.dismiss());
+      await undoAction.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),applied,
+        "Declining undo consent leaves native CAS source unchanged");
+      let consents=0;
+      const acceptUndo=async d=>{consents++;await d.accept();};
+      page.on("dialog",acceptUndo);
+      const backupEvent=page.waitForEvent("download");
+      await undoAction.click();
+      const backup=await backupEvent;
+      assert.equal(backup.suggestedFilename(),
+        "softwarefactory-cas-before-human-undo-"+id+"-r3.json");
+      assert.equal((await readFile(await backup.path())).toString("utf8"),
+        applied.raw,"Undo backup is byte-exact prior full project JSON");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      assert.equal(consents,3);
+      page.off("dialog",acceptUndo);
+      const undone=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const restored=JSON.parse(undone.raw);
+      assert.equal(restored.development.revision,2);
+      assert.equal(restored.development.overrides[filePath],undefined);
+      assert.equal(restored.development.originals[filePath],undefined);
+      assert.equal(restored.development.pending,undefined);
+      assert.equal(restored.development.history.length,0);
+      assert.equal(restored.development.humanApplications[0].status,"reverted");
+      assert.ok(restored.development.humanApplications[0].revertedAt);
+      assert.ok(restored.stages.every(s=>s.status==="pending" &&
+        s.output==="" && s.sources.length===0 && !s.completionOrigin));
+      assert.equal(restored.githubSync,undefined);
+      assert.equal(restored.githubTestReceipt,undefined);
+      await expect(undoAction).toBeDisabled();
+      // The real source ZIP must NOT include an undone human-added file.
+      const zipAction=panel.getByTestId("cas-isolated-source-zip-action");
+      let zipDialogCount=0;
+      const acceptZip=d=>{zipDialogCount++;void d.accept();};
+      page.on("dialog",acceptZip);
+      const zipEvent=page.waitForEvent("download");
+      await zipAction.click();
+      const zip=await zipEvent;
+      const files=unzipSync(new Uint8Array(await readFile(await zip.path())));
+      assert.equal(files[filePath],undefined);
+      assert.equal(files["docs/feature-implementation.md"],undefined);
+      assert.ok(strFromU8(files["docs/cas-idb-export-provenance.md"])
+        .includes("UNVERIFIED"));
+      assert.equal(zipDialogCount,2);
+      page.off("dialog",acceptZip);
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const again=page.getByTestId("cas-isolated-editor");
+      await again.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await again.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",d=>void d.accept());
+      await again.getByRole("button",{
+        name:"Apri copia IDB: CAS human undo 170",
+      }).click();
+      await expect(again.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      await expect(again.getByTestId(
+        "cas-isolated-human-undo-action")).toBeDisabled();
+      // New operator source can be applied *after* an earlier reverted
+      // ledger record. Its own undo requires exact metadata and native CAS.
+      const againForm=again.getByTestId("cas-isolated-code-proposal");
+      await againForm.getByTestId("cas-isolated-code-request")
+        .fill("Subsequent human source after previous undo");
+      await againForm.getByTestId("cas-isolated-code-json").fill(JSON.stringify({
+        summary:"Second human code after undo",
+        files:[{path:filePath,
+          content:"export const HumanUndo170=2;",
+          reason:"Unverified operator code"}],
+      }));
+      let secondStaging=0;
+      const approveSecond=d=>{secondStaging++;void d.accept();};
+      page.on("dialog",approveSecond);
+      await againForm.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      }).click();
+      await expect(again.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 5");
+      page.off("dialog",approveSecond);
+      assert.equal(secondStaging,3);
+      let secondApply=0;
+      const approveSecondApply=d=>{secondApply++;void d.accept();};
+      page.on("dialog",approveSecondApply);
+      await againForm.getByTestId(
+        "cas-isolated-code-human-apply-action").click();
+      await expect(again.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 6");
+      page.off("dialog",approveSecondApply);
+      assert.equal(secondApply,3);
+      const beforeRace=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const raceUndo=again.getByTestId("cas-isolated-human-undo-action");
+      await expect(raceUndo).toBeEnabled();
+      let raceDialogs=0,winner=null;
+      page.on("dialog",async d=>{
+        raceDialogs++;
+        if(raceDialogs===3){
+          winner=await rival.evaluate(async expected=>{
+            const p=JSON.parse(expected.raw);
+            p.config.description="RIVAL_WINS_HUMAN_UNDO_170";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              p,expected);
+          },beforeRace);
+        }
+        await d.accept();
+      });
+      const racedBackupEvent=page.waitForEvent("download");
+      await raceUndo.click();
+      assert.equal((await readFile(await
+        (await racedBackupEvent).path())).toString("utf8"),
+        beforeRace.raw);
+      await expect(again.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      assert.equal(raceDialogs,3);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winner);
+      const raced=JSON.parse(winner.raw);
+      assert.equal(raced.development.overrides[filePath],
+        "export const HumanUndo170=2;");
+      assert.equal(raced.development.humanApplications[1].status,
+        "operator-unverified");
+      await expect(raceUndo).toBeDisabled();
+      page.removeAllListeners("dialog");
+
+      // Historical #169 path-only ledger: only a fresh addition is safe.
+      const legacyId="17017017-0170-4170-8170-170170170171";
+      const historical=await rival.evaluate(async id=>{
+        const now="2026-11-22T20:30:00.000Z";
+        const path="src/frontend/web/src/HistoricalHuman170.tsx";
+        const content="export const HistoricalHuman170=1;";
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,createdAt:now,updatedAt:now,
+          config:{name:"Historical 169 additive patch",
+            description:"Pre-metadata human source addition",
+            requirements:"Never guess an overwritten before-image",
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"none",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            },
+          },
+          stages:["features","competitors","technical","architecture",
+            "adversarial","implementation"].map(name=>({
+            id:name,label:name,status:"pending",output:"",sources:[],
+          })),
+          development:{
+            revision:1,overrides:{[path]:content},
+            originals:{[path]:null},history:[],
+            humanApplications:[{
+              id:"old-app-169",summary:"Historical manual source",
+              appliedAt:now,revision:1,paths:[path],
+              status:"operator-unverified",
+            }],
+          },
+        },null);
+      },legacyId);
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const legacyPanel=page.getByTestId("cas-isolated-editor");
+      await legacyPanel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await legacyPanel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",d=>void d.accept());
+      await legacyPanel.getByRole("button",{
+        name:"Apri copia IDB: Historical 169 additive patch",
+      }).click();
+      const legacyUndo=legacyPanel.getByTestId(
+        "cas-isolated-human-undo-action");
+      await expect(legacyUndo).toBeEnabled();
+      await expect(legacyPanel.getByTestId(
+        "cas-isolated-human-undo-preview"))
+        .toContainText("Ledger storico senza before");
+      let oldDialogs=0;
+      const oldConsent=d=>{oldDialogs++;void d.accept();};
+      page.on("dialog",oldConsent);
+      const oldBackupEvent=page.waitForEvent("download");
+      await legacyUndo.click();
+      const oldBackup=await oldBackupEvent;
+      assert.equal((await readFile(await oldBackup.path())).toString("utf8"),
+        historical.raw);
+      await expect(legacyPanel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      assert.equal(oldDialogs,3);
+      page.off("dialog",oldConsent);
+      const oldUndone=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),legacyId);
+      assert.equal(JSON.parse(oldUndone.raw).development.overrides[
+        "src/frontend/web/src/HistoricalHuman170.tsx"],undefined);
+      assert.deepEqual(await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      })),legacyBefore);
+      console.log("FACTORY_INDEXEDDB_HUMAN_PATCH_UNDO_E2E_PASS: CAS source apply/undo with exact file ledger and pre-write backup + 3 consents, stage invalidation, ZIP excludes removed file, persistent reload, prior reverted audit accepts new apply, rival final-consent write fenced, historical #169 additive-only undo, no legacy writes");
+    }finally{
+      await undoContext.close();
+    }
+
     // #165: stale native IndexedDB source ZIP must never download/auto-rebase.
     const zipRaceContext=await browser.newContext({acceptDownloads:true});
     try{

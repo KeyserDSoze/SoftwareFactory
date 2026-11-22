@@ -44,6 +44,7 @@ describe("native human-applied CAS code #169",()=>{
       id:developmentOf(staged).pending!.id,
       summary:"Unreviewed proposed source",
       appliedAt:expect.any(String),revision:1,paths:[path],
+      files:[{path,before:null,after:short}],
       status:"operator-unverified",
     }]);
     expect(workspaceFiles(result)[path]).toBe(short);

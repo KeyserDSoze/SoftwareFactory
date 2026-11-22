@@ -61,6 +61,9 @@ import {
   canApplyCasIsolatedHumanPendingPatch,
 } from "../application/cas-isolated-human-apply";
 import {
+  prepareCasIsolatedHumanUndo,buildCasIsolatedHumanUndo,
+} from "../application/cas-isolated-human-undo";
+import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
@@ -139,6 +142,13 @@ export default function CasIsolatedEditor({
   const canApplyCode=useMemo(
     ()=>canApplyCasIsolatedHumanPendingPatch(snapshot),[snapshot],
   );
+  // Render only the exact pinned source, never a partial preview that
+  // could hide an unreviewed before/after fragment from the operator.
+  const inspectedHumanUndo=useMemo(()=>{
+    if(!snapshot)return null;
+    try{return prepareCasIsolatedHumanUndo(snapshot);}
+    catch{return null;}
+  },[snapshot]);
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
@@ -681,6 +691,44 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function undoHumanCodeApplication():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected))
+        throw Error("Stale/dirty CAS human undo");
+      const ticket=prepareCasIsolatedHumanUndo(expected);
+      const candidate=buildCasIsolatedHumanUndo(expected);
+      if(!window.confirm(t(locale,"casIsoHumanUndoBackupConfirm")+"\n"+
+        ticket.id+" / rev. "+ticket.revision+"\n"+
+        ticket.files.map(f=>f.path).join("\n")))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-cas-before-human-undo-"+
+          ticket.id+"-r"+ticket.revision+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
+      if(!window.confirm(t(locale,"casIsoHumanUndoSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoHumanUndoFinalConfirm")+"\n"+
+        ticket.id+" / rev. "+ticket.revision+"\n"+
+        ticket.files.map(f=>f.path).join("\n")))return;
+      // Sole native compare-and-swap. A rival writer cannot be overwritten:
+      // no retry, rebase, fallback to legacy or source patch reconstruction.
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent human undo CAS ACK");
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoHumanUndoDone")+" ID: "+committed.id+
+        " (rev. "+committed.revision+")");
+    });
+  }
+
   function resetStage():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot;
@@ -1211,6 +1259,51 @@ export default function CasIsolatedEditor({
               !canStageCasIsolatedCodePatch(snapshot,codeRequest,codeProposalJson)}
             onClick={stageCodeProposal}>
             {t(locale,"casIsoCodeAction")}
+          </button>
+        </div>
+        <div data-testid="cas-isolated-human-undo">
+          <h4>{t(locale,"casIsoHumanUndoTitle")}</h4>
+          <p className="helper">{t(locale,"casIsoHumanUndoExplain")}</p>
+          {inspectedHumanUndo ? <details
+            data-testid="cas-isolated-human-undo-preview">
+            <summary>{t(locale,"casIsoHumanUndoPreview")} ·
+              {" "+inspectedHumanUndo.files.length+" file / rev. "+
+                inspectedHumanUndo.revision}
+            </summary>
+            <p className="helper">
+              {inspectedHumanUndo.summary} ·
+              {inspectedHumanUndo.legacyAdditionOnly ?
+                " "+t(locale,"casIsoHumanUndoLegacy") : ""}
+            </p>
+            <ol>{inspectedHumanUndo.files.map(file=>
+              <li key={file.path}
+                data-testid="cas-isolated-human-undo-file">
+                <strong>{file.path}</strong>
+                <p><strong>{t(locale,"casIsoHumanUndoCurrent")}</strong></p>
+                <pre data-testid="cas-isolated-human-undo-current"
+                  style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+                    maxHeight:160,overflow:"auto"}}>{file.current}</pre>
+                <p><strong>{t(locale,"casIsoHumanUndoRestore")}</strong></p>
+                {file.restore===null ?
+                  <p data-testid="cas-isolated-human-undo-remove">
+                    {t(locale,"casIsoHumanUndoRemove")}
+                  </p>:
+                  <pre data-testid="cas-isolated-human-undo-before"
+                    style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+                      maxHeight:160,overflow:"auto"}}>{file.restore}</pre>}
+              </li>)}</ol>
+          </details>:
+            <p className="helper"
+              data-testid="cas-isolated-human-undo-unavailable">
+              {t(locale,"casIsoHumanUndoUnavailable")}
+            </p>}
+          <button type="button" className="secondary"
+            data-testid="cas-isolated-human-undo-action"
+            disabled={working || Boolean(dirty) ||
+              active.current?.state()!=="ready" ||
+              !inspectedHumanUndo}
+            onClick={undoHumanCodeApplication}>
+            {t(locale,"casIsoHumanUndoAction")}
           </button>
         </div>
         <div data-testid="cas-isolated-stage-reset">

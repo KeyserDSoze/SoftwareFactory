@@ -76,7 +76,9 @@ function checked(snapshot:CasProjectSnapshot):FactoryProject {
       throw Error("Unreviewed pending/evidence mismatch");
     const applications=dev.humanApplications??[];
     if(!Array.isArray(applications) || applications.length>24 ||
-       applications.some(r=>!r || r.status!=="operator-unverified" ||
+       new Set(applications.map(r=>r?.id)).size!==applications.length ||
+       applications.some(r=>!r ||
+         !["operator-unverified","reverted"].includes(r.status) ||
          !Number.isSafeInteger(r.revision) || r.revision<1 ||
          r.revision>dev.revision ||
          typeof r.id!=="string" || !r.id ||
@@ -84,9 +86,26 @@ function checked(snapshot:CasProjectSnapshot):FactoryProject {
          r.summary.length>1_000 ||
          typeof r.appliedAt!=="string" ||
          !Number.isFinite(Date.parse(r.appliedAt)) ||
+         (r.status==="reverted" ?
+           typeof r.revertedAt!=="string" ||
+             !Number.isFinite(Date.parse(r.revertedAt)) :
+           r.revertedAt!==undefined) ||
          !Array.isArray(r.paths) || r.paths.length<1 ||
          r.paths.length>CAS_HUMAN_APPLY_MAX_FILES ||
+         new Set(r.paths).size!==r.paths.length ||
          r.paths.some(path=>!allowedCodePath(path)) ||
+         (r.files!==undefined &&
+           (!Array.isArray(r.files) ||
+            r.files.length!==r.paths.length ||
+            r.files.some((f,i)=>!f || f.path!==r.paths[i] ||
+              !allowedCodePath(f.path) ||
+              (f.before!==null &&
+                (typeof f.before!=="string" ||
+                 f.before.length>CAS_HUMAN_APPLY_PREVIEW_MAX ||
+                 SECRET.test(f.before))) ||
+              typeof f.after!=="string" || !f.after.trim() ||
+              f.after.length>CAS_HUMAN_APPLY_PREVIEW_MAX ||
+              SECRET.test(f.after)))) ||
          SECRET.test(r.summary)) ||
        applications.some(r=>r.id===dev.pending!.id))
       throw Error("Unsafe prior manual applications");
@@ -170,6 +189,9 @@ export function buildCasIsolatedHumanApplyPendingPatch(
           id:patch.id,summary:patch.summary,
           appliedAt:new Date().toISOString(),
           revision,paths:patch.edits.map(e=>e.path),
+          files:patch.edits.map(e=>({
+            path:e.path,before:e.previous,after:e.content,
+          })),
           status:"operator-unverified",
         },
       ],
