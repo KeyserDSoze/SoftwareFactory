@@ -49,6 +49,9 @@ function strictProject(snapshot:CasProjectSnapshot):FactoryProject {
          typeof stage.output!=="string" ||
          !Array.isArray(stage.sources) ||
          (stage.error!==undefined && typeof stage.error!=="string") ||
+         (stage.completionOrigin!==undefined &&
+           (!["manual","ai"].includes(stage.completionOrigin) ||
+            stage.status!=="complete")) ||
          (stage.updatedAt!==undefined &&
            typeof stage.updatedAt!=="string")))
       throw Error("Invalid stage layout");
@@ -149,7 +152,13 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
     complete:async(ticket:CasPipelineRunTicket,output:string,sources:ResearchSource[])=>{
       const project=currentTicket(ticket);
       validateOutput(output,sources);
-      const next=commitStage(project,ticket.stage,output,sources);
+      const result=commitStage(project,ticket.stage,output,sources);
+      // New AI completions are distinguishable from manual edits and older
+      // unknown-provenance historical checkpoints; this is NOT an AI bill,
+      // independent reviewer approval or runner result.
+      const next:FactoryProject={...result,stages:result.stages.map(stage=>
+        stage.id===ticket.stage?
+          {...stage,completionOrigin:"ai" as const}:stage)};
       serializeCasProject(next);
       return finishTicket(ticket,next);
     },

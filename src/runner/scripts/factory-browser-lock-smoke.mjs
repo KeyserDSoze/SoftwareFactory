@@ -1122,6 +1122,196 @@ if (!inside) {
     }
 
 
+    // #161: real Chromium native CAS commit of HUMAN stage output with
+    // revision-fenced manual provenance, 3 consents, predecessor/downstream
+    // lifecycle and a competing noncooperating tab on final consent.
+    const humanStageContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await humanStageContext.newPage();
+      const rival=await humanStageContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="16116116-1161-4161-8161-161161161161";
+      const initial=await rival.evaluate(async id=>{
+        const now="2026-11-22T01:00:00.000Z";
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Human CAS checkpoint",
+            description:"Manual output only, no AI provider",
+            requirements:"Never misstate human work as an independent review"},
+          stages:["features","competitors","technical","architecture",
+            "adversarial","implementation"].map(stage=>({
+            id:stage,label:stage,status:"pending",output:"",sources:[],
+          })),
+          createdAt:now,updatedAt:now,
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{name:"Apri editor IndexedDB separato"}).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Human CAS checkpoint",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+
+      const manual=panel.getByTestId("cas-isolated-manual-stage");
+      const textArea=manual.getByTestId("cas-isolated-manual-input");
+      const action=manual.getByRole("button",{
+        name:"Salva output UMANO SOLO IndexedDB con backup",
+      });
+      const humanText="<script>alert('INERT')</script> HUMAN_FEATURE_PLAN";
+      await textArea.fill(humanText);
+      await expect(action).toBeEnabled();
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await action.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),initial,
+        "Declined manual-stage backup consent cannot mutate native CAS");
+      await expect(textArea).toHaveValue(humanText);
+
+      let firstConsents=0;
+      const acceptFirst=async dlg=>{firstConsents++;await dlg.accept();};
+      page.on("dialog",acceptFirst);
+      const backup=page.waitForEvent("download");
+      await action.click();
+      const firstDownload=await backup;
+      assert.equal((await readFile(await firstDownload.path())).toString("utf8"),
+        initial.raw,"Human stage pre-edit backup must preserve exact raw JSON");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      assert.equal(firstConsents,3,"Human stage needs THREE separate consents");
+      await expect(textArea).toHaveValue("");
+      const savedFirst=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const firstProject=JSON.parse(savedFirst.raw);
+      assert.equal(savedFirst.revision,2);
+      assert.equal(firstProject.stages[0].output,humanText);
+      assert.equal(firstProject.stages[0].completionOrigin,"manual");
+      assert.deepEqual(firstProject.stages[0].sources,[]);
+      assert.equal(firstProject.stages[0].status,"complete");
+      assert.equal(firstProject.stages[1].status,"pending");
+      const firstView=panel.getByTestId("cas-isolated-stage-features");
+      await expect(firstView.getByTestId("cas-isolated-stage-origin"))
+        .toContainText("testo scritto dall'operatore");
+      await firstView.locator("details").first().locator("summary").click();
+      await expect(firstView.getByTestId("cas-isolated-stage-output"))
+        .toContainText(humanText);
+      assert.equal(await firstView.locator("script").count(),0,
+        "Human-entered HTML must remain inert text, never executable markup");
+      page.off("dialog",acceptFirst);
+
+      // A second stage can be completed manually only after the first.
+      await manual.locator("select").selectOption("competitors");
+      await textArea.fill("HUMAN_COMPETITOR_RESEARCH");
+      let secondConsents=0;
+      const acceptSecond=async dlg=>{secondConsents++;await dlg.accept();};
+      page.on("dialog",acceptSecond);
+      const backup2=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await backup2).path())).toString("utf8"),
+        savedFirst.raw);
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      assert.equal(secondConsents,3);
+      const savedSecond=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const secondProject=JSON.parse(savedSecond.raw);
+      assert.equal(secondProject.stages[1].completionOrigin,"manual");
+      assert.equal(secondProject.stages[1].output,"HUMAN_COMPETITOR_RESEARCH");
+      page.off("dialog",acceptSecond);
+
+      // Editing an earlier complete stage invalidates ALL successors,
+      // including the newly completed human stage; prior stages remain.
+      await manual.locator("select").selectOption("features");
+      await textArea.fill("CORRECTED_HUMAN_FEATURES");
+      let thirdConsents=0;
+      const acceptThird=async dlg=>{thirdConsents++;await dlg.accept();};
+      page.on("dialog",acceptThird);
+      const backup3=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await backup3).path())).toString("utf8"),
+        savedSecond.raw);
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      assert.equal(thirdConsents,3);
+      const corrected=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const correctedProject=JSON.parse(corrected.raw);
+      assert.equal(correctedProject.stages[0].output,"CORRECTED_HUMAN_FEATURES");
+      assert.equal(correctedProject.stages[0].completionOrigin,"manual");
+      assert.ok(correctedProject.stages.slice(1).every(stage=>
+        stage.status==="pending" && stage.output==="" &&
+        stage.sources.length===0 && stage.completionOrigin===undefined),
+        "Human correction MUST invalidate every later stage and origin");
+      page.off("dialog",acceptThird);
+
+      // Rival changes the SAME CAS slot while the third dialog is open.
+      // Candidate is stale: leave the user's text in place, block session,
+      // do not auto-merge or add a falsely completed stage.
+      await manual.locator("select").selectOption("competitors");
+      const conflictDraft="UNSAVED_HUMAN_CONFLICT_DRAFT";
+      await textArea.fill(conflictDraft);
+      let finalConsents=0,winningRevision=null;
+      page.on("dialog",async dlg=>{
+        finalConsents++;
+        if(finalConsents===3){
+          winningRevision=await rival.evaluate(async expected=>{
+            const p=JSON.parse(expected.raw);
+            p.config.description="RIVAL_NATIVE_WINNER_NO_AUTOMERGE";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              p,expected);
+          },corrected);
+        }
+        await dlg.accept();
+      });
+      const backup4=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await backup4).path())).toString("utf8"),
+        corrected.raw);
+      await expect(panel.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      await expect(textArea).toHaveValue(conflictDraft);
+      await expect(action).toBeDisabled();
+      assert.equal(finalConsents,3);
+      assert.equal(winningRevision.revision,5);
+      const actualWinner=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.deepEqual(actualWinner,winningRevision);
+      assert.equal(JSON.parse(actualWinner.raw).stages[1].status,"pending");
+      assert.equal(JSON.parse(actualWinner.raw).config.description,
+        "RIVAL_NATIVE_WINNER_NO_AUTOMERGE");
+      page.removeAllListeners("dialog");
+
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winningRevision);
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Human CAS edits must not write active Factory localStorage");
+      console.log("FACTORY_INDEXEDDB_MANUAL_STAGE_UI_E2E_PASS: three consents, exact backups, manual provenance and inert text, predecessor/downstream invalidation, rival token fencing preserving draft, reload, zero legacy writes");
+    }finally{
+      await humanStageContext.close();
+    }
+
     // #160: native IndexedDB operational faults. A quota-like synchronous
     // store.put exception is INJECTED at the browser API boundary; the
     // transaction and rollback are real. Schema v2 upgrade is real and
@@ -1446,7 +1636,9 @@ if (!inside) {
         .toHaveCount(6);
       const features=inspector.getByTestId("cas-isolated-stage-features");
       await expect(features.getByTestId("cas-isolated-stage-status"))
-        .toContainText("Output AI salvato");
+        .toContainText("Checkpoint salvato");
+      await expect(features.getByTestId("cas-isolated-stage-origin"))
+        .toContainText("Origine storica non attestata");
       await features.locator("details").first().locator("summary").click();
       await expect(features.getByTestId("cas-isolated-stage-output"))
         .toContainText("<img src=x onerror=alert('pwn')>");

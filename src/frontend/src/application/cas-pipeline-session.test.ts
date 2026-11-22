@@ -50,6 +50,7 @@ describe("async CAS pipeline stage contract (#156)",()=>{
     expect(result.revision).toBe(3);
     expect(JSON.parse(result.raw).stages[2].status).toBe("complete");
     expect(JSON.parse(result.raw).stages[2].output).toBe("Actual AI result");
+    expect(JSON.parse(result.raw).stages[2].completionOrigin).toBe("ai");
     expect(JSON.parse(result.raw).stages.slice(0,2)).toEqual(p.stages.slice(0,2));
     await expect(coordinator.complete(ticket,"Late duplicate",[]))
       .rejects.toThrow(/obsoleto/);

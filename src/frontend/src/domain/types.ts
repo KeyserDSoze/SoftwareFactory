@@ -24,6 +24,9 @@ export interface Stage {
   label: string;
   status: StageStatus;
   output: string;
+  /** Optional origin assertion of the local authoring path, NOT test/review evidence.
+   * Older backups without this field have unknown provenance. */
+  completionOrigin?: "manual" | "ai";
   error?: string;
   sources: ResearchSource[];
   updatedAt?: string;

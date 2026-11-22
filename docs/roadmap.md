@@ -1285,3 +1285,13 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] UI IT/EN con istruzioni di recovery non distruttive e draft preservato. Vitest su failure classification e token fencing, Chromium due tab con quota iniettata, upgrade **reale** v1→v2 nella sola fixture effimera, API assente e localStorage invariato. Marker `FACTORY_INDEXEDDB_STORAGE_FAULT_E2E_PASS`.
 - [ ] Chiusura #160 solo dopo Factory CI, Pages e Installer candidate `completed/success` stesso SHA main e marker nel log.
 - [ ] #139 ancora aperta per tutti i writer live, selezione/bootstrap/restore/rollback migrazione coordinata. #91/#92 ancora aperte per sync multi-device/provider.
+
+
+## Checkpoint umani in IndexedDB con provenienza distinta (#161 — 22 novembre 2026)
+
+- [x] Pure stage edit: output manuale ≤60k, preflight snapshot/stage/precedessori completi, vietato se running, no-op, origine manual, tutte le fasi successive invalidate e precedenti intatte.
+- [x] Nuovo attributo opzionale `completionOrigin` (`manual/ai/unknown`) interpretato solo come writer dichiarato, **non** attestazione test/reviewer. Pipeline AI pilota marca `ai`; reset, correzione e invalidazione rimuovono origini obsolete.
+- [x] UI del pannello opt-in con input editabile, backup raw JSON e tre consensi, singola transazione `tx.oncomplete`, rival writer fenced e bozza umana conservata su fallimento, IT/EN.
+- [x] Vitest su stage preflight/provenance/invalidation/no I/O; Chromium due tab con completamento umano, correzione, backup, writer rivale durante consenso e legacy immutato. Marker `FACTORY_INDEXEDDB_MANUAL_STAGE_UI_E2E_PASS`.
+- [ ] Gate di chiusura #161: Factory CI, Pages, Installer candidate completed/success stesso SHA `main`, marker Chromium nel log e issue aggiornata.
+- [ ] Migrare **in modo coordinato** tutti i writer del live `App.tsx` su async IDB + bootstrap/switch/import/Code Agent/GitHub/cloud/rollback: parent #139 ancora aperta. #91/#92 restano aperte per sync multi-device/provider.

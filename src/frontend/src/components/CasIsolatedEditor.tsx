@@ -32,6 +32,10 @@ import {prepareCasIsolatedDelete} from "../application/cas-isolated-delete";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
+  buildCasIsolatedManualStage,canCommitCasIsolatedManualStage,
+  CAS_MANUAL_STAGE_MAX_CHARS,
+} from "../application/cas-isolated-manual-stage";
+import {
   prepareCasIsolatedExport,confirmCasIsolatedExport,
 } from "../application/cas-isolated-export";
 import {
@@ -61,6 +65,8 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   const [draftRequirements,setDraftRequirements]=useState("");
   const [stageToReset,setStageToReset]=useState<StageId>("features");
   const [stageToRun,setStageToRun]=useState<StageId>("features");
+  const [manualStage,setManualStage]=useState<StageId>("features");
+  const [manualOutput,setManualOutput]=useState("");
   const [pipelineRunning,setPipelineRunning]=useState(false);
   const [pipelineStatus,setPipelineStatus]=useState("");
   const [newProjectName,setNewProjectName]=useState("");
@@ -75,9 +81,12 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   // automatically completed or rolled back after browser crash/reload.
   useEffect(()=>()=>{pipelineAbort.current?.abort();},[]);
 
-  const dirty=hasCasIsolatedUnsavedDraft(
+  const configDirty=hasCasIsolatedUnsavedDraft(
     snapshot,draftName,draftDescription,draftRequirements,
   );
+  // Human stage text is a draft too: close/switch/refresh must not discard
+  // it without explicit consent. Saving config must not silently erase it.
+  const dirty=configDirty || manualOutput.length>0;
   // This projection is read-only and pinned to the selection's exact CAS
   // revision; a rival tab cannot silently replace the text being inspected.
   const inspectedStages=inspectCasIsolatedStages(snapshot);
@@ -90,6 +99,7 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     setDraftDescription(p.config.description || "");
     setDraftRequirements(p.config.requirements ?? "");
     setPipelineStatus("");
+    setManualOutput("");
   }
   async function run(action:()=>Promise<void>):Promise<void> {
     if(inFlight.current) return;
@@ -123,6 +133,7 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
     setStageToReset("features");setStageToRun("features");
+    setManualStage("features");setManualOutput("");
     setPipelineStatus("");
     setNewProjectName(""); setNewProjectDescription("");
   }
@@ -260,6 +271,8 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
 
   function save():void {
     void run(async()=>{
+      if(manualOutput.length>0)
+        throw Error("Uncommitted human stage draft must be handled first");
       const controller=active.current, expected=snapshot;
       if(!controller || !expected || controller.state()!=="ready" ||
         !exact(controller.snapshot(),expected))
@@ -329,6 +342,43 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
       }finally{
         setTimeout(()=>URL.revokeObjectURL(url),30000);
       }
+    });
+  }
+
+  function saveManualStage():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot,stage=manualStage;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         configDirty || !exact(controller.snapshot(),expected))
+        throw Error("Stale/dirty CAS manual stage commit");
+      // Build before the first dialog: reject blank/oversize, running and
+      // unready predecessors, never fabricate AI/runner/test evidence.
+      const candidate=buildCasIsolatedManualStage(expected,stage,manualOutput);
+      if(!window.confirm(t(locale,"casIsoManualBackupConfirm")+"\n"+
+        stage+" / "+expected.id+" / rev. "+expected.revision))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-human-stage-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoManualSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoManualFinalConfirm")+"\n"+
+        stage+" / "+expected.id+" / rev. "+expected.revision))return;
+      // Exactly one native CAS write. A competitor is fenced by revision+raw
+      // *inside* the transaction; no retries or silent adoption.
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent manual CAS ACK");
+      // Clearing human text is permitted only after oncomplete ACK.
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoManualDone")+
+        " ("+stage+", rev. "+committed.revision+")");
     });
   }
 
@@ -539,7 +589,8 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
         </label>
         <p className="helper">{t(locale,"casIsoInvalidate")}</p>
         <button type="button" className="secondary"
-          disabled={working || !dirty || !active.current}
+          disabled={working || !configDirty || manualOutput.length>0 ||
+              !active.current}
           onClick={save}>{t(locale,"casIsoSave")}</button>
         <div data-testid="cas-isolated-full-export">
           <p className="helper">{t(locale,"casIsoExportExplain")}</p>
@@ -569,8 +620,11 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
                     {t(locale,"casIsoInspectRunningRecovery")}
                   </p>}
                 {stage.status==="complete" &&
-                  <p className="helper">
-                    {t(locale,"casIsoInspectNotVerified")}
+                  <p className="helper" data-testid="cas-isolated-stage-origin">
+                    {t(locale,stage.completionOrigin==="manual"?
+                      "casIsoOriginManual":stage.completionOrigin==="ai"?
+                      "casIsoOriginAi":"casIsoOriginUnknown")}
+                    {" · "}{t(locale,"casIsoInspectNotVerified")}
                   </p>}
                 {stage.status==="failed" &&
                   <p className="helper">
@@ -620,6 +674,30 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
                     </li>)}</ul>
                 </details>}
               </li>)}</ol>}
+        </div>
+        <div data-testid="cas-isolated-manual-stage">
+          <h4>{t(locale,"casIsoManualTitle")}</h4>
+          <p className="helper">{t(locale,"casIsoManualExplain")}</p>
+          <label>{t(locale,"casIsoManualSelection")}
+            <select value={manualStage} disabled={working}
+              onChange={e=>setManualStage(e.target.value as StageId)}>
+              {STAGES.map(stage=><option key={stage.id} value={stage.id}>
+                {stage.id}
+              </option>)}
+            </select>
+          </label>
+          <label>{t(locale,"casIsoManualOutput")}
+            <textarea data-testid="cas-isolated-manual-input"
+              value={manualOutput} rows={5}
+              maxLength={CAS_MANUAL_STAGE_MAX_CHARS}
+              disabled={working}
+              onChange={e=>setManualOutput(e.target.value)}/>
+          </label>
+          <button type="button" className="secondary"
+            disabled={working || configDirty ||
+              active.current?.state()!=="ready" ||
+              !canCommitCasIsolatedManualStage(snapshot,manualStage,manualOutput)}
+            onClick={saveManualStage}>{t(locale,"casIsoManualAction")}</button>
         </div>
         <div data-testid="cas-isolated-stage-reset">
           <p className="helper">{t(locale,"casIsoStageResetExplain")}</p>

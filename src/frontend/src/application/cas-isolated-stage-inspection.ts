@@ -24,6 +24,7 @@ export type CasStageInspection=Readonly<{
   id:StageId;
   status:CasStageInspectionStatus;
   output:string;
+  completionOrigin:"manual"|"ai"|"unknown";
   outputTruncated:boolean;
   sources:readonly CasStageSourcePreview[];
   sourceTotal:number;
@@ -66,6 +67,9 @@ export function inspectCasIsolatedStages(
          typeof stage.output!=="string" ||
          !Array.isArray(stage.sources) ||
          (stage.error!==undefined && typeof stage.error!=="string") ||
+         (stage.completionOrigin!==undefined &&
+           (!["manual","ai"].includes(stage.completionOrigin) ||
+            stage.status!=="complete")) ||
          (stage.updatedAt!==undefined && typeof stage.updatedAt!=="string"))
         return null;
 
@@ -93,6 +97,8 @@ export function inspectCasIsolatedStages(
         id:STAGES[i].id,
         status:impossible?"invalid":stage.status,
         output:stage.output.slice(0,CAS_STAGE_PREVIEW_CHARS),
+        completionOrigin:stage.status==="complete"?
+          (stage.completionOrigin??"unknown"):"unknown",
         outputTruncated:stage.output.length>CAS_STAGE_PREVIEW_CHARS,
         sources:Object.freeze(sources),
         sourceTotal,

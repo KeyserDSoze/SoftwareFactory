@@ -29,6 +29,7 @@ describe("read-only CAS stage inspection (#158)",()=>{
     expect(rows?.map(row=>row.status).slice(0,4))
       .toEqual(["complete","running","failed","pending"]);
     expect(rows?.[0].output).toContain("<img src=x onerror");
+    expect(rows?.[0].completionOrigin).toBe("unknown");
     expect(JSON.stringify(rows)).not.toContain("UNTRUSTED_PROVIDER_SECRET_NOT_FOR_UI");
     expect(Object.isFrozen(rows)).toBe(true);
   });
@@ -93,6 +94,25 @@ describe("read-only CAS stage inspection (#158)",()=>{
     expect(rows?.[0].sources[0].snippet.length).toBe(320);
     expect(input.raw).toContain("a".repeat(CAS_STAGE_PREVIEW_CHARS+900));
     expect(Object.isFrozen(rows?.[0].sources)).toBe(true);
+  });
+  it("distinguishes manual, provider AI and unknown origins, refusing invented proof",()=>{
+    const {project}=fixture();
+    project.stages[0].status="complete";
+    project.stages[0].output="Written by human";
+    project.stages[0].completionOrigin="manual";
+    project.stages[1].status="complete";
+    project.stages[1].output="AI produced";
+    project.stages[1].completionOrigin="ai";
+    project.stages[2].status="complete";
+    project.stages[2].output="Older checkpoint without origin";
+    expect(inspectCasIsolatedStages(snap(project))?.slice(0,3)
+      .map(x=>x.completionOrigin)).toEqual(["manual","ai","unknown"]);
+    project.stages[2].completionOrigin="reviewer_approved" as never;
+    expect(inspectCasIsolatedStages(snap(project))).toBeNull();
+    project.stages[2].status="pending";
+    project.stages[2].output="";
+    project.stages[2].completionOrigin="manual";
+    expect(inspectCasIsolatedStages(snap(project))).toBeNull();
   });
   it("never reads or writes any browser storage or executes source content",()=>{
     const {project}=fixture();

@@ -1,5 +1,5 @@
 import { STAGES } from "../domain/defaults";
-import type { FactoryProject, FactorySettings, ResearchSource, StageId } from "../domain/types";
+import type { FactoryProject, FactorySettings, ResearchSource, Stage, StageId } from "../domain/types";
 import { aiComplete } from "../infrastructure/ai";
 import type { AiUsageListener } from "../infrastructure/ai";
 import { deduplicateSources, searchWeb } from "../infrastructure/research";
@@ -73,13 +73,21 @@ export function stageReady(project: FactoryProject, id: StageId): boolean {
   if (index < 0) return false;
   return index === 0 || project.stages[index - 1]?.status === "complete";
 }
+/** Do not leave a stale human/AI authoring assertion on invalidated stages.
+ * The common live helper has unknown origin unless a caller explicitly
+ * stamps a verified-by-this-path origin (CAS AI or CAS manual stage).
+ */
+function withoutCompletionOrigin(stage:Stage):Stage {
+  const {completionOrigin: _historical, ...clean}=stage;
+  return clean;
+}
 export function commitStage(project: FactoryProject, id: StageId, output: string, sources: ResearchSource[]): FactoryProject {
   const index = STAGES.findIndex(s => s.id === id);
   const stages = project.stages.map((stage, i) => i === index ?
-    { ...stage, output, sources, status: "complete" as const, error: undefined, updatedAt: new Date().toISOString() } :
-    i > index ? { ...stage, output: "", sources: [], status: "pending" as const, error: undefined } : stage);
+    { ...withoutCompletionOrigin(stage), output, sources, status: "complete" as const, error: undefined, updatedAt: new Date().toISOString() } :
+    i > index ? { ...withoutCompletionOrigin(stage), output: "", sources: [], status: "pending" as const, error: undefined } : stage);
   return { ...project, stages, updatedAt: new Date().toISOString() };
 }
 export function invalidateStages(project: FactoryProject): FactoryProject {
-  return { ...project, updatedAt: new Date().toISOString(), stages: project.stages.map(s => ({ ...s, output: "", sources: [], status: "pending" as const, error: undefined })) };
+  return { ...project, updatedAt: new Date().toISOString(), stages: project.stages.map(s => ({ ...withoutCompletionOrigin(s), output: "", sources: [], status: "pending" as const, error: undefined })) };
 }
