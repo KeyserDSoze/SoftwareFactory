@@ -426,16 +426,21 @@ if (!inside) {
         JSON.stringify(backupRaw.config));
       const handoffOpen=page.getByTestId("cas-root-handoff-open");
       await expect(handoffOpen).toBeEnabled();
-      page.once("dialog",d=>void d.dismiss());
-      await handoffOpen.click();
+      // The hinted open is asynchronous: wait for the ONE dialog to be
+      // handled before attempting another click. Otherwise a stale one-shot
+      // dismiss listener can race a new accept listener on the same dialog.
+      const cancelledDialog=page.waitForEvent("dialog",{timeout:15000});
+      const cancelledClick=handoffOpen.click();
+      await (await cancelledDialog).dismiss();
+      await cancelledClick;
+      await expect(handoffOpen).toBeEnabled();
       assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
-      let opened=0;
-      page.on("dialog",d=>{opened++;void d.accept();});
-      await handoffOpen.click();
+      const acceptedDialog=page.waitForEvent("dialog",{timeout:15000});
+      const acceptedClick=handoffOpen.click();
+      await (await acceptedDialog).accept();
+      await acceptedClick;
       await expect(page.getByTestId("cas-isolated-active"))
         .toContainText("rev. 1");
-      assert.equal(opened,1);
-      page.removeAllListeners("dialog");
       await expect(page.getByTestId("cas-isolated-active"))
         .toContainText(original.id);
       const copiedName=JSON.parse(original.raw).config.name;
