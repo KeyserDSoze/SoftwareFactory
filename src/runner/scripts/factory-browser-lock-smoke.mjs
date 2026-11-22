@@ -1381,6 +1381,10 @@ if (!inside) {
       const beforeDiscardRace=await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.equal(beforeDiscardRace.revision,4);
+      // The earlier blocked refresh may not show a dialog; Playwright's
+      // one-shot handlers survive page reload. Scope this race to exactly one
+      // dialog listener, so no stale accept() handles its confirmations.
+      page.removeAllListeners("dialog");
       let discardRaceDialogs=0,discardWinner=null;
       page.on("dialog",async dialog=>{
         discardRaceDialogs++;
