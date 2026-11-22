@@ -38,6 +38,8 @@ import {
 import {
   buildCasIsolatedPendingCodePatch,canStageCasIsolatedCodePatch,
   inspectCasIsolatedPendingCodePatch,
+  buildCasIsolatedDiscardPendingCodePatch,
+  canDiscardCasIsolatedPendingCodePatch,
   CAS_PENDING_PATCH_MAX_REQUEST,CAS_PENDING_PATCH_MAX_JSON,
 } from "../application/cas-isolated-code-patch";
 import {
@@ -439,6 +441,38 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     });
   }
 
+  function discardCodeProposal():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected))
+        throw Error("Stale/dirty CAS pending Code Agent discard");
+      const candidate=buildCasIsolatedDiscardPendingCodePatch(expected);
+      if(!window.confirm(t(locale,"casIsoCodeDiscardBackupConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-code-discard-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoCodeDiscardSavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoCodeDiscardFinalConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision))return;
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent Code Agent discard CAS ACK");
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoCodeDiscardDone")+
+        " (rev. "+committed.revision+")");
+    });
+  }
+
   function resetStage():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot;
@@ -771,6 +805,14 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
               rev. {inspectedCodePatch.revision}
             </p>
           </div>}
+          {inspectedCodePatch && <button type="button" className="secondary"
+            data-testid="cas-isolated-code-discard-action"
+            disabled={working || Boolean(dirty) ||
+              active.current?.state()!=="ready" ||
+              !canDiscardCasIsolatedPendingCodePatch(snapshot)}
+            onClick={discardCodeProposal}>
+            {t(locale,"casIsoCodeDiscardAction")}
+          </button>}
           <label>{t(locale,"casIsoCodeRequest")}
             <textarea value={codeRequest} maxLength={CAS_PENDING_PATCH_MAX_REQUEST}
               rows={3} disabled={working}

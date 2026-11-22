@@ -1305,3 +1305,7 @@ Decisione: [ADR 0053](../adr/0053-oidc-duplicate-event-inflight-post-regression.
 - [x] Vitest validazione/no I/O e Chromium multi-tab con backup byte-esatto, no-review/no-runner, race durante ultimo dialog e draft preservato su storage failure; marker `FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS`.
 - [ ] Chiusura issue #162 solo dopo Factory CI, Pages e Installer candidate `completed/success` allo stesso SHA main e marker Chromium verificato nel log.
 - [ ] Successivo parent #139: completare tutti i writer live in un unico cutover IndexedDB (bootstrap, CodeAgentPanel, pipeline, GitHub, cloud, import, recovery); #91/#92 per provider/cross-device e #113/#109 per review attestata non cambiano.
+
+## Scarto controllato del pending Code Agent nel pilota IndexedDB (#163)
+
+Nel pannello CAS opt-in è possibile scartare **solo** una proposta pending non revisionata con tre consensi (download JSON raw byte-esatto, conferma file salvato, ultima conferma distruttiva con ID/revisione). Il native IndexedDB CAS rifiuta un writer concorrente, senza retry né localStorage fallback. Stage, cronologia patch applicate, ricevute runner e GitHub restano storici e intatti: nessuna review/test viene creata e la Factory live rimane sul legacy. #139/#91/#92/#109/#113 rimangono aperte.

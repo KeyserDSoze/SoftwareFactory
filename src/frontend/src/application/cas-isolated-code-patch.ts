@@ -6,7 +6,7 @@
  */
 import {STAGES} from "../domain/defaults";
 import type {FactoryProject} from "../domain/types";
-import {developmentOf,setPending,validateProposal} from "../domain/development";
+import {developmentOf,rejectPending,setPending,validateProposal} from "../domain/development";
 import {serializeCasProject} from "../infrastructure/project-cas";
 import type {CasProjectSnapshot} from "../infrastructure/project-cas";
 
@@ -114,4 +114,31 @@ export function canStageCasIsolatedCodePatch(
     const p=strict(snapshot);
     return !developmentOf(p).pending;
   }catch{return false;}
+}
+
+/** #163: only an unreviewed, unrepaired human CAS pending may be discarded. */
+function discardableCasPending(snapshot:CasProjectSnapshot):FactoryProject {
+  const project=strict(snapshot);
+  const view=inspectCasIsolatedPendingCodePatch(snapshot);
+  const pending=developmentOf(project).pending;
+  if(!view || view.status!=="unreviewed" || !pending ||
+     typeof pending.id!=="string" || !pending.id ||
+     typeof pending.request!=="string" || !pending.request.trim() ||
+     pending.repairCount!==undefined || pending.repairTrail!==undefined ||
+     pending.repairSession!==undefined)
+    throw Error("Pending Code Agent IndexedDB non scartabile: nessuna scrittura.");
+  return project;
+}
+export function buildCasIsolatedDiscardPendingCodePatch(
+  snapshot:CasProjectSnapshot,
+):FactoryProject {
+  const next=rejectPending(discardableCasPending(snapshot));
+  serializeCasProject(next);
+  return next;
+}
+export function canDiscardCasIsolatedPendingCodePatch(
+  snapshot:CasProjectSnapshot|null,
+):boolean {
+  if(!snapshot)return false;
+  try{discardableCasPending(snapshot);return true;}catch{return false;}
 }

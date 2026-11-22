@@ -1260,6 +1260,49 @@ if (!inside) {
       await expect(loaded.getByTestId("cas-isolated-code-pending-preview"))
         .toContainText(summary);
 
+      // #163: only three consents allow discarding an unreviewed pending.
+      const discardButton=loaded.getByTestId("cas-isolated-code-discard-action");
+      const beforeDiscard=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await discardButton.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),beforeDiscard);
+      let discardConsents=0;
+      const acceptDiscard=async dialog=>{discardConsents++;await dialog.accept();};
+      page.on("dialog",acceptDiscard);
+      const discardDownload=page.waitForEvent("download");
+      await discardButton.click();
+      const discardedBackup=await discardDownload;
+      assert.equal(discardedBackup.suggestedFilename(),
+        "softwarefactory-cas-before-code-discard-"+id+"-r2.json");
+      assert.equal((await readFile(await discardedBackup.path())).toString("utf8"),
+        beforeDiscard.raw);
+      await expect(loaded.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      assert.equal(discardConsents,3);
+      page.off("dialog",acceptDiscard);
+      const afterDiscard=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(afterDiscard.revision,3);
+      assert.equal(JSON.parse(afterDiscard.raw).development.pending,undefined);
+      assert.deepEqual(JSON.parse(afterDiscard.raw).stages,stored.stages);
+      assert.equal(await discardButton.count(),0);
+      const restageForm=loaded.getByTestId("cas-isolated-code-proposal");
+      await restageForm.getByTestId("cas-isolated-code-request")
+        .fill("A subsequent unreviewed human change");
+      await restageForm.getByTestId("cas-isolated-code-json").fill(proposal);
+      let restageDialogs=0;
+      const restageConsent=async dialog=>{restageDialogs++;await dialog.accept();};
+      page.on("dialog",restageConsent);
+      await restageForm.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      }).click();
+      await expect(loaded.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      assert.equal(restageDialogs,3);
+      page.off("dialog",restageConsent);
+
       // A second never-seen ID enables a fresh pending candidate while the
       // rival commits a DIFFERENT valid raw during the FINAL consent.
       const fresh=await seed(conflictId,"Code Agent conflict fixture");
@@ -1321,6 +1364,52 @@ if (!inside) {
       await expect(loaded.getByRole("alert"))
         .toContainText("IndexedDB non disponibile");
       await expect(json2).toHaveValue(proposal);
+      // #163: a rival writes DURING final discard consent, fencing the delete.
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const discardPanel=page.getByTestId("cas-isolated-editor");
+      await discardPanel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await discardPanel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await discardPanel.getByRole("button",{
+        name:"Apri copia IDB: Code Agent pending fixture",
+      }).click();
+      const beforeDiscardRace=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.equal(beforeDiscardRace.revision,4);
+      let discardRaceDialogs=0,discardWinner=null;
+      page.on("dialog",async dialog=>{
+        discardRaceDialogs++;
+        if(discardRaceDialogs===3){
+          discardWinner=await rival.evaluate(async expected=>{
+            const candidate=JSON.parse(expected.raw);
+            candidate.config.description="RIVAL_DISCARD_WINNER";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              candidate,expected);
+          },beforeDiscardRace);
+        }
+        await dialog.accept();
+      });
+      const racedBackup=page.waitForEvent("download");
+      await discardPanel.getByTestId("cas-isolated-code-discard-action")
+        .click();
+      assert.equal((await readFile(await (await racedBackup).path()))
+        .toString("utf8"),beforeDiscardRace.raw);
+      await expect(discardPanel.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      assert.equal(discardRaceDialogs,3);
+      const afterDiscardRace=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      assert.deepEqual(afterDiscardRace,discardWinner);
+      assert.equal(afterDiscardRace.revision,5);
+      assert.ok(JSON.parse(afterDiscardRace.raw).development.pending);
+      await expect(discardPanel.getByTestId(
+        "cas-isolated-code-discard-action")).toBeDisabled();
+      page.removeAllListeners("dialog");
       const legacyAfter=await page.evaluate(()=>({
         active:localStorage.getItem("softwarefactory.project.v1"),
         slots:Object.keys(localStorage).filter(k=>
@@ -1330,6 +1419,7 @@ if (!inside) {
       assert.deepEqual(legacyAfter,legacyBefore,
         "Code Agent pending CAS pilot must never touch legacy localStorage");
       console.log("FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS: real CAS pending unreviewed patch, exact backup and three consents, inert summary, reload, rival final-dialog fencing, outage preserves human draft, legacy unchanged");
+      console.log("FACTORY_INDEXEDDB_CODE_DISCARD_UI_E2E_PASS: native CAS pending discard with exact raw backup, 3 consents, restaging, rival final-consent fencing and zero legacy writes");
     }finally{
       await codePatchContext.close();
     }
