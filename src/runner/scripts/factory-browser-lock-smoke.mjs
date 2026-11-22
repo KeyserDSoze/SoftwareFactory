@@ -1145,8 +1145,22 @@ if (!inside) {
             id:stage,label:stage,status:"pending",output:"",sources:[],
           }));
         return window.FactoryProjectCas.compareAndSwapCasProject({
-          id,config:{name,description:"Only CAS pilot, never live",
-            requirements:"Do not fabricate approvals/runner proof"},
+          id,config:{
+            name,description:"Only CAS pilot, never live",
+            requirements:"Do not fabricate approvals/runner proof",
+            // The Code Agent produces a scaffold-dependent candidate.
+            // Real Factory projects have the full typed configuration;
+            // a minimal IDB storage fixture is NOT a valid Code Agent brief.
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"none",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            },
+          },
           stages,createdAt:now,updatedAt:now,
         },null);
       },{id,name});
