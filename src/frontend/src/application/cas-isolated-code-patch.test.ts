@@ -69,7 +69,7 @@ describe("CAS Code Agent pending patch #162",()=>{
     expect(()=>buildCasIsolatedPendingCodePatch(t,"Request",forbidden))
       .toThrow(/Path non permesso/);
     expect(()=>buildCasIsolatedPendingCodePatch(t,"Request","broken"))
-      .toThrow(/JSON non valido/);
+      .toThrow(/non in formato JSON valido/);
     expect(canStageCasIsolatedCodePatch(token(staged),"Request",valid()))
       .toBe(false);
   });
