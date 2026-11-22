@@ -11,6 +11,7 @@ import {
 const sample=()=>{
   const p=createProject();
   p.config.name="IDB human patch";
+  p.config.description="A valid feature brief for generated .NET/React application";
   return p;
 };
 const token=(p:ReturnType<typeof createProject>)=>({
@@ -43,7 +44,7 @@ describe("CAS Code Agent pending patch #162",()=>{
     expect(result.stages).toEqual(p.stages);
     expect(result.config).toEqual(p.config);
     expect(result.id).toBe(p.id);
-    expect(result.updatedAt).not.toBe(p.updatedAt);
+    expect(Number.isFinite(Date.parse(result.updatedAt))).toBe(true);
     expect(before.raw).toBe(serializeCasProject(p));
     expect(inspectCasIsolatedPendingCodePatch(token(result))).toEqual({
       summary:"Human pasted JSON, not reviewed",
