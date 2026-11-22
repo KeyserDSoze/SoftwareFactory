@@ -54,7 +54,11 @@ import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
-type Props={locale:FactoryLocale;settings:FactorySettings};
+type Props={
+  locale:FactoryLocale;settings:FactorySettings;
+  /** Used only by the standalone CAS root (#167). */
+  onRequestLegacy?:()=>void;
+};
 
 const CAS_INSPECTION_STATUS_KEY={
   pending:"casIsoInspectPending",
@@ -68,7 +72,9 @@ function exact(a:CasProjectSnapshot,b:CasProjectSnapshot):boolean {
   return a.id===b.id && a.revision===b.revision && a.raw===b.raw;
 }
 
-export default function CasIsolatedEditor({locale,settings}:Props) {
+export default function CasIsolatedEditor({
+  locale,settings,onRequestLegacy,
+}:Props) {
   const [expanded,setExpanded]=useState(false);
   const [list,setList]=useState<CasProjectChoice[]|null>(null);
   const [snapshot,setSnapshot]=useState<CasProjectSnapshot|null>(null);
@@ -145,6 +151,15 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
       inFlight.current=false;
       setWorking(false);
     }
+  }
+  function returnToLegacy():void {
+    if(!onRequestLegacy || inFlight.current || working || pipelineRunning)
+      return;
+    // Navigating away from a draft is always an explicit, reversible
+    // operator decision: it never writes draft data into legacy.
+    if(dirty && !window.confirm(t(locale,"casRootExitDirtyConsent")))return;
+    if(!window.confirm(t(locale,"casRootExitFinalConsent")))return;
+    onRequestLegacy();
   }
   function close():void {
     if(inFlight.current) return;
@@ -742,6 +757,12 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
     {!expanded ? <button type="button" className="secondary"
       onClick={()=>setExpanded(true)}>{t(locale,"casIsoOpenPanel")}</button> : <>
       <div className="row">
+        {onRequestLegacy && <button type="button" className="secondary"
+          data-testid="cas-root-return-action"
+          disabled={working || pipelineRunning}
+          onClick={returnToLegacy}>
+          {t(locale,"casRootExitAction")}
+        </button>}
         <button type="button" className="secondary" disabled={working}
           onClick={refresh}>{t(locale,"casIsoRefresh")}</button>
         <button type="button" className="secondary" disabled={working}

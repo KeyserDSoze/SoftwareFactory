@@ -72,6 +72,169 @@ if (!inside) {
       globalName:"FactoryProjectCas",target:"es2022",
     });
     const casBundle = casBuild.outputFiles[0].text;
+
+    // #167: root workspace routing must choose the CAS-only React tree BEFORE
+    // the live LegacyFactoryApp can initialize its project, writer lock,
+    // GitHub autosync, OAuth callback or CodeAgentPanel.
+    const standaloneContext=await browser.newContext({acceptDownloads:true});
+    try {
+      await standaloneContext.addInitScript(()=>{
+        // A malformed legacy pointer AND an unowned legacy library slot
+        // must remain byte-identical during all CAS-only operations. This
+        // settings value would start autosync in a mounted LegacyFactoryApp.
+        localStorage.setItem("softwarefactory.project.v1",
+          "{CORRUPT_LEGACY_POINTER_CAS_ROOT_167");
+        localStorage.setItem(
+          "softwarefactory.project.library.v1."+
+            "11111111-1111-4111-8111-111111111111",
+          "LEGACY_LIBRARY_UNTOUCHED_167");
+        localStorage.setItem("softwarefactory.settings.v1",JSON.stringify({
+          language:"en",githubAutoSync:true,
+        }));
+      });
+      const page=await standaloneContext.newPage();
+      await page.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      const legacyBefore=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slot:localStorage.getItem(
+          "softwarefactory.project.library.v1."+
+          "11111111-1111-4111-8111-111111111111"),
+        settings:localStorage.getItem("softwarefactory.settings.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+      }));
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      await expect(page.getByTestId("cas-root-disclaimer"))
+        .toContainText("Exclusive IndexedDB workspace");
+      assert.equal(await page.getByRole("button",{name:"New project"}).count(),0,
+        "CAS root may not mount legacy New Project writer");
+      assert.equal(await page.getByTestId("cas-root-entry").count(),0,
+        "CAS root must not mount LegacyFactoryApp");
+      assert.equal(await page.getByTestId("cas-isolated-editor").count(),1);
+      assert.equal(await page.getByTestId("background-task-toast").count(),0);
+      const initialDatabases=await page.evaluate(async()=>
+        (await indexedDB.databases()).map(x=>x.name));
+      assert.equal(initialDatabases.includes("softwarefactory.project.cas.v1"),
+        false,"CAS root may not open IndexedDB before human opens panel");
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Open separate IndexedDB editor",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-create")).toBeVisible();
+      const form=panel.getByTestId("cas-isolated-create");
+      await form.locator("input").fill("CAS-only native project 167");
+      await form.locator("textarea")
+        .fill("No legacy project was initialized before this CAS insert");
+      page.once("dialog",dialog=>void dialog.accept());
+      await form.getByRole("button",{
+        name:"Create NEW IndexedDB-only project",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("CAS-only native project 167",{timeout:15000});
+      await page.addScriptTag({content:casBundle});
+      const created=await page.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects());
+      assert.equal(created.length,1);
+      assert.equal(created[0].revision,1);
+      const stored=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),created[0].id);
+      assert.equal(JSON.parse(stored.raw).config.name,
+        "CAS-only native project 167");
+      assert.deepEqual(await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slot:localStorage.getItem(
+          "softwarefactory.project.library.v1."+
+          "11111111-1111-4111-8111-111111111111"),
+        settings:localStorage.getItem("softwarefactory.settings.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+      })),legacyBefore,
+        "CAS-only root must not repair or overwrite any legacy slot/settings");
+      await page.reload({waitUntil:"networkidle"});
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      assert.equal(await page.getByTestId("cas-root-entry").count(),0);
+      await expect(page.getByTestId("cas-root-disclaimer"))
+        .toContainText("NOT the complete cutover");
+    } finally {
+      await standaloneContext.close();
+    }
+
+    // A guided transition from the ACTUAL live editor exports recoverable
+    // legacy JSON with 3 consents, rechecks the persisted raw after all
+    // dialogs and forces a full document reload into the disjoint CAS root.
+    const transitionContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await transitionContext.newPage();
+      await page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"});
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      const entry=page.getByTestId("cas-root-enter-action");
+      await expect(entry).toBeEnabled({timeout:15000});
+      const legacyRaw=await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1")||"{}");
+        return localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id);
+      });
+      assert.ok(legacyRaw,"Live editor must have confirmed persistence");
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await entry.click();
+      assert.equal(new URL(page.url()).searchParams.get("workspace"),null);
+
+      const prompts=[];
+      page.on("dialog",async dialog=>{
+        prompts.push(dialog.message());
+        await dialog.accept();
+      });
+      const backupDownload=page.waitForEvent("download");
+      const switched=page.waitForURL(u=>
+        new URL(u).searchParams.get("workspace")==="cas",{timeout:15000});
+      await entry.click();
+      const backup=await backupDownload;
+      await switched;
+      assert.equal(prompts.length,3,
+        "Entering CAS root requires backup, disk save, final mode consent");
+      assert.match(prompts[0],/backup JSON/i);
+      assert.match(prompts[1],/SALVATO/);
+      assert.match(prompts[2],/ULTIMA CONFERMA/);
+      const backupDoc=JSON.parse(
+        (await readFile(await backup.path())).toString("utf8"));
+      assert.equal(JSON.stringify(backupDoc.project),legacyRaw);
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      assert.equal(await page.getByRole("button",{name:"Nuovo progetto"}).count(),0);
+      assert.equal(await page.getByTestId("cas-root-entry").count(),0);
+      assert.equal(await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1")||"{}");
+        return localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id);
+      }),legacyRaw,"Mode switch must not silently migrate or replace legacy");
+      page.removeAllListeners("dialog");
+      const casEditor=page.getByTestId("cas-isolated-editor");
+      await casEditor.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const returnAction=casEditor.getByTestId("cas-root-return-action");
+      await expect(returnAction).toBeEnabled();
+      page.once("dialog",dialog=>void dialog.accept());
+      const returned=page.waitForURL(u=>
+        new URL(u).searchParams.get("workspace")===null,{timeout:15000});
+      await returnAction.click();
+      await returned;
+      await expect(page.getByTestId("cas-root-entry")).toBeVisible();
+      await expect(page.getByRole("button",{name:"Nuovo progetto"}))
+        .toBeEnabled({timeout:15000});
+      const afterReturn=await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1")||"{}");
+        return localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id);
+      });
+      assert.equal(afterReturn,legacyRaw);
+      console.log("FACTORY_INDEXEDDB_STANDALONE_ROOT_E2E_PASS: CAS-only root skips legacy project/init/autosync, IDB native create while corrupt legacy untouched, reload, guided JSON backup + 3 consents, full reload and explicit legacy return");
+    }finally{
+      await transitionContext.close();
+    }
+
     const casPipelineBuild=await require("esbuild").build({
       entryPoints:[path.join(root,"src/frontend/src/application/cas-pipeline-session.ts")],
       bundle:true,write:false,platform:"browser",format:"iife",

@@ -7,6 +7,8 @@ import {
 import { zipSync, strToU8 } from "fflate";
 import CodeAgentPanel from "./components/CodeAgentPanel";
 import CasIsolatedEditor from "./components/CasIsolatedEditor";
+import {factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas}
+  from "./application/cas-root-workspace";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
 import AgentHandoffBoard from "./components/AgentHandoffBoard";
@@ -74,7 +76,7 @@ function SecretInput({ secretKey, placeholder = "Token (solo sessione)", onSecre
 function SectionHead({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) {
   return <header className="section-head"><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{text}</p></header>;
 }
-export default function App() {
+function LegacyFactoryApp() {
   const [project, setProject] = useState<FactoryProject>(loadProject);
   const [projectIndexRevision, setProjectIndexRevision] = useState(0);
   const [casInspection, setCasInspection] = useState<CasCopyInspection | null>(null);
@@ -770,6 +772,53 @@ export default function App() {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
+  function enterCasStandalone():void {
+    const original=projectRef.current;
+    let raw:string;
+    try{raw=JSON.stringify(original);}catch{
+      setError(t(normalizeLocale(settings.language),"casRootEnterBlocked"));
+      return;
+    }
+    const ready=()=>canNavigateLegacyToCas({
+      busy:busyRef.current||busy,
+      writerReady:writerLeaseReady,
+      editingOutput,
+      switching:projectSwitchRef.current||casRestoreBusyRef.current,
+      localConflict:Boolean(localConflict),
+      writerContended,
+      githubAutoSync:Boolean(settingsRef.current.githubAutoSync),
+      otherDraft:Boolean(runnerVaultPassphrase),
+      projectId:original.id,
+      leaseProjectId:writerLeaseRef.current?.projectId??null,
+      expectedRaw:raw,
+      persistedRaw:localProjectSnapshot(original.id),
+    }) && projectRef.current===original;
+    // A change in the live editor or in a noncooperating tab during any of
+    // the dialogs invalidates the navigation ticket. Never migrate or copy.
+    try {
+      if(!ready()){
+        setError(t(normalizeLocale(settings.language),"casRootEnterBlocked"));
+        return;
+      }
+      if(!window.confirm(t(normalizeLocale(settings.language),
+        "casRootBackupConsent")+"\nID: "+original.id))return;
+      downloadRecoveryProject(original);
+      if(!window.confirm(t(normalizeLocale(settings.language),
+        "casRootSavedConsent")))return;
+      if(!window.confirm(t(normalizeLocale(settings.language),
+        "casRootFinalConsent")))return;
+      if(!ready()){
+        setError(t(normalizeLocale(settings.language),"casRootEnterStale"));
+        return;
+      }
+      // Explicit full-page navigation instead of a React state switch:
+      // destroys legacy writer effects, locks, autosync & CodeAgentPanel.
+      window.location.assign(factoryWorkspaceUrl(window.location.href,"cas"));
+    }catch{
+      setError(t(normalizeLocale(settings.language),"casRootEnterBlocked"));
+    }
+  }
+
   async function recoverLostGithubAck() {
     const active = projectRef.current;
     if (busy || localConflict || !writerLeaseReady ||
@@ -1078,6 +1127,22 @@ export default function App() {
             <p className="helper">I progetti sono separati sul dispositivo. Il PAT cifrato è condiviso;
               ogni progetto può selezionare una repository diversa. La libreria locale non sostituisce un backup cloud.</p>
           </section>
+          <section className="panel" data-testid="cas-root-entry">
+            <h3>{t(normalizeLocale(settings.language),"casRootEnterTitle")}</h3>
+            <p className="helper">
+              {t(normalizeLocale(settings.language),"casRootEnterExplain")}
+            </p>
+            <button type="button" className="secondary"
+              data-testid="cas-root-enter-action"
+              disabled={busy || !writerLeaseReady || writerContended ||
+                Boolean(localConflict) || editingOutput ||
+                projectSwitchRef.current || casRestoreBusyRef.current ||
+                Boolean(settings.githubAutoSync) ||
+                Boolean(runnerVaultPassphrase)}
+              onClick={enterCasStandalone}>
+              {t(normalizeLocale(settings.language),"casRootEnterAction")}
+            </button>
+          </section>
           <CasIsolatedEditor locale={normalizeLocale(settings.language)} settings={settings}/>
           <section className="hero"><div className="hero-copy"><div className="hero-pill"><Sparkles size={14} /> THE AUTONOMOUS SOFTWARE STUDIO</div>
             <h1>Da un'idea a un'<em>applicazione.</em></h1>
@@ -1314,4 +1379,47 @@ export default function App() {
       latestLog={runLog[0]} runner={runnerTaskActivity}
       onOpen={section => setTab(section)} />
   </div>;
+}
+
+/**
+ * #167: a true root-level CAS-only React subtree. This route deliberately
+ * does NOT mount LegacyFactoryApp: no loadProject, legacy writer lease,
+ * live Code Agent, GitHub autosync, OAuth callback or cloud restore effect.
+ * Settings are read-only configuration; no session credentials are copied.
+ */
+function CasRootWorkspace() {
+  const [settings]=useState<FactorySettings>(loadSettings);
+  const locale=normalizeLocale(settings.language);
+  return <div className="shell" data-testid="cas-root-shell">
+    <main className="main">
+      <header className="topbar">
+        <div className="breadcrumb">
+          SOFTWAREFACTORY <span>/</span> INDEXEDDB / CAS
+        </div>
+        <span className="top-status">
+          {t(locale,"casRootStandaloneStatus")}
+        </span>
+      </header>
+      <div className="page">
+        <section className="panel" data-testid="cas-root-disclaimer">
+          <h2>{t(locale,"casRootStandaloneTitle")}</h2>
+          <p className="helper">{t(locale,"casRootStandaloneExplain")}</p>
+          <p className="helper">{t(locale,"casRootStandaloneLegacyWarn")}</p>
+        </section>
+        <CasIsolatedEditor locale={locale} settings={settings}
+          onRequestLegacy={()=>
+            window.location.assign(factoryWorkspaceUrl(
+              window.location.href,"legacy"))}/>
+        <footer className="footer">
+          <span>{t(locale,"casRootFooter")}</span>
+        </footer>
+      </div>
+    </main>
+  </div>;
+}
+
+/** Root decision must happen BEFORE legacy hooks/effects initialize. */
+export default function App() {
+  return factoryWorkspaceMode(window.location.search)==="cas" ?
+    <CasRootWorkspace/> : <LegacyFactoryApp/>;
 }
