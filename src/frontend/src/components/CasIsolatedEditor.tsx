@@ -1403,8 +1403,11 @@ export default function CasIsolatedEditor({
           {t(locale,"casIsoDiscard")}
         </button>
       </div>}
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
     </>}
+    {/* A route handoff can fail while the CAS editor is COLLAPSED.
+        Keep stale revision/IDB storage errors visible without opening or
+        auto-selecting a different project. */}
+    {error && <p role="alert">{error}</p>}
+    {notice && <p role="status">{notice}</p>}
   </section>;
 }
