@@ -771,3 +771,7 @@ Il pannello opt-in raccoglie `codeRequest` e `codeProposalJson` nella protezione
 ## Scarto controllato del pending Code Agent nel pilota IndexedDB (#163)
 
 Nel pannello CAS opt-in è possibile scartare **solo** una proposta pending non revisionata con tre consensi (download JSON raw byte-esatto, conferma file salvato, ultima conferma distruttiva con ID/revisione). Il native IndexedDB CAS rifiuta un writer concorrente, senza retry né localStorage fallback. Stage, cronologia patch applicate, ricevute runner e GitHub restano storici e intatti: nessuna review/test viene creata e la Factory live rimane sul legacy. #139/#91/#92/#109/#113 rimangono aperte.
+
+## Anteprima sorgenti Code Agent nel pilota IndexedDB (#164 / ADR 0117)
+
+La copia IndexedDB opt-in ora mostra una vista **read-only** dei file della proposta Code Agent pending (path, motivazione, contenuto precedente/proposto), come testo inerte e troncato a 1.600 caratteri per lato. Il confronto ricostruisce la baseline corrente di scaffold e override già applicati: se `edit.previous` non corrisponde esattamente ai sorgenti, l'anteprima viene bloccata senza correggere o sovrascrivere alcun dato. La vista resta fissata all'ID/revisione selezionata anche quando un'altra scheda scrive; nessuna nuova versione viene adottata senza riapertura esplicita. **Non** significa review, test, approvazione, apply, runner o pubblicazione. L'editor live continua su localStorage finché tutti i writer non saranno migrati insieme (#139). #91/#92 e #109/#113 restano aperte.

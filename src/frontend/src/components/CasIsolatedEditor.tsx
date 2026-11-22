@@ -3,7 +3,7 @@
  * Factory editor and does not import/migrate its write paths. No projectRef,
  * live setProject, localStorage, GitHub or cloud operations are reachable here.
  */
-import {useEffect,useRef,useState} from "react";
+import {useEffect,useMemo,useRef,useState} from "react";
 import {STAGES} from "../domain/defaults";
 import type {FactoryProject,FactorySettings,StageId} from "../domain/types";
 import {runStage} from "../application/pipeline";
@@ -37,7 +37,7 @@ import {
 } from "../application/cas-isolated-manual-stage";
 import {
   buildCasIsolatedPendingCodePatch,canStageCasIsolatedCodePatch,
-  inspectCasIsolatedPendingCodePatch,
+  inspectCasIsolatedPendingCodePatch,inspectCasIsolatedPendingCodeFiles,
   buildCasIsolatedDiscardPendingCodePatch,
   canDiscardCasIsolatedPendingCodePatch,
   CAS_PENDING_PATCH_MAX_REQUEST,CAS_PENDING_PATCH_MAX_JSON,
@@ -101,6 +101,11 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
   // revision; a rival tab cannot silently replace the text being inspected.
   const inspectedStages=inspectCasIsolatedStages(snapshot);
   const inspectedCodePatch=inspectCasIsolatedPendingCodePatch(snapshot);
+  // Bounded source projections are expensive (generated scaffold baseline):
+  // memoize by the pinned IDB snapshot, not draft edits or rival-tab events.
+  const inspectedCodeFiles=useMemo(
+    ()=>inspectCasIsolatedPendingCodeFiles(snapshot),[snapshot],
+  );
 
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
@@ -805,6 +810,41 @@ export default function CasIsolatedEditor({locale,settings}:Props) {
               rev. {inspectedCodePatch.revision}
             </p>
           </div>}
+          {inspectedCodePatch && <details
+            data-testid="cas-isolated-code-files-preview">
+            <summary>{t(locale,"casIsoCodeFilesPreview")}</summary>
+            <p className="helper">
+              {t(locale,"casIsoCodeFilesWarning")} ·
+              {" "+snapshot?.id+" / rev. "+snapshot?.revision}
+            </p>
+            {!inspectedCodeFiles ? <p role="status">
+              {t(locale,"casIsoCodeFilesInvalid")}
+            </p> : <ol>
+              {inspectedCodeFiles.map(file=><li key={file.path}
+                data-testid="cas-isolated-code-file">
+                <p><strong data-testid="cas-isolated-code-file-path">
+                  {file.path}
+                </strong></p>
+                <p className="helper">{file.reason}</p>
+                <p><strong>{t(locale,"casIsoCodeBefore")}</strong></p>
+                {file.beforeMissing ? <p className="helper">
+                  {t(locale,"casIsoCodeNewFile")}
+                </p> : <pre data-testid="cas-isolated-code-file-before"
+                  style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+                    maxHeight:160,overflow:"auto"}}>{file.before}</pre>}
+                {file.beforeTruncated && <p className="helper">
+                  {t(locale,"casIsoCodeFilesTruncated")}
+                </p>}
+                <p><strong>{t(locale,"casIsoCodeAfter")}</strong></p>
+                <pre data-testid="cas-isolated-code-file-after"
+                  style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+                    maxHeight:160,overflow:"auto"}}>{file.after}</pre>
+                {file.afterTruncated && <p className="helper">
+                  {t(locale,"casIsoCodeFilesTruncated")}
+                </p>}
+              </li>)}
+            </ol>}
+          </details>}
           {inspectedCodePatch && <button type="button" className="secondary"
             data-testid="cas-isolated-code-discard-action"
             disabled={working || Boolean(dirty) ||

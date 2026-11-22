@@ -1190,7 +1190,8 @@ if (!inside) {
       const proposal=JSON.stringify({
         summary,
         files:[{path:"src/frontend/web/src/HumanFeature162.tsx",
-          content:"export const HumanFeature162=()=> <p>Not executed</p>;",
+          content:"/* <img src=x onerror=alert('CODE_DIFF_XSS')> */\\n"+
+            "export const HumanFeature162=()=> <p>Not executed</p>;",
           reason:"Operator supplied full replacement, not executed"}],
         tests:["web-build"],assumptions:["No actual AI/review/build/test was run"],
       });
@@ -1237,6 +1238,18 @@ if (!inside) {
         .toContainText(summary);
       assert.equal(await form.locator("img").count(),0,
         "Untrusted Code Agent JSON summary must never render as HTML");
+      // #164: source changes are rendered only as bounded inert text. A
+      // malicious HTML-looking replacement must NEVER create DOM elements.
+      const diff=form.getByTestId("cas-isolated-code-files-preview");
+      await diff.locator("summary").click();
+      await expect(diff).toContainText("rev. 2");
+      await expect(diff.getByTestId("cas-isolated-code-file-path"))
+        .toContainText("src/frontend/web/src/HumanFeature162.tsx");
+      await expect(diff).toContainText("Nuovo file, assente dalla baseline");
+      await expect(diff.getByTestId("cas-isolated-code-file-after"))
+        .toContainText("<img src=x onerror=alert('CODE_DIFF_XSS')>");
+      assert.equal(await diff.locator("img,script,a").count(),0,
+        "Untrusted Code Agent source preview may never activate HTML or URLs");
       await expect(request).toHaveValue("");
       await expect(json).toHaveValue("");
       await expect(action).toBeDisabled();
@@ -1385,6 +1398,10 @@ if (!inside) {
         .toContainText("rev. 4");
       await expect(discardPanel.getByTestId("cas-isolated-code-discard-action"))
         .toBeEnabled();
+      const pinnedCodeDiff=discardPanel.getByTestId(
+        "cas-isolated-code-files-preview");
+      await expect(pinnedCodeDiff).toContainText("rev. 4");
+      const pinnedPreviewBefore=await pinnedCodeDiff.textContent();
       const beforeDiscardRace=await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id);
       assert.equal(beforeDiscardRace.revision,4);
@@ -1425,6 +1442,10 @@ if (!inside) {
       assert.deepEqual(afterDiscardRace,discardWinner);
       assert.equal(afterDiscardRace.revision,5);
       assert.ok(JSON.parse(afterDiscardRace.raw).development.pending);
+      // The noncooperating tab owns rev. 5, but read-only source preview
+      // stays pinned to rev. 4 until explicit discard/reopen. No auto-adopt.
+      assert.equal(await pinnedCodeDiff.textContent(),pinnedPreviewBefore);
+      await expect(pinnedCodeDiff).toContainText("rev. 4");
       await expect(discardPanel.getByTestId(
         "cas-isolated-code-discard-action")).toBeDisabled();
       page.removeAllListeners("dialog");
@@ -1438,6 +1459,7 @@ if (!inside) {
         "Code Agent pending CAS pilot must never touch legacy localStorage");
       console.log("FACTORY_INDEXEDDB_CODE_PROPOSAL_UI_E2E_PASS: real CAS pending unreviewed patch, exact backup and three consents, inert summary, reload, rival final-dialog fencing, outage preserves human draft, legacy unchanged");
       console.log("FACTORY_INDEXEDDB_CODE_DISCARD_UI_E2E_PASS: native CAS pending discard with exact raw backup, 3 consents, restaging, rival final-consent fencing and zero legacy writes");
+      console.log("FACTORY_INDEXEDDB_CODE_DIFF_PREVIEW_E2E_PASS: inert bounded source before/after preview, path allowlist, HTML injection escaped, pinned rev after noncooperating writer, reload and zero legacy writes");
     }finally{
       await codePatchContext.close();
     }

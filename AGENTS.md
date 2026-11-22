@@ -1213,3 +1213,9 @@ Il solo pannello CAS isolato può memorizzare un **JSON di patch Code Agent come
 - Consentire solo pending **non revisionati/non riparati** su snapshot CAS canonico e controller ready, con bozza config/stage/JSON pulita. `rejectPending` rimuove solo pending, non tocca altre evidenze storiche.
 - Tre consensi IT/EN: scarica raw JSON esatto, conferma file salvato, conferma ID/revisione. Unica scrittura `CasSelectionController.commit` con native transaction ACK dopo `tx.oncomplete`. Nessun retry, rebase, false review/test, o write localStorage.
 - E2E `FACTORY_INDEXEDDB_CODE_DISCARD_UI_E2E_PASS` in Chromium e Vitest; #139/#91/#92/#109/#113 aperte, Factory CI/Pages/Installer stesso SHA.
+
+## Ispezione dei file pending Code Agent solo nel CAS opt-in (#164 / ADR 0117)
+
+- `inspectCasIsolatedPendingCodeFiles` è puro: snapshot canonico id/revision/raw, 1–8 edit, path allowlist/unique, reason/content/previous limitati, `workspaceFiles` ricalcolato da scaffold+override; `edit.previous` deve coincidere **esattamente** con la baseline reale. Un mismatch o secret non fornisce una preview, non avvia autofix/rebase né scrive alcun DB.
+- Solo testo React escaped in `<pre>`, mai rendering HTML, Markdown, script o link da contenuto patch. Preview per lato massimo 1.600 caratteri con marker di troncamento, IT/EN: nessun runner, review verificata, apply o GitHub. Pinned snapshot memoizzata: non adottare revisioni di tab rivali senza riapertura esplicita.
+- Test Vitest no I/O e Chromium `FACTORY_INDEXEDDB_CODE_DIFF_PREVIEW_E2E_PASS` per HTML malevolo, writer rivale e legacy invariato; Factory CI/Pages/Installer stesso SHA prima della chiusura #164. #139/#91/#92/#109/#113 aperte.

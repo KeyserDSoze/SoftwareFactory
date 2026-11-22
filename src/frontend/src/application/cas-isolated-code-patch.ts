@@ -6,7 +6,7 @@
  */
 import {STAGES} from "../domain/defaults";
 import type {FactoryProject} from "../domain/types";
-import {developmentOf,rejectPending,setPending,validateProposal} from "../domain/development";
+import {allowedCodePath,developmentOf,rejectPending,setPending,validateProposal,workspaceFiles} from "../domain/development";
 import {serializeCasProject} from "../infrastructure/project-cas";
 import type {CasProjectSnapshot} from "../infrastructure/project-cas";
 
@@ -141,4 +141,70 @@ export function canDiscardCasIsolatedPendingCodePatch(
 ):boolean {
   if(!snapshot)return false;
   try{discardableCasPending(snapshot);return true;}catch{return false;}
+}
+
+/** #164: inert, source-bound read-only projection for the opt-in CAS editor.
+ * Human-supplied `previous` is NOT evidence: recompute the current scaffold +
+ * approved overrides and refuse mismatches before revealing any excerpts.
+ * No writes, network, external review, or executable diff rendering.
+ */
+export const CAS_CODE_FILE_PREVIEW_CHARS=1_600;
+export type CasPendingCodeFilePreview=Readonly<{
+  path:string;reason:string;
+  before:string;after:string;
+  beforeMissing:boolean;
+  beforeTruncated:boolean;afterTruncated:boolean;
+}>;
+
+export function inspectCasIsolatedPendingCodeFiles(
+  snapshot:CasProjectSnapshot|null,
+):readonly CasPendingCodeFilePreview[]|null {
+  if(!snapshot)return null;
+  try{
+    const project=strict(snapshot);
+    const dev=developmentOf(project),patch=dev.pending;
+    if(!patch || !inspectCasIsolatedPendingCodePatch(snapshot) ||
+       !Number.isSafeInteger(dev.revision) || dev.revision<0 ||
+       patch.revision!==dev.revision ||
+       !Array.isArray(patch.edits) ||
+       patch.edits.length<1 || patch.edits.length>8) return null;
+    const baseline=workspaceFiles(project);
+    const paths=new Set<string>();
+    let total=0;
+    const files=patch.edits.map(edit=>{
+      if(!edit || !allowedCodePath(edit.path) || paths.has(edit.path) ||
+         typeof edit.reason!=="string" || !edit.reason.trim() ||
+         edit.reason.length>500 ||
+         typeof edit.content!=="string" || !edit.content.trim() ||
+         edit.content.length>32_000 ||
+         (edit.previous!==null && (
+           typeof edit.previous!=="string" || edit.previous.length>250_000)))
+        throw Error("Untrusted patch edit");
+      paths.add(edit.path);
+      total+=edit.content.length;
+      if(total>85_000 || SECRET_PATTERN.test(edit.content) ||
+         SECRET_PATTERN.test(edit.reason) ||
+         (edit.previous!==null && SECRET_PATTERN.test(edit.previous)))
+        throw Error("Untrusted patch content");
+      const actual=Object.prototype.hasOwnProperty.call(baseline,edit.path)
+        ? baseline[edit.path] : null;
+      if(actual!==edit.previous || actual===edit.content)
+        throw Error("Stale or no-op proposed source");
+      return Object.freeze({
+        path:edit.path,
+        reason:edit.reason,
+        before:actual===null?"":actual.slice(0,CAS_CODE_FILE_PREVIEW_CHARS),
+        after:edit.content.slice(0,CAS_CODE_FILE_PREVIEW_CHARS),
+        beforeMissing:actual===null,
+        beforeTruncated:actual!==null &&
+          actual.length>CAS_CODE_FILE_PREVIEW_CHARS,
+        afterTruncated:edit.content.length>CAS_CODE_FILE_PREVIEW_CHARS,
+      });
+    });
+    return Object.freeze(files);
+  }catch{
+    // Stored content and dynamic scaffold generator diagnostics are untrusted.
+    // The view is unavailable, never a reason to erase or rewrite the pending.
+    return null;
+  }
 }
