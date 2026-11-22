@@ -2346,7 +2346,13 @@ if (!inside) {
       await form.getByRole("button",{
         name:"Crea nuovo progetto SOLO IndexedDB",
       }).click();
-      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      // #160: the storage fault is now a precise, sanitized diagnostic,
+      // not the older generic "save not confirmed" message. Keep the
+      // fail-closed + no-legacy-fallback assertion fully active.
+      await expect(panel.getByRole("alert"))
+        .toContainText("IndexedDB non disponibile");
+      await expect(panel.getByRole("alert"))
+        .not.toContainText("progetto creato");
       assert.equal(await page.evaluate(()=>
         localStorage.getItem("softwarefactory.project.v1")),legacy,
         "Missing IndexedDB must never fall back to localStorage creation");
