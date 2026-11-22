@@ -74,7 +74,7 @@ export const messages = {
     casIsoOpenPanel: "Apri editor IndexedDB separato",
     casIsoRefresh: "Ricarica libreria IndexedDB (non cambia la revisione selezionata)",
     casIsoClose: "Chiudi editor separato",
-    casIsoCloseDirtyConfirm: "Hai una bozza IndexedDB NON SALVATA (configurazione, output manuale o proposta Code Agent). Chiudere/scartare eliminerà il testo locale, senza salvare né sovrascrivere l'altra scheda. Confermi?",
+    casIsoCloseDirtyConfirm: "Hai modifiche NON SALVATE in questa bozza IndexedDB (configurazione, output manuale o proposta Code Agent). Chiudere/scartare eliminerà il testo locale, senza salvare né sovrascrivere l'altra scheda. Confermi?",
     casIsoRefreshDirtyConfirm: "Questa sessione IndexedDB non è più scrivibile. La bozza NON SALVATA è ancora visibile. Ricaricare la libreria scarterà il testo locale, NON sovrascriverà l'altra scheda. Confermi di scartarla?",
     casIsoEmpty: "Nessun progetto IndexedDB disponibile; usa la copia volontaria per preparare uno snapshot.",
     casIsoChoose: "Apri copia IDB",
