@@ -1776,6 +1776,235 @@ if (!inside) {
       await codePatchContext.close();
     }
 
+    // #169: human-only Code Agent pending → actual source overrides in the
+    // root CAS workspace. No independent review, tests, runner or GitHub.
+    const applyContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await applyContext.newPage(),rival=await applyContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:casBundle}),
+        rival.addScriptTag({content:casBundle}),
+      ]);
+      const id="16916916-9169-4169-8169-169169169169";
+      const initial=await rival.evaluate(async id=>{
+        const now="2026-11-22T20:25:00.000Z";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map(name=>({
+          id:name,label:name,status:"pending",output:"",sources:[],
+        }));
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,createdAt:now,updatedAt:now,stages,
+          config:{name:"Human CAS source apply",
+            description:"Human changes are never independent reviews",
+            requirements:"No tests, runner or GitHub actions are performed",
+            frontends:["react"],deployment:"docker",dotnetVersion:"11.0",
+            database:"postgresql",services:{
+              database:{development:"postgresql",production:"postgresql"},
+              cache:{development:"none",production:"none"},
+              queue:{development:"none",production:"none"},
+              telemetry:{development:"opentelemetry-jaeger",
+                production:"opentelemetry-jaeger"},
+              storage:{development:"local",production:"local"},
+            }},
+        },null);
+      },id);
+      const legacyBefore=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await panel.getByRole("button",{
+        name:"Apri copia IDB: Human CAS source apply",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      const proposalBox=panel.getByTestId("cas-isolated-code-proposal");
+      const proposedPath="src/frontend/web/src/OperatorHuman169.tsx";
+      const proposedBody="export const Human169=()=> <div>HUMAN_UNVERIFIED_169</div>;";
+      const proposal=JSON.stringify({
+        summary:"Operator patch WITHOUT independent review",
+        files:[{path:proposedPath,content:proposedBody,
+          reason:"Human source transfer, no tests have run"}],
+        tests:["web-build"],
+        assumptions:["Not a report of tests actually run"],
+      });
+      await proposalBox.getByTestId("cas-isolated-code-request")
+        .fill("Human source change");
+      await proposalBox.getByTestId("cas-isolated-code-json")
+        .fill(proposal);
+      let stagingDialogs=0;
+      page.on("dialog",dialog=>{
+        stagingDialogs++;void dialog.accept();
+      });
+      await proposalBox.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 2");
+      assert.equal(stagingDialogs,3);
+      page.removeAllListeners("dialog");
+      const beforeApply=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const apply=proposalBox.getByTestId(
+        "cas-isolated-code-human-apply-action");
+      await expect(apply).toBeEnabled();
+      await expect(proposalBox.getByTestId(
+        "cas-isolated-code-human-apply"))
+        .toContainText("NON revisionata");
+      const sourcePreview=proposalBox.getByTestId(
+        "cas-isolated-code-files-preview");
+      await sourcePreview.locator("summary").click();
+      await expect(sourcePreview).toContainText(proposedBody);
+      // Human refusing first dialog never applies or clears the pending.
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await apply.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),beforeApply);
+
+      let applyConsents=0;
+      const approve=async dialog=>{applyConsents++;await dialog.accept();};
+      page.on("dialog",approve);
+      const backupEvent=page.waitForEvent("download");
+      await apply.click();
+      const backup=await backupEvent;
+      assert.equal(backup.suggestedFilename(),
+        "softwarefactory-cas-before-human-apply-"+id+"-r2.json");
+      assert.equal((await readFile(await backup.path())).toString("utf8"),
+        beforeApply.raw,"Application backup must be byte exact source JSON");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      assert.equal(applyConsents,3);
+      page.off("dialog",approve);
+      const persisted=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const applied=JSON.parse(persisted.raw);
+      assert.equal(persisted.revision,3);
+      assert.equal(applied.development.pending,undefined);
+      assert.equal(applied.development.revision,1);
+      assert.equal(applied.development.overrides[proposedPath],proposedBody);
+      assert.equal(applied.development.originals[proposedPath],null);
+      assert.deepEqual(applied.development.history,[]);
+      assert.equal(applied.development.humanApplications.length,1);
+      assert.deepEqual(applied.development.humanApplications[0].paths,
+        [proposedPath]);
+      assert.equal(applied.development.humanApplications[0].status,
+        "operator-unverified");
+      assert.equal(applied.development.lastRunnerEvidence,undefined);
+      assert.equal(applied.githubTestReceipt,undefined);
+      assert.equal(applied.githubSync,undefined);
+      assert.deepEqual(applied.stages,JSON.parse(initial.raw).stages);
+      await expect(apply).toHaveCount(0);
+      // Source ZIP now includes the human override but never fabricates
+      // feature implementation or independent reviewer history.
+      const zipButton=panel.getByTestId("cas-isolated-source-zip-action");
+      let zipDialogs=0;
+      page.on("dialog",dialog=>{zipDialogs++;void dialog.accept();});
+      const zipEvent=page.waitForEvent("download");
+      await zipButton.click();
+      const zip=await zipEvent;
+      const source=unzipSync(new Uint8Array(await readFile(await zip.path())));
+      assert.equal(strFromU8(source[proposedPath]),proposedBody);
+      assert.equal(source["docs/feature-implementation.md"],undefined);
+      assert.ok(strFromU8(source["docs/cas-idb-export-provenance.md"])
+        .includes("operator-applied"));
+      assert.equal(zipDialogs,2);
+      page.removeAllListeners("dialog");
+      // Reload is an explicit read-only operation; a human application
+      // remains persisted and is not upgraded to a reviewed history record.
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      const reloadedPanel=page.getByTestId("cas-isolated-editor");
+      await reloadedPanel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await reloadedPanel.getByRole("button",{
+        name:/Ricarica libreria IndexedDB/,
+      }).click();
+      page.once("dialog",dialog=>void dialog.accept());
+      await reloadedPanel.getByRole("button",{
+        name:"Apri copia IDB: Human CAS source apply",
+      }).click();
+      await expect(reloadedPanel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 3");
+      const box=reloadedPanel.getByTestId("cas-isolated-code-proposal");
+      await box.getByTestId("cas-isolated-code-request")
+        .fill("Second operator source after first human transfer");
+      const secondPath="src/frontend/web/src/HumanRace169.tsx";
+      await box.getByTestId("cas-isolated-code-json").fill(JSON.stringify({
+        summary:"Another pending, no reviewer",
+        files:[{path:secondPath,
+          content:"export const SecondHuman169=1;",
+          reason:"Manual source that must not beat rival"}],
+      }));
+      let secondStageDialogs=0;
+      page.on("dialog",dialog=>{secondStageDialogs++;void dialog.accept();});
+      await box.getByRole("button",{
+        name:"Salva proposta Code Agent PENDING SOLO IndexedDB con backup",
+      }).click();
+      await expect(reloadedPanel.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 4");
+      assert.equal(secondStageDialogs,3);
+      page.removeAllListeners("dialog");
+      const beforeRace=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id);
+      const racedApply=box.getByTestId(
+        "cas-isolated-code-human-apply-action");
+      await expect(racedApply).toBeEnabled();
+      let racedDialogs=0,winner=null;
+      page.on("dialog",async dialog=>{
+        racedDialogs++;
+        if(racedDialogs===3){
+          winner=await rival.evaluate(async expected=>{
+            const next=JSON.parse(expected.raw);
+            next.config.description="RIVAL_WINS_HUMAN_APPLY_169";
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              next,expected);
+          },beforeRace);
+        }
+        await dialog.accept();
+      });
+      const racedBackup=page.waitForEvent("download");
+      await racedApply.click();
+      assert.equal((await readFile(await (await racedBackup).path()))
+        .toString("utf8"),beforeRace.raw);
+      await expect(reloadedPanel.getByRole("alert"))
+        .toContainText("Operazione IndexedDB non confermata");
+      assert.equal(racedDialogs,3);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),id),winner);
+      const winnerParsed=JSON.parse(winner.raw);
+      assert.ok(winnerParsed.development.pending);
+      assert.equal(winnerParsed.development.overrides[secondPath],undefined);
+      assert.equal(winnerParsed.development.humanApplications.length,1);
+      await expect(racedApply).toBeDisabled();
+      page.removeAllListeners("dialog");
+      assert.deepEqual(await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage)
+          .filter(k=>k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      })),legacyBefore);
+      console.log("FACTORY_INDEXEDDB_HUMAN_PATCH_APPLY_E2E_PASS: root CAS human-only source transfer, exact backup + 3 consents, no fake review/runner/tests/GitHub, zip provenance and actual overrides, reload, rival final consent conflict fenced, legacy untouched");
+    }finally{
+      await applyContext.close();
+    }
+
     // #165: stale native IndexedDB source ZIP must never download/auto-rebase.
     const zipRaceContext=await browser.newContext({acceptDownloads:true});
     try{

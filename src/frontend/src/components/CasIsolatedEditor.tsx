@@ -57,6 +57,10 @@ import {
 } from "../application/cas-isolated-export";
 import {prepareCasIsolatedSourceZip} from "../application/cas-isolated-source-zip";
 import {
+  buildCasIsolatedHumanApplyPendingPatch,
+  canApplyCasIsolatedHumanPendingPatch,
+} from "../application/cas-isolated-human-apply";
+import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
 
@@ -131,6 +135,9 @@ export default function CasIsolatedEditor({
   // memoize by the pinned IDB snapshot, not draft edits or rival-tab events.
   const inspectedCodeFiles=useMemo(
     ()=>inspectCasIsolatedPendingCodeFiles(snapshot),[snapshot],
+  );
+  const canApplyCode=useMemo(
+    ()=>canApplyCasIsolatedHumanPendingPatch(snapshot),[snapshot],
   );
 
   function accept(current:CasProjectSnapshot):void {
@@ -632,6 +639,48 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function applyHumanCodeProposal():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || !exact(controller.snapshot(),expected) ||
+         !canApplyCasIsolatedHumanPendingPatch(expected))
+        throw Error("Stale/unsafe CAS human code apply");
+      // No change to live, no reviewer test claim. Every file must be fully
+      // visible in the inert before/after preview (no 1600-char truncation).
+      const candidate=buildCasIsolatedHumanApplyPendingPatch(expected);
+      const applied=candidate.development!.humanApplications!;
+      const record=applied[applied.length-1];
+      if(!window.confirm(t(locale,"casIsoHumanApplyBackupConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision+"\n"+
+         record.paths.join("\n")))return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-cas-before-human-apply-"+
+          expected.id+"-r"+expected.revision+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
+      if(!window.confirm(t(locale,"casIsoHumanApplySavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoHumanApplyFinalConfirm")+"\n"+
+         expected.id+" / rev. "+expected.revision+"\n"+
+         record.paths.join("\n")))return;
+      // One native IndexedDB write with exact ID/revision/raw inside tx.
+      // On a rival win, controller blocks; retain pending and any drafts.
+      const committed=await controller.commit(candidate,expected);
+      if(!exact(committed,{
+        id:candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(candidate),
+      }))throw Error("Inconsistent human patch CAS ACK");
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoHumanApplyDone")+
+        " ID: "+committed.id+" (rev. "+committed.revision+")");
+    });
+  }
+
   function resetStage():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot;
@@ -1118,6 +1167,24 @@ export default function CasIsolatedEditor({
               </li>)}
             </ol>}
           </details>}
+          {inspectedCodePatch && <div
+            data-testid="cas-isolated-code-human-apply">
+            <p className="helper">
+              {t(locale,"casIsoHumanApplyExplain")}
+            </p>
+            <button type="button" className="secondary"
+              data-testid="cas-isolated-code-human-apply-action"
+              disabled={working || Boolean(dirty) ||
+                active.current?.state()!=="ready" ||
+                !canApplyCode}
+              onClick={applyHumanCodeProposal}>
+              {t(locale,"casIsoHumanApplyAction")}
+            </button>
+            {!canApplyCode &&
+              <p className="helper" data-testid="cas-isolated-code-human-apply-blocked">
+                {t(locale,"casIsoHumanApplyBlocked")}
+              </p>}
+          </div>}
           {inspectedCodePatch && <button type="button" className="secondary"
             data-testid="cas-isolated-code-discard-action"
             disabled={working || Boolean(dirty) ||

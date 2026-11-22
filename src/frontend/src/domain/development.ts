@@ -55,11 +55,24 @@ export type RunnerJobEvidence = {
   proposalId: string | null;
   revision: number;
 };
+/** CAS-only manual application is NOT a FeatureReview or a test result.
+ * Independent reviewer approval belongs only to the legacy typed history. */
+export type HumanAppliedChange = {
+  id: string;
+  summary: string;
+  appliedAt: string;
+  /** Revision of the native Code Agent workspace after commit. */
+  revision: number;
+  paths: string[];
+  status: "operator-unverified";
+};
 export type DevelopmentWorkspace = {
   revision: number;
   overrides: Record<string, string>;
   originals: Record<string, string | null>;
   history: AppliedFeature[];
+  /** CAS-only operator-approved source transfer; no independent review/CI. */
+  humanApplications?: HumanAppliedChange[];
   pending?: FeatureProposal;
   lastRunnerJobId?: string;
   lastRunnerEvidence?: RunnerJobEvidence;
