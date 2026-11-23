@@ -27,7 +27,7 @@ export type CasIsolatedConfigForkTicket=Readonly<{
   id:string;name:string;raw:string;
 }>;
 
-function checkedSource(expected:CasProjectSnapshot):FactoryProject {
+export function checkedCasForkSource(expected:CasProjectSnapshot):FactoryProject {
   const canonical=prepareCasIsolatedExport(expected);
   const inspection=inspectCasIsolatedStages(expected);
   if(!inspection || inspection.some(s=>s.status==="invalid"))
@@ -65,7 +65,7 @@ function checkedSource(expected:CasProjectSnapshot):FactoryProject {
 export function prepareCasIsolatedConfigFork(
   expected:CasProjectSnapshot,
 ):CasIsolatedConfigForkTicket {
-  const source=checkedSource(expected);
+  const source=checkedCasForkSource(expected);
   const name=source.config.name.slice(0,CAS_ISOLATED_NAME_MAX-7)+" (copy)";
   const fresh=createProject();
   const project:FactoryProject={
@@ -92,7 +92,7 @@ export async function confirmCasIsolatedConfigFork(
     throw Error("Consenso duplicazione IndexedDB mancante.");
   if(!ticket || typeof ticket.raw!=="string")
     throw Error("Ticket fork IndexedDB non valido.");
-  const source=checkedSource(ticket.source);
+  const source=checkedCasForkSource(ticket.source);
   const target=JSON.parse(ticket.raw) as FactoryProject;
   const expectedName=source.config.name.slice(0,CAS_ISOLATED_NAME_MAX-7)+
     " (copy)";

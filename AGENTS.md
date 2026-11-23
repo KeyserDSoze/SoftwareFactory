@@ -1295,3 +1295,10 @@ Il solo pannello CAS isolato può memorizzare un **JSON di patch Code Agent come
 - Emissione **opt-in read-only** solo nel CAS-only root dopo selezione esplicita, sessione ready, nessuna bozza/pipeline in corso. Prima/dopo SHA-256 rileggere `readCasProjectSlot(id)` e confrontare **ID+revisione+raw esatti**, con check della sessione UI. Non adottare una revisione più recente di nascosto.
 - URL: preservare solo origin e pathname GitHub Pages, cancellare **tutti** i query params/hash ereditati (anche OAuth code/state/token), quindi aggiungere esattamente `workspace=cas`, `casHandoff`, `casRevision`, `casDigest`; non esporre raw/brief/token/segreti. Link in input readOnly copiabile su azione manuale, senza persistenza locale o clipboard automatica.
 - Riapertura tramite `factoryCasHandoffHint` + `matchesCasHandoffHint`: nessun IDB read né progetto aperto automaticamente nel root; verifiche native pre/post consenso e reject di link stale. Nessuna promessa multi-device o cross-store. Browser marker `FACTORY_CAS_REVISION_RESUME_E2E_PASS`, unit stale/URL sanitization; #139 resta aperta.
+
+
+## Import configurazione da JSON nel solo workspace CAS (#178)
+
+Dal root \`?workspace=cas\`, senza un progetto già selezionato, si può scegliere **manualmente** un JSON progetto canonico (massimo 1 MB) e confermare la creazione di un **nuovo UUID** IndexedDB. Vengono copiati soltanto nome, descrizione, requisiti e configurazione stack; le sei fasi ripartono vuote. Nessuna evidence Code Agent/runner/test, storia AI, destinazione/consenso GitHub o token è importata, e la nuova copia si apre solo tramite scelta esplicita dalla libreria. L'archivio originale rimane immutato; conservare il backup. Errori/collisioni/ACK incerti non autorizzano retry automatico. Non è una migrazione legacy dell'intero editor né sincronizzazione fra dispositivi (ADR 0130, #139).
+
+- Il parser import JSON #178 è una sorgente NON fidata: validare solo file locali canonici, mai riusare evidenze o creare auto-sync; un errore dopo native insert può essere un ACK incerto. Non ritentare con nuovo UUID.

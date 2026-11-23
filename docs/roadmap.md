@@ -1372,3 +1372,5 @@ Milestone opt-in #139: dalla sorgente retired #173 valida, un nuovo UUID IDB con
 ### #176 — Link CAS-only di ripresa a revisione esatta (23 novembre 2026)
 
 Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un link origin/path + ID/revisione/SHA-256 soltanto dopo doppio readback native; nessun token, progetto raw o vecchio parametro OAuth nell'URL. Reload CAS-only senza auto-apertura, conferma di apertura e controllo stale su seconda tab. Unit e Chromium dedicati, ADR 0129. **Non è** sync cloud/multi-device e non converte editor live #139.
+
+- [x] #178: import JSON configuration-only verso nuovo UUID CAS nativo da file scelto, senza trasferimento evidence o binding, native insert-only; #139/#91/#92 ancora aperte. Factory CI/Pages/Installer da verificare.

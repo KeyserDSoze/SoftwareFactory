@@ -6,6 +6,8 @@
 import {useEffect,useMemo,useRef,useState} from "react";
 import {matchesCasHandoffHint} from "../application/cas-root-workspace";
 import {prepareCasRevisionResumeLink} from "../application/cas-revision-resume";
+import {prepareCasExternalConfigImport,confirmCasExternalConfigImport}
+  from "../application/cas-external-config-import";
 import type {CasRevisionResumeLink} from "../application/cas-revision-resume";
 import type {CasHandoffHint} from "../application/cas-root-workspace";
 import {strToU8,zipSync} from "fflate";
@@ -316,6 +318,52 @@ export default function CasIsolatedEditor({
         // after a successful readback, it must not erase the create ACK.
         setList(await listCasProjects());
         setNotice(t(locale,"casIsoCreateDone")+identity);
+      }catch{
+        setList(null);
+        setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);
+      }
+    });
+  }
+  function importBackupFile(file:File):void {
+    if(snapshot || active.current || inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      if(snapshot || active.current || file.size===0 ||
+         file.size>1_000_000 || !file.name.toLowerCase().endsWith(".json")){
+        setError(t(locale,"casIsoImportInvalid"));return;
+      }
+      let ticket;
+      try{
+        // Only the explicitly selected local file is read. The source JSON
+        // remains ephemeral and is never sent to a provider or persisted.
+        const raw=await file.text();
+        ticket=prepareCasExternalConfigImport(raw);
+      }catch{
+        setError(t(locale,"casIsoImportInvalid"));return;
+      }
+      if(active.current || snapshot)return;
+      if(!window.confirm(t(locale,"casIsoImportConfirm")+
+         "\n"+ticket.name+"\nID: "+ticket.id))return;
+      let acknowledged:CasProjectSnapshot;
+      try{
+        acknowledged=await confirmCasExternalConfigImport(ticket,true);
+      }catch{
+        // An unsuccessful/ambiguous acknowledgement must not trigger a
+        // retry with a new UUID; the native insert might have committed.
+        setError(t(locale,"casIsoImportUnverified")+
+          " ID: "+ticket.id);return;
+      }
+      setList(null);
+      const identity=" ID: "+acknowledged.id+
+        " (rev. "+acknowledged.revision+")";
+      const verified=await verifyCasIsolatedCreatedReadback(
+        acknowledged,async id=>(await openCasSelectionController(id)).snapshot(),
+      );
+      if(!verified){
+        setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);return;
+      }
+      try{
+        setList(await listCasProjects());
+        setNotice(t(locale,"casIsoImportDone")+identity);
       }catch{
         setList(null);
         setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);
@@ -1029,6 +1077,19 @@ export default function CasIsolatedEditor({
         <button type="button" className="secondary"
           disabled={working || Boolean(snapshot) || !newProjectName.trim()}
           onClick={createFresh}>{t(locale,"casIsoCreateAction")}</button>
+      </div>
+      <div data-testid="cas-isolated-import-config">
+        <p className="helper">{t(locale,"casIsoImportExplain")}</p>
+        <label>{t(locale,"casIsoImportLabel")}
+          <input type="file" accept=".json,application/json"
+            data-testid="cas-isolated-import-file"
+            disabled={working || Boolean(snapshot) || pipelineRunning}
+            onChange={e=>{
+              const file=e.currentTarget.files?.[0];
+              e.currentTarget.value="";
+              if(file)importBackupFile(file);
+            }}/>
+        </label>
       </div>
       {list!==null && <div data-testid="cas-isolated-library">
         {list.length===0 ? <p>{t(locale,"casIsoEmpty")}</p> :
