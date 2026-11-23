@@ -208,8 +208,8 @@ describe("retired legacy -> NEW native IndexedDB CAS clean config fork (#175)",(
     expect(library.get(SLOT+project.id)).toBe(raw);
     // Distinct never-seen ticket: after success the source could also be
     // changed by a noncooperating tab while post-ACK digest is pending.
-    const newer=await prepareRetiredLegacyToCasFork(project.id);
     readNative.mockImplementation(nativeRead);
+    const newer=await prepareRetiredLegacyToCasFork(project.id);
     const insert=insertNative.getMockImplementation()!;
     insertNative.mockImplementationOnce(async (p,r)=>{
       const ack=await insert(p,r);
