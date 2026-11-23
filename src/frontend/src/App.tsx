@@ -41,6 +41,8 @@ import GitHubConnectionPanel from "./components/GitHubConnectionPanel";
 import { publishGithubWorkspace, assertGithubImportHead, importGithubWorkspace, recoverGithubAcknowledgement } from "./infrastructure/github-publication";
 import { inspectGithubRepository } from "./infrastructure/github-discovery";
 import { githubProjectDirty, githubBindingMatches, inspectGithubWorkspace } from "./infrastructure/github-workspace";
+import {prepareGithubAutosyncPin,assertGithubAutosyncPin,prepareGithubAutosyncAck}
+  from "./application/github-autosync-fence";
 import { compareGithubWorkspaces, type GithubWorkspaceComparison } from "./infrastructure/github-diff";
 import { loadProject, loadLocalProject, listLocalProjects, loadSettings, localProjectSnapshot, persistProjectIfUnchanged, persistSettings, readSecret, saveSecret } from "./infrastructure/store";
 import { prepareLegacyCasCopy, legacyCasBackupJson, copyLegacyCasTicket } from "./infrastructure/project-cas-migration";
@@ -202,7 +204,8 @@ function LegacyFactoryApp() {
     let disposed = false, inFlight = false;
     const tick = async () => {
       const current = projectRef.current, config = settingsRef.current;
-      const git = config.git;
+      // Capture immutable destination for the ENTIRE network operation.
+      const git = {...config.git};
       if (disposed || inFlight || busyRef.current || Boolean(localConflict) ||
           legacyCasRetirementBlocked(current.id) || !config.githubAutoSync ||
           document.visibilityState === "hidden" || !githubBindingMatches(current, git) ||
@@ -234,25 +237,49 @@ function LegacyFactoryApp() {
           const snapshot = projectRef.current;
           if (snapshot.id !== current.id || snapshot.updatedAt !== current.updatedAt ||
               !githubBindingMatches(snapshot, git) || !githubProjectDirty(snapshot, git)) return;
-          // A second tab on this origin may have changed persisted data. No
-          // local last-writer-wins overwrite: ask the user to reconcile.
-          if (JSON.stringify(loadProject()) !== JSON.stringify(snapshot))
-            throw Error("Workspace locale modificato da un'altra scheda: autosync bloccato.");
+          const pin=prepareGithubAutosyncPin(snapshot,git);
+          const assertStillPinned=()=>{
+            // At EACH async boundary recheck exact per-ID stored RAW,
+            // React project, destination/opt-in, writer lease and retirement.
+            assertGithubAutosyncPin(
+              pin,projectRef.current,settingsRef.current.git,
+              Boolean(settingsRef.current.githubAutoSync) &&
+                !disposed && !busyRef.current && !projectSwitchRef.current &&
+                !Boolean(localConflict) &&
+                !legacyCasRetirementBlocked(pin.id),
+              localProjectSnapshot(pin.id),
+              writerLeaseRef.current?.projectId===pin.id,
+            );
+          };
+          assertStillPinned();
+          // Backwards-compatibility pointer is only defense in depth, NOT
+          // the authoritative slot checked by assertStillPinned().
+          if (JSON.stringify(loadProject()) !== pin.raw)
+            throw Error("Conflitto GitHub autosync: workspace locale cambiato; verifica HEAD.");
           const token = await resolveGithubToken(git, readSecret("github.pat"));
+          // A changed destination DURING token resolution must not authorize
+          // any further GitHub API write.
+          assertStillPinned();
           const result = await publishGithubWorkspace(snapshot, git, token);
-          if (disposed) return;
-          const latest = projectRef.current;
-          if (latest.id !== snapshot.id) return;
-          // A new local task may have completed during the remote write. Only
-          // confirm the SNAPSHOT revision, not later edits.
-          const binding = { ...result.project.githubSync!,
-            syncedLocalUpdatedAt: snapshot.updatedAt };
-          if (!changeProject({ ...latest, githubSync: binding }))
-            throw Error("Ack GitHub non salvato: conflitto locale. Il commit remoto può essere riuscito.");
+          // Remote commit may ALREADY exist; never ACK it on a later local
+          // project or new repo, and do not retry a potentially done push.
+          assertStillPinned();
+          const ack=prepareGithubAutosyncAck(
+            pin,{project:result.project,sha:result.sha},
+            projectRef.current,settingsRef.current.git,
+            Boolean(settingsRef.current.githubAutoSync) && !disposed &&
+              !busyRef.current && !projectSwitchRef.current &&
+              !Boolean(localConflict) &&
+              !legacyCasRetirementBlocked(pin.id),
+            localProjectSnapshot(pin.id),
+            writerLeaseRef.current?.projectId===pin.id,
+          );
+          if (!changeProject(ack))
+            throw Error("Conflitto GitHub autosync: ACK non salvato. Il commit remoto può essere riuscito; verifica HEAD.");
+          // No outbox cleanup or success notification until local ACK committed.
           localStorage.removeItem(key);
           setLastPush(result.url);
-          setNotice("GitHub autosync: confermato " + result.sha.slice(0,12) +
-            (latest.updatedAt !== snapshot.updatedAt ? " · altre modifiche locali ancora in coda." : "."));
+          setNotice("GitHub autosync: confermato " + result.sha.slice(0,12) + ".");
         });
       } catch (error) {
         if (disposed) return;
