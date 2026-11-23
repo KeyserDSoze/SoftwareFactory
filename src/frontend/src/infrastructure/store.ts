@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, createProject } from "../domain/defaults";
 import type { FactoryProject, FactorySettings } from "../domain/types";
+import {assertLegacyProjectWritable} from "./legacy-cas-retirement";
 
 const PROJECT_KEY = "softwarefactory.project.v1";
 const SETTINGS_KEY = "softwarefactory.settings.v1";
@@ -113,6 +114,7 @@ export function localProjectSnapshot(id: string): string | null {
   return localStorage.getItem(PROJECT_LIBRARY_PREFIX + id);
 }
 export function persistProjectIfUnchanged(project: FactoryProject, expected: string | null): string {
+  assertLegacyProjectWritable(project.id);
   const current = localProjectSnapshot(project.id);
   if (current !== expected)
     throw Error("Conflitto locale: un'altra scheda ha modificato questo progetto. " +
@@ -124,6 +126,9 @@ export function persistProjectIfUnchanged(project: FactoryProject, expected: str
   return confirmed;
 }
 export function persistProject(project: FactoryProject): void {
+  // #173: guard both direct and checked writes, including old tabs with a
+  // valid local baseline. This is cooperative, NOT cross-store atomic CAS.
+  assertLegacyProjectWritable(project.id);
   // Never acknowledge a project the reader/list library will immediately
   // reject. Validate BEFORE touching the authoritative slot OR any pointer.
   // The bound is intentionally the same 1M-character JSON bound used by
@@ -144,6 +149,7 @@ export function persistProject(project: FactoryProject): void {
     throw Error("Libreria locale piena (40 progetti): esporta e archivia un progetto prima di aggiungerne altri.");
 
   const slot = PROJECT_LIBRARY_PREFIX + project.id;
+  assertLegacyProjectWritable(project.id);
   try { localStorage.setItem(slot, raw); }
   catch { throw Error("Spazio locale insufficiente: progetto non salvato. Esporta un backup JSON."); }
   // A no-op/faulty adapter must not make a save look successful. This also

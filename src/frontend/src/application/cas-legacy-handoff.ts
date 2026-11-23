@@ -15,6 +15,7 @@ import type {CasProjectSnapshot} from "../infrastructure/project-cas";
 import {inspectCasIsolatedStages} from "./cas-isolated-stage-inspection";
 import {validateCasIsolatedStackConfig} from "./cas-isolated-stack-config";
 import {casHandoffRawDigest} from "./cas-root-workspace";
+import {armLegacyCasRetirement} from "../infrastructure/legacy-cas-retirement";
 import type {CasHandoffHint} from "./cas-root-workspace";
 
 export type LegacyCasHandoffTicket=Readonly<LegacyCasCopyTicket>;
@@ -85,6 +86,13 @@ export async function commitLegacyCasHandoff(
     throw Error("La destinazione IndexedDB non è libera: nessuna sovrascrittura.");
   if(!isStable() || prepareLegacyCasCopy(ticket.id).raw!==ticket.raw)
     throw Error("Sorgente legacy cambiata prima della scrittura.");
+  // Persist a per-ID legacy write fence BEFORE the native IDB insert. If
+  // the storage adapter, quota, rival legacy writer or marker readback fails,
+  // there must be NO IDB copy attempt. Leave it armed after ambiguous ACK.
+  const digest=await casHandoffRawDigest(ticket.raw);
+  if(!isStable() || prepareLegacyCasCopy(ticket.id).raw!==ticket.raw)
+    throw Error("Sorgente legacy cambiata durante la verifica della barriera.");
+  armLegacyCasRetirement(ticket,digest);
   // Atomic insert-only IDB: native tx checks missing/tombstone/cap40.
   // If an ACK is lost or legacy changes DURING the write, do not retry.
   const acknowledged=await copyLegacyCasTicket(ticket,true);
@@ -99,7 +107,6 @@ export async function commitLegacyCasHandoff(
        observed.state!=="present" ||
        !sameSnapshot(acknowledged,observed.snapshot))
       return {status:"copied_unverified",id:ticket.id,revision:1};
-    const digest=await casHandoffRawDigest(acknowledged.raw);
     if(!isStable() || prepareLegacyCasCopy(ticket.id).raw!==ticket.raw)
       return {status:"copied_unverified",id:ticket.id,revision:1};
     return {

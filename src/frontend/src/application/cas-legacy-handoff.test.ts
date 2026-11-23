@@ -32,7 +32,7 @@ describe("opt-in legacy→CAS-only assist #171",()=>{
     entries.clear();
     mockRead.mockReset();mockCopy.mockReset();
     vi.stubGlobal("localStorage",{getItem:(key:string)=>
-      entries.get(key)??null,setItem:vi.fn()});
+      entries.get(key)??null,setItem:(key:string,value:string)=>entries.set(key,value)});
     mockRead.mockResolvedValue({state:"missing"});
   });
   afterEach(()=>vi.unstubAllGlobals());
@@ -130,6 +130,9 @@ describe("opt-in legacy→CAS-only assist #171",()=>{
         snapshot:{...ack,revision:2}});
     expect(await commitLegacyCasHandoff(ticket,true,()=>true))
       .toEqual({status:"copied_unverified",id:p.id,revision:1});
+    // Independent second interrupted handoff scenario; one armed ID may
+    // NEVER be retried automatically following an ambiguous native ACK.
+    entries.delete("softwarefactory.cas.retired.v1."+p.id);
     mockRead.mockReset();mockCopy.mockClear();
     mockRead.mockResolvedValueOnce({state:"missing"})
       .mockRejectedValueOnce(Error("OUTAGE_WITH_SECRET"));
