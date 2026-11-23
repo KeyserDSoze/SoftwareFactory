@@ -1058,7 +1058,7 @@ export default function CasIsolatedEditor({
               onFocus={e=>e.currentTarget.select()}/>
             <small>{t(locale,"casResumePinned")} · rev. {shownResumeLink.revision}</small>
           </label>}
-        </div>
+        </div>}
         <label>{t(locale,"casIsoName")}
           <input value={draftName} maxLength={CAS_ISOLATED_NAME_MAX}
             disabled={working || !active.current}

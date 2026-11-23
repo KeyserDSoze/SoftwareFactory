@@ -109,7 +109,7 @@ export const messages = {
     casResumeCreated: "Link di ripresa preparato senza scrivere sul progetto. Puoi selezionare e copiare l'URL qui sotto.",
     casResumeLinkLabel: "Link di ripresa CAS (sola lettura; seleziona per copiare)",
     casResumePinned: "Revisione esatta, valida solo se il progetto non cambia",
-    casResumeStale: "Impossibile generare il link: bozza, revisione, sessione o IndexedDB sono cambiati. Ricarica la libreria e verifica senza sovrascrivere."
+    casResumeStale: "Impossibile generare il link: bozza, revisione, sessione o IndexedDB sono cambiati. Ricarica la libreria e verifica senza sovrascrivere.",
     casHandoffOpenConsent: "Aprire nell'editor SOLO IndexedDB questa esatta copia trasferita (ID/revisione/sha256 confermati)? Nessuna importazione/merge del legacy, review o test.",
     casHandoffStale: "Copia trasferita non più uguale all'ID/revisione/SHA-256 originali: apertura automatica BLOCCATA. Verifica e seleziona manualmente una revisione diversa dopo un confronto.",
     casHandoffOpened: "Copia CAS inserita e aperta su consenso esplicito. Dati legacy ancora separati; le prove storiche non sono nuove verifiche.",
@@ -462,7 +462,7 @@ export const messages = {
     casResumeCreated: "Return link prepared without writing project data. Select and copy the URL below.",
     casResumeLinkLabel: "CAS return link (read-only; select to copy)",
     casResumePinned: "Pinned revision, valid only until the project changes",
-    casResumeStale: "Cannot create this link: draft, revision, session or IndexedDB changed. Refresh the library and verify without overwriting."
+    casResumeStale: "Cannot create this link: draft, revision, session or IndexedDB changed. Refresh the library and verify without overwriting.",
     casHandoffOpenConsent: "Open this exact transferred IndexedDB copy (ID/revision/SHA-256 verified) in the isolated editor? No legacy merge, review or tests.",
     casHandoffStale: "Transferred copy no longer matches the original ID/revision/SHA-256: hinted open BLOCKED. Inspect and explicitly select another version after comparing.",
     casHandoffOpened: "CAS copy opened by explicit consent after verified transfer. Legacy data remains separate; historical evidence is not a new verification.",
