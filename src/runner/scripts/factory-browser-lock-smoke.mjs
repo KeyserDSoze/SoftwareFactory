@@ -5528,6 +5528,119 @@ if (!inside) {
       console.log("FACTORY_CAS_SELECTED_REVISION_RECONCILE_E2E_PASS: unchanged, rival advance, dirty draft preserved, declined consent, exact old JSON backup, 3 consent adopt, final-dialog race, tombstone fail-closed, reload and unchanged legacy");
     }finally{await selectedReconcileContext.close();}
 
+
+    // #186: real Chromium localStorage on TWO tabs. The timed Storage.getItem
+    // hook models a noncooperative old writer changing a slot DURING the
+    // synchronous library scan (between first and second baseline checks).
+    // Legacy Web Locks cannot make localStorage compare+set atomic; this is
+    // a narrower regression test, NOT transactional or cross-profile CAS.
+    const writerRaceContext=await browser.newContext();
+    try{
+      const page=await writerRaceContext.newPage();
+      const rival=await writerRaceContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await Promise.all([
+        page.addScriptTag({content:legacyStoreBundle}),
+        rival.addScriptTag({content:legacyStoreBundle}),
+      ]);
+      const originals=await page.evaluate(()=>{
+        const original={id:"a1860000-1111-4111-8111-111111111186",
+          updatedAt:"2026-11-23T16:30:00.000Z",stages:[],
+          config:{name:"Pinned before scan 186"}};
+        const insert={id:"b1860000-1111-4111-8111-111111111186",
+          updatedAt:"2026-11-23T16:30:00.000Z",stages:[],
+          config:{name:"Stale create 186"}};
+        window.FactoryLegacyStore.persistProject(original);
+        return {original,insert};
+      });
+      const metadataBefore=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+      }));
+      const racedUpdate=await page.evaluate(({original})=>{
+        const slot="softwarefactory.project.library.v1."+original.id;
+        const rival={...original,config:{name:"Non-cooperative rival 186"}};
+        const stale={...original,config:{name:"Stale overwrite 186"}};
+        let reads=0,injected=false,denied="";
+        const get=Storage.prototype.getItem;
+        Storage.prototype.getItem=function(key){
+          if(this===localStorage && key===slot && ++reads===2){
+            // This uncooperative writer directly mutates localStorage,
+            // bypassing Web Locks and checked API during enumeration.
+            injected=true;
+            localStorage.setItem(slot,JSON.stringify(rival));
+          }
+          return get.call(this,key);
+        };
+        try{
+          window.FactoryLegacyStore.persistProjectIfUnchanged(
+            stale,JSON.stringify(original));
+        }catch(err){denied=String(err);}
+        finally{Storage.prototype.getItem=get;}
+        return {reads,injected,denied,rival};
+      },originals);
+      assert.equal(racedUpdate.injected,true,
+        "Fixture must change the target DURING the enumeration, not before");
+      assert.match(racedUpdate.denied,/cambiato durante i controlli/,
+        "Pinned baseline must be rechecked just before the legacy slot write");
+      assert.equal(await rival.evaluate(id=>localStorage.getItem(
+        "softwarefactory.project.library.v1."+id),originals.original.id),
+        JSON.stringify(racedUpdate.rival),
+        "Rival's committed bytes MUST survive old checked writer race");
+      const metadataMid=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+      }));
+      assert.deepEqual(metadataMid,metadataBefore,
+        "Refused update cannot rewrite pointer, index or per-tab selection");
+
+      const racedInsert=await page.evaluate(({original,insert})=>{
+        const slot="softwarefactory.project.library.v1."+original.id;
+        const target="softwarefactory.project.library.v1."+insert.id;
+        let injected=false,denied="";
+        const get=Storage.prototype.getItem;
+        Storage.prototype.getItem=function(key){
+          if(this===localStorage && key===slot && !injected){
+            injected=true;
+            localStorage.setItem(target,JSON.stringify({...insert,
+              config:{name:"Non-cooperative create winner 186"}}));
+          }
+          return get.call(this,key);
+        };
+        try{window.FactoryLegacyStore.persistProjectIfUnchanged(insert,null);}
+        catch(err){denied=String(err);}
+        finally{Storage.prototype.getItem=get;}
+        return {injected,denied};
+      },originals);
+      assert.equal(racedInsert.injected,true);
+      assert.match(racedInsert.denied,/cambiato durante i controlli/,
+        "An insert-only expected=null cannot overwrite a late rival create");
+      assert.equal(await rival.evaluate(id=>JSON.parse(localStorage.getItem(
+        "softwarefactory.project.library.v1."+id)).config.name,
+      originals.insert.id),"Non-cooperative create winner 186");
+      assert.deepEqual(await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+        selected:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+      })),metadataBefore,"Failed insert cannot mutate legacy caches");
+      await rival.reload({waitUntil:"networkidle"});
+      await rival.addScriptTag({content:legacyStoreBundle});
+      assert.equal(await rival.evaluate(id=>
+        window.FactoryLegacyStore.loadLocalProject(id).config.name,
+      originals.original.id),"Non-cooperative rival 186");
+      assert.equal(await rival.evaluate(id=>
+        window.FactoryLegacyStore.loadLocalProject(id).config.name,
+      originals.insert.id),"Non-cooperative create winner 186");
+      console.log("FACTORY_LEGACY_SECOND_BASELINE_E2E_PASS: 2-tab real localStorage, post-scan rival update+insert denied, original raw retained, unchanged caches, reload recovery, no fictional atomic CAS");
+    }finally{await writerRaceContext.close();}
+
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
     // creation or encourage a second new UUID; operator can recover via ID.

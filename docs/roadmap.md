@@ -1382,3 +1382,5 @@ Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un li
 - [x] #183: backup offline ZIP di tutta la libreria IndexedDB CAS con snapshot readonly atomico, doppio consenso, digest verificati e race fail-closed; NO migration legacy automatica (CI da verificare).
 
 - [x] #185: controlla revisioni rivali del progetto CAS selezionato e, dopo backup + 3 consensi, adotta la revisione esatta senza scritture né perdita bozze (gate CI da verificare).
+
+- [x] #186: secondo fence della baseline sul writer legacy checked dopo scansione libreria; E2E Chromium due tab e ADR 0135 (CI da verificare). Non è CAS atomico / cutover.
