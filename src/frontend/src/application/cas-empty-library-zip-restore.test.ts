@@ -159,6 +159,70 @@ describe("native CAS full ZIP empty-library atomic restore #189",()=>{
     await expect(parseCasEmptyLibraryBackupZip(mutated,digest))
       .rejects.toThrow(/ZIP libreria CAS non valido/);
   });
+
+  it("pins the consent ticket before awaiting SHA and rejects an in-flight RAW change",async()=>{
+    const f=sample(),parsed=await parseCasEmptyLibraryBackupZip(f.zip(),digest);
+    const ticket={
+      format:parsed.format,
+      projects:parsed.projects.map(p=>({...p})),
+      tombstones:parsed.tombstones.map(t=>({...t})),
+    };
+    let release!:()=>void;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const delayedDigest=vi.fn(async(raw:string)=>{await gate;return digest(raw);});
+    const write=vi.fn(async(entries:ReadonlyArray<{id:string;raw:string}>)=>
+      entries.map(p=>({...p,revision:1})));
+    const pending=confirmCasEmptyLibraryBackupRestore(
+      ticket,true,write,delayedDigest);
+    expect(delayedDigest).toHaveBeenCalledOnce();
+    const changed=JSON.parse(ticket.projects[0].raw) as ReturnType<typeof createProject>;
+    changed.config.name="different but valid canonical RAW after SHA started";
+    ticket.projects[0].raw=serializeCasProject(changed);
+    release();
+    await expect(pending).rejects.toThrow(/non confermato/);
+    expect(write).not.toHaveBeenCalled();
+  });
+  it("rejects replacement arrays or tombstone metadata changed during digest",async()=>{
+    const f=sample(),parsed=await parseCasEmptyLibraryBackupZip(f.zip(),digest);
+    for(const change of ["array","tombstone"] as const){
+      const ticket={
+        format:parsed.format,
+        projects:parsed.projects.map(p=>({...p})),
+        tombstones:parsed.tombstones.map(t=>({...t})),
+      };
+      let release!:()=>void;
+      const gate=new Promise<void>(resolve=>{release=resolve;});
+      const write=vi.fn(async(entries:ReadonlyArray<{id:string;raw:string}>)=>
+        entries.map(p=>({...p,revision:1})));
+      const pending=confirmCasEmptyLibraryBackupRestore(ticket,true,write,
+        async raw=>{await gate;return digest(raw);});
+      if(change==="array")ticket.projects=[...ticket.projects];
+      else ticket.tombstones[0].revision++;
+      release();
+      await expect(pending).rejects.toThrow(/non confermato/);
+      expect(write).not.toHaveBeenCalled();
+    }
+  });
+  it("rejects fake tombstones and still accepts a stable mutable ticket",async()=>{
+    const f=sample(),parsed=await parseCasEmptyLibraryBackupZip(f.zip(),digest);
+    const ticket={
+      format:parsed.format,
+      projects:parsed.projects.map(p=>({...p})),
+      tombstones:parsed.tombstones.map(t=>({...t})),
+    };
+    const write=vi.fn(async(entries:ReadonlyArray<{id:string;raw:string}>)=>
+      entries.map(p=>({...p,revision:1})));
+    ticket.tombstones[0].id=ticket.projects[0].id;
+    await expect(confirmCasEmptyLibraryBackupRestore(ticket,true,write,digest))
+      .rejects.toThrow(/non confermato/);
+    expect(write).not.toHaveBeenCalled();
+    ticket.tombstones[0].id=parsed.tombstones[0].id;
+    const restored=await confirmCasEmptyLibraryBackupRestore(ticket,true,write,digest);
+    expect(restored).toHaveLength(ticket.projects.length);
+    expect(write).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0][0].map(p=>p.raw))
+      .toEqual(ticket.projects.map(p=>p.raw));
+  });
   it("cannot access localStorage, sessionStorage or network on preview or consent",async()=>{
     const f=sample(),blocked=vi.fn(()=>{throw Error("SECRET_IO_MUST_NOT_HAPPEN");});
     vi.stubGlobal("localStorage",{getItem:blocked,setItem:blocked});

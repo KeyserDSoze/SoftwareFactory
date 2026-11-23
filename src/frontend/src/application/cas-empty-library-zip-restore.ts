@@ -175,25 +175,61 @@ export async function confirmCasEmptyLibraryBackupRestore(
        !Array.isArray(ticket.tombstones) ||
        ticket.tombstones.length>MAX_CAS_TOMBSTONE_INVENTORY)
       return failed();
+    // The caller's ticket may be mutable even though the official parser
+    // returns frozen objects. Never validate an async digest over one RAW
+    // and later re-read a different RAW to pass into the native writer (#191).
+    const sourceProjects=ticket.projects;
+    const sourceTombstones=ticket.tombstones;
     const seen=new Set<string>();
     let chars=0;
-    for(const p of ticket.projects){
+    const pinned=Object.freeze(sourceProjects.map(p=>{
       if(!p || typeof p.id!=="string" || seen.has(p.id))return failed();
-      seen.add(p.id);
+      const copy=Object.freeze({
+        id:p.id,revision:p.revision,raw:p.raw,sha256:p.sha256,
+      });
       validateProject({
-        id:p.id,revision:p.revision,
-        file:"projects/"+p.id+"-r"+p.revision+".json",
-        sha256:p.sha256,
-      },p.raw);
-      chars+=p.raw.length;
-      if(chars>MAX_CAS_LIBRARY_BACKUP_CHARS ||
-         await digest(p.raw)!==p.sha256)return failed();
+        id:copy.id,revision:copy.revision,
+        file:"projects/"+copy.id+"-r"+copy.revision+".json",
+        sha256:copy.sha256,
+      },copy.raw);
+      seen.add(copy.id);
+      chars+=copy.raw.length;
+      if(chars>MAX_CAS_LIBRARY_BACKUP_CHARS)return failed();
+      return copy;
+    }));
+    // Tombstones are historical metadata, never restored, but cannot be
+    // malformed or collide with active IDs at the consent boundary.
+    const pinnedTombstones=Object.freeze(sourceTombstones.map(t=>{
+      if(!t || typeof t.id!=="string" || !ID.test(t.id) ||
+         !Number.isSafeInteger(t.revision) || t.revision<1 ||
+         t.revision>MAX_REVISION || seen.has(t.id))return failed();
+      seen.add(t.id);
+      return Object.freeze({id:t.id,revision:t.revision});
+    }));
+    for(const p of pinned){
+      if(await digest(p.raw)!==p.sha256)return failed();
     }
-    const outcome=await write(ticket.projects.map(p=>({id:p.id,raw:p.raw})));
-    if(!Array.isArray(outcome) || outcome.length!==ticket.projects.length)
+    // A suspended digest gives other browser tasks an opportunity to mutate
+    // the caller object. Reject rather than silently adopting a new ticket.
+    if(ticket.projects!==sourceProjects ||
+       ticket.tombstones!==sourceTombstones ||
+       sourceProjects.length!==pinned.length ||
+       sourceTombstones.length!==pinnedTombstones.length ||
+       !sourceProjects.every((p,i)=>p && p.id===pinned[i].id &&
+         p.revision===pinned[i].revision && p.raw===pinned[i].raw &&
+         p.sha256===pinned[i].sha256) ||
+       !sourceTombstones.every((t,i)=>t &&
+         t.id===pinnedTombstones[i].id &&
+         t.revision===pinnedTombstones[i].revision))
+      return failed();
+    // The only data crossing the IDB write boundary is the verified pinned
+    // snapshot, never the caller's mutable project array.
+    const inputs=Object.freeze(pinned.map(p=>Object.freeze({id:p.id,raw:p.raw})));
+    const outcome=await write(inputs);
+    if(!Array.isArray(outcome) || outcome.length!==pinned.length)
       throw Error("Import CAS ACK incerto: verifica manualmente la libreria; NON riprovare.");
     const byId=new Map(outcome.map(o=>[o.id,o]));
-    for(const p of ticket.projects){
+    for(const p of pinned){
       const saved=byId.get(p.id);
       if(!saved || saved.revision!==1 || saved.raw!==p.raw)
         throw Error("Import CAS ACK incerto: verifica manualmente la libreria; NON riprovare.");
