@@ -347,6 +347,82 @@ export async function readCasLibraryBackupSnapshot(): Promise<CasLibraryBackupSn
   }finally{db.close();}
 }
 
+
+/** #189: restore a full historical library to a TRULY EMPTY native store.
+ * This is one real atomic IndexedDB readwrite transaction, not 40 inserts:
+ * any existing active row, tombstone or malformed key rejects EVERYTHING.
+ * Source revisions remain historical in the ZIP; new native slots begin
+ * at revision 1. No GitHub/runner evidence gets re-attested by this import.
+ */
+export type CasEmptyLibraryImport = Readonly<{id:string;raw:string}>;
+
+export async function importCasEmptyLibraryAtomic(
+  entries:ReadonlyArray<CasEmptyLibraryImport>,
+):Promise<ReadonlyArray<CasProjectSnapshot>> {
+  if(!Array.isArray(entries) || entries.length<1 || entries.length>40)
+    throw Error("Import libreria IndexedDB non valido: 1–40 progetti obbligatori.");
+  const ids=new Set<string>();
+  let totalChars=0;
+  const validated=entries.map(entry=>{
+    if(!entry || typeof entry.id!=="string" || typeof entry.raw!=="string")
+      throw Error("Import libreria IndexedDB non valido.");
+    checkId(entry.id);
+    if(ids.has(entry.id))throw Error("ID duplicato nel backup della libreria.");
+    ids.add(entry.id);
+    let project:FactoryProject;
+    try{project=JSON.parse(entry.raw) as FactoryProject;}
+    catch{throw Error("JSON progetto backup IndexedDB non valido.");}
+    if(!project || project.id!==entry.id ||
+       serializeCasProject(project)!==entry.raw)
+      throw Error("JSON progetto backup non canonico: import rifiutato.");
+    totalChars+=entry.raw.length;
+    if(totalChars>MAX_CAS_LIBRARY_BACKUP_CHARS)
+      throw Error("Backup libreria IndexedDB oltre limite 16M caratteri.");
+    return Object.freeze({id:entry.id,raw:entry.raw});
+  }).sort((a,b)=>a.id.localeCompare(b.id));
+  const db=await openCasDb();
+  try{
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(STORE,"readwrite");
+      const store=tx.objectStore(STORE);
+      let failure:string|CasStorageFault="Import libreria IndexedDB non confermato.";
+      let scheduled=false;
+      tx.oncomplete=()=>{
+        if(!scheduled){reject(Error("Import libreria IndexedDB non confermato."));return;}
+        resolve(Object.freeze(validated.map(entry=>Object.freeze({
+          id:entry.id,revision:1,raw:entry.raw,
+        }))));
+      };
+      tx.onabort=()=>reject(
+        failure instanceof CasStorageFault?failure:
+          nativeCasStorageFault(tx.error)??Error(failure));
+      tx.onerror=()=>{
+        const fault=nativeCasStorageFault(tx.error);
+        if(fault)failure=fault;
+      };
+      // Cursor + adds share ONE write transaction. An insert/delete in a
+      // competing tab cannot interleave between check and batch commit.
+      const scan=store.openCursor();
+      scan.onsuccess=()=>{
+        try{
+          if(scan.result){
+            failure="Archivio IndexedDB NON vuoto: import totale vietato. Nessun merge o restore tombstone.";
+            tx.abort();return;
+          }
+          // The cursor observed an empty store. Schedule ALL adds without
+          // any await/async gap. Quota or add failure aborts the WHOLE batch.
+          for(const entry of validated)
+            store.add({id:entry.id,revision:1,raw:entry.raw} satisfies Row,entry.id);
+          scheduled=true;
+        }catch(error){
+          failure=nativeCasStorageFault(error)??"Import IndexedDB interrotto; nessun retry automatico.";
+          tx.abort();
+        }
+      };
+    });
+  }finally{db.close();}
+}
+
 export async function compareAndSwapCasProject(
   project: FactoryProject, expected: CasProjectSnapshot | null,
 ): Promise<CasProjectSnapshot> {
