@@ -5972,7 +5972,7 @@ if (!inside) {
       zipFiles[target]=strToU8(strFromU8(zipFiles[target])+" ");
       const tampered=zipSync(zipFiles,{level:6});
       await page.getByTestId("cas-library-zip-restore-file").setInputFiles({
-        name:"damaged189.zip",mimeType:"application/zip",buffer:tampered,
+        name:"damaged189.zip",mimeType:"application/zip",buffer:Buffer.from(tampered),
       });
       await expect(page.getByRole("alert")).toContainText(
         "Backup ZIP CAS invalido",{timeout:18000});
