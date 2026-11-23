@@ -1,5 +1,6 @@
 import {describe,expect,it,vi} from "vitest";
 import {createHash} from "node:crypto";
+import {zipSync} from "fflate";
 import {MAX_CAS_LIBRARY_ZIP_BYTES,parseCasEmptyLibraryBackupZip}
   from "./cas-empty-library-zip-restore";
 import {createProject} from "../domain/defaults";
@@ -152,6 +153,59 @@ describe("native CAS full library historical recovery bundle #183",()=>{
       expect(matching?.raw).toBe(original.raw);
     }
     expect(checked.tombstones).toEqual(base.tombstones);
+  });
+
+  it("pins compressor-owned ZIP bytes before an async SHA digest can mutate them (#193)",async()=>{
+    const base=fixture(),sha=async(raw:string)=>
+      createHash("sha256").update(raw).digest("hex");
+    const ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
+    const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
+    let compressorView:Uint8Array|undefined;
+    let originalZip:Uint8Array|undefined;
+    let digestStarted!:()=>void;
+    let releaseDigest!:()=>void;
+    const started=new Promise<void>(resolve=>{digestStarted=resolve;});
+    const pause=new Promise<void>(resolve=>{releaseDigest=resolve;});
+    let called=0;
+    const slowDigest=async(raw:string)=>{
+      if(++called===1){digestStarted();await pause;}
+      return sha(raw);
+    };
+    const pending=encodeCasLibraryRecoveryZip(archive,slowDigest,entries=>{
+      const compressed=zipSync(entries,{level:6});
+      // The compressor explicitly returns an offset view over a buffer
+      // that the caller retains. Bytes outside the view are not ZIP data.
+      const backing=new Uint8Array(compressed.length+64);
+      backing.fill(0x9d);
+      backing.set(compressed,32);
+      compressorView=backing.subarray(32,32+compressed.length);
+      originalZip=Uint8Array.from(compressorView);
+      return compressorView;
+    });
+    await started;
+    expect(compressorView).toBeDefined();
+    expect(originalZip).toBeDefined();
+    compressorView!.fill(0); // mutate while the parser awaits its first SHA
+    releaseDigest();
+    const delivered=await pending;
+    expect(delivered).toEqual(originalZip);
+    expect(delivered.buffer).not.toBe(compressorView!.buffer);
+    const verified=await parseCasEmptyLibraryBackupZip(delivered,sha);
+    expect(verified.projects).toHaveLength(archive.projectCount);
+    for(const record of base.projects)
+      expect(verified.projects.find(p=>p.id===record.id)?.raw).toBe(record.raw);
+    expect(verified.tombstones).toEqual(base.tombstones);
+  });
+  it("still refuses a corrupt compressor result without any ZIP handoff (#193)",async()=>{
+    const base=fixture(),sha=async(raw:string)=>
+      createHash("sha256").update(raw).digest("hex");
+    const ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
+    const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
+    await expect(encodeCasLibraryRecoveryZip(archive,sha,entries=>{
+      const compressed=zipSync(entries,{level:6});
+      compressed[0]=0; // invalid local-file-header signature
+      return compressed;
+    })).rejects.toBeInstanceOf(CasLibraryZipPortabilityError);
   });
   it("rejects ZIPs above the restore limit before handing off any file",async()=>{
     const base=fixture(),ticket=await prepareCasLibraryRecoveryBundle(async()=>base);

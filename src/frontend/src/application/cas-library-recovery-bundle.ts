@@ -184,15 +184,22 @@ export async function encodeCasLibraryRecoveryZip(
     if(!(zipped instanceof Uint8Array))
       throw new CasLibraryZipPortabilityError();
     assertCasLibraryZipPortableSize(zipped.byteLength);
+    // #193: pin OWNED ZIP bytes BEFORE any await in the restore parser's
+    // asynchronous SHA-256 verification. The compressor may return a
+    // Uint8Array view into a caller-owned/shared buffer. Parsing one version
+    // and copying zipped later could hand the browser altered ZIP bytes.
+    const pinned=Uint8Array.from(zipped);
     // No IDB, localStorage, cloud, network, or user action is invoked here.
-    const checked=await parseCasEmptyLibraryBackupZip(zipped,digest);
+    const checked=await parseCasEmptyLibraryBackupZip(pinned,digest);
     if(checked.projects.length!==archive.projectCount ||
        checked.projects.some(p=>
          archive.files["projects/"+p.id+"-r"+p.revision+".json"]!==p.raw))
       throw new CasLibraryZipPortabilityError();
     // Manifest/tombstones, unique paths and all SHA hashes are checked
     // strictly by the restore parser against the compressed bytes.
-    return Uint8Array.from(zipped);
+    // Return precisely the private bytes already verified, not a late
+    // snapshot of a mutable compressor result.
+    return pinned;
   }catch{
     // Never interpolate project RAW, filenames or provider errors in UI.
     throw new CasLibraryZipPortabilityError();

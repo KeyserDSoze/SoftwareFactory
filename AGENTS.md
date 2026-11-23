@@ -1354,3 +1354,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Il backup completo #183 deve passare il **medesimo parser ZIP del restore #189** sui byte compressi reali, oltre al limite 20 MB. Il tetto 16M caratteri JSON non limita i byte UTF-8 compressi: non consegnare backup che il restore non accetterebbe.
 - Se il ZIP non è compatibile, niente object URL/download/ACK umano o modifica IndexedDB; suggerire backup JSON per singolo progetto in IT/EN. Il file non viene caricato in rete, i receipt restano storico NON attestato. Preflight e ZIP parse non attestano salvataggio disco o IdP.
 - Mantenere #139 aperta per writer live legacy/Code Agent/GitHub/cloud e per i collaudi multi-device effettivi.
+
+## Pinning ZIP CAS prima del digest asincrono (#193)
+- Prima di `await parseCasEmptyLibraryBackupZip(...)`, copiare i byte compressi del backup #183 in un buffer privato, indipendente dal `Uint8Array` del compressor (anche offset view/SharedArrayBuffer).
+- Passare la stessa copia privata al parser #189 e restituire **solo quei byte** al download dopo i digest: non rileggere il buffer esterno dopo `await`. Non modificare ZIP v1, limiti 20 MB, consensi e atomicità del restore.
+- Vitest con SHA sospeso e buffer modificato durante la verifica deve dimostrare la corrispondenza ZIP/manifest/RAW; nessun localStorage, upload, prova runner/Code Reviewer o migrazione live #139.
