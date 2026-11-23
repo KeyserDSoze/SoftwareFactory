@@ -4033,6 +4033,134 @@ if (!inside) {
     }
 
 
+    // #172: persist a running stage as after a tab crash. A rival CAS
+    // update during the last operator consent must win, without lost data.
+    const recoveryContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await recoveryContext.newPage();
+      const rival=await recoveryContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const source=await rival.evaluate(async()=>{
+        const id="17217217-1721-4721-8721-172172172172";
+        const stages=["features","competitors","technical","architecture",
+          "adversarial","implementation"].map((stage,i)=>({
+          id:stage,label:stage,
+          status:i<2?"complete":i===2?"running":"pending",
+          output:i<2?"HISTORICAL_AI_"+i:"",
+          sources:[],
+          ...(i===2?{updatedAt:"2026-11-23T07:00:00.000Z"}:{}),
+        }));
+        return window.FactoryProjectCas.compareAndSwapCasProject({
+          id,config:{name:"Recover running CAS",description:"Before crash",
+            requirements:"Never invent AI completions"},
+          stages,createdAt:"2026-11-23T07:00:00.000Z",
+          updatedAt:"2026-11-23T07:00:00.000Z",
+        },null);
+      });
+      const legacyBefore=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      const open=async()=>{
+        await panel.getByRole("button",{
+          name:"Apri editor IndexedDB separato",
+        }).click();
+        await panel.getByRole("button",{
+          name:/Ricarica libreria IndexedDB/,
+        }).click();
+        page.once("dialog",dlg=>void dlg.accept());
+        await panel.getByRole("button",{
+          name:"Apri copia IDB: Recover running CAS",
+        }).click();
+      };
+      await open();
+      const action=page.getByTestId("cas-isolated-running-recovery-action");
+      await expect(action).toBeEnabled();
+      await expect(action).toContainText("(technical)");
+      // Reject first consent: no download and no mutation.
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await action.click();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source.id),source);
+
+      // A noncooperating native writer updates during FINAL consent.
+      let signalFinal;
+      const finalDialog=new Promise(resolve=>{signalFinal=resolve;});
+      let count=0;
+      const onRace=async dialog=>{
+        count++;
+        if(count===3)signalFinal(dialog);
+        else await dialog.accept();
+      };
+      page.on("dialog",onRace);
+      const pendingDownload=page.waitForEvent("download");
+      const attempt=action.click();void attempt.catch(()=>{});
+      const pause=await finalDialog;
+      const backup=await pendingDownload;
+      assert.equal((await readFile(await backup.path())).toString("utf8"),
+        source.raw,"Recovery backup must be byte-exact");
+      const winner=await rival.evaluate(async before=>{
+        const next=JSON.parse(before.raw);
+        next.config.description="Rival writer wins during recovery";
+        return window.FactoryProjectCas.compareAndSwapCasProject(next,before);
+      },source);
+      await pause.accept();await attempt;
+      page.off("dialog",onRace);
+      await expect(panel.getByRole("alert")).toContainText("non confermata");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source.id),winner);
+
+      // Reload creates a fresh explicit session pinned to the winner.
+      await page.reload({waitUntil:"networkidle"});
+      await open();
+      await expect(action).toBeEnabled();
+      page.removeAllListeners("dialog");
+      let consents=0;
+      const approve=async dialog=>{consents++;await dialog.accept();};
+      page.on("dialog",approve);
+      const savedDownload=page.waitForEvent("download");
+      await action.click();
+      assert.equal((await readFile(await (await savedDownload).path()))
+        .toString("utf8"),winner.raw);
+      assert.equal(consents,3);
+      page.off("dialog",approve);
+      await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 3");
+      await expect(action).toBeDisabled();
+      const saved=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source.id);
+      assert.equal(saved.revision,3);
+      const before=JSON.parse(winner.raw),after=JSON.parse(saved.raw);
+      assert.deepEqual(after.stages.slice(0,2),before.stages.slice(0,2));
+      for(const stage of after.stages.slice(2))
+        assert.deepEqual(stage,{id:stage.id,label:stage.label,
+          status:"pending",output:"",sources:[]});
+      assert.equal(after.config.description,
+        "Rival writer wins during recovery");
+      const legacyAfter=await page.evaluate(()=>({
+        active:localStorage.getItem("softwarefactory.project.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Recovery may not change any legacy project slot");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),source.id),saved);
+      console.log("FACTORY_INDEXEDDB_RUNNING_RECOVERY_E2E_PASS: backup, 3 consents, race, reload, no false AI completion");
+    }finally{
+      await recoveryContext.close();
+    }
+
     // #150: A new project can be created directly in the standalone CAS
     // editor, without touching the legacy workspace or first staging a
     // localStorage project. The same never-seen native transaction fences
