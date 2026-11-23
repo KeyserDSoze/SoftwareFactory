@@ -13,3 +13,5 @@ Il backup riporta anche storico AI/Code Agent/test/review/runner/GitHub, che NON
 ## Gate
 
 Unit test \`cas-isolated-tombstone-restore.test.ts\`, test Chromium reale a due schede \`FACTORY_CAS_ROOT_TOMBSTONE_RESTORE_E2E_PASS\`, Factory CI/Pages/Installer candidate completed/success sul medesimo SHA prima della chiusura.
+
+Il test E2E browser aggiunto su main include il marker `FACTORY_CAS_ROOT_TOMBSTONE_RESTORE_E2E_PASS` e verifica che il contenuto di backup storico rimane storico e non diventa attestazione fresh.

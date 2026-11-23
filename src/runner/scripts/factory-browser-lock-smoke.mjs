@@ -4857,6 +4857,145 @@ if (!inside) {
       await externalImportContext.close();
     }
 
+    // #179: FULL historical tombstone restore in CAS-only ROOT. It is not
+    // configuration-only import (#178) and never mounts legacy editor.
+    const rootRestoreContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await rootRestoreContext.newPage();
+      const rival=await rootRestoreContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])await tab.addScriptTag({content:casBundle});
+      const initialLegacy=await page.evaluate(()=>({
+        project:localStorage.getItem("softwarefactory.project.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const creation=panel.getByTestId("cas-isolated-create");
+      await creation.locator("input").fill("Root restore 179");
+      await creation.locator("textarea").fill("Historical full backup");
+      page.once("dialog",d=>void d.accept());
+      await creation.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("Root restore 179",{timeout:15000});
+      const historical=await rival.evaluate(async()=>{
+        const list=await window.FactoryProjectCas.listCasProjects();
+        const before=await window.FactoryProjectCas.readCasProject(list[0].id);
+        const project=JSON.parse(before.raw);
+        project.stages[0].status="complete";
+        project.stages[0].output="HISTORIC_UNVERIFIED_179";
+        project.stages[0].completionOrigin="manual";
+        project.githubTestReceipt={
+          requestId:"OLD_179",repository:"example/old",
+          branch:"main",commitSha:"OLD_SHA_179",
+          createdAt:project.updatedAt,selected:["web-build"],
+        };
+        return await window.FactoryProjectCas.compareAndSwapCasProject(
+          project,before);
+      });
+      const tombstone=await rival.evaluate(snap=>
+        window.FactoryProjectCas.deleteCasProject(snap.id,snap),historical);
+      assert.equal(tombstone.revision,3);
+      const file=panel.getByTestId("cas-isolated-tombstone-restore-file");
+      const upload=(name,content)=>file.setInputFiles({
+        name,mimeType:"application/json",
+        buffer:Buffer.from(content,"utf8"),
+      });
+      await upload("invalid.json","{broken");
+      await expect(panel.getByRole("alert"))
+        .toContainText("Backup non valido");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),historical.id),
+        {state:"tombstone",revision:3});
+
+      page.once("dialog",d=>void d.dismiss());
+      await upload("historical.json",historical.raw);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),historical.id),
+        {state:"tombstone",revision:3},
+        "Refusing the first consent cannot restore an IDB row");
+
+      let approvals=0;
+      const accept=d=>{approvals++;void d.accept();};
+      page.on("dialog",accept);
+      await upload("historical.json",historical.raw);
+      await expect(panel.getByRole("status")).toContainText(
+        "Progetto storico ripristinato",{timeout:15000});
+      page.off("dialog",accept);
+      assert.equal(approvals,2,"Native historical restore needs two consents");
+      const restored=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),historical.id);
+      assert.equal(restored.revision,4);
+      assert.equal(restored.raw,historical.raw,
+        "Restored historical JSON must not be silently rewritten");
+      assert.equal(restored.raw.includes("HISTORIC_UNVERIFIED_179"),true);
+      assert.equal(restored.raw.includes("OLD_SHA_179"),true);
+      await expect(panel.getByRole("status")).toContainText(
+        "NON sono riverificate");
+      assert.equal(await panel.getByTestId("cas-isolated-active").count(),0,
+        "Restored historical evidence must never auto-open or reattest");
+
+      // Rival replaces this exact tombstone during the SECOND consent.
+      const nextTomb=await rival.evaluate(snap=>
+        window.FactoryProjectCas.deleteCasProject(snap.id,snap),restored);
+      assert.equal(nextTomb.revision,5);
+      let seen=0,release;
+      const secondDialog=new Promise(resolve=>{release=resolve;});
+      const onRaceDialog=d=>{
+        seen++;
+        if(seen===1)void d.accept();
+        else release(d);
+      };
+      page.on("dialog",onRaceDialog);
+      const pending=upload("historical.json",historical.raw);
+      const held=await secondDialog;
+      const winner=await rival.evaluate(async ({snapshot,tomb})=>
+        window.FactoryProjectCas.restoreCasTombstoneProject(
+          JSON.parse(snapshot.raw),{id:snapshot.id,revision:tomb.revision},
+          snapshot.raw,true,
+        ),{snapshot:historical,tomb:nextTomb});
+      assert.equal(winner.revision,6);
+      await held.accept();
+      await pending;
+      page.off("dialog",onRaceDialog);
+      assert.equal(seen,2);
+      await expect(panel.getByRole("alert")).toContainText(
+        "ACK incerto",{timeout:15000});
+      const exact=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),historical.id);
+      assert.deepEqual(exact,winner,
+        "Concurrent native winner must never be overwritten on stale consent");
+      const finalLegacy=await page.evaluate(()=>({
+        project:localStorage.getItem("softwarefactory.project.v1"),
+        index:localStorage.getItem("softwarefactory.project.index.v1"),
+        slots:Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))
+          .sort().map(k=>[k,localStorage.getItem(k)]),
+      }));
+      assert.deepEqual(finalLegacy,initialLegacy,
+        "CAS root restore must never mutate the legacy project store");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),historical.id),winner,
+        "Native tombstone generation and historical raw must survive reload");
+      console.log("FACTORY_CAS_ROOT_TOMBSTONE_RESTORE_E2E_PASS: local JSON invalid/declined, historical restore with 2 consents, no auto-open/re-attestation, rival second-dialog fencing, native reload and legacy unchanged");
+    }finally{
+      await rootRestoreContext.close();
+    }
+
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
     // creation or encourage a second new UUID; operator can recover via ID.
