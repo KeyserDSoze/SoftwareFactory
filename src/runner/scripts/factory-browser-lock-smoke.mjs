@@ -506,6 +506,147 @@ if (!inside) {
         "softwarefactory.cas.retired.v1."+id),original.id),retired);
       await oldWriter.close();
 
+      // #175: a retired legacy source can create a NEW native CAS-only
+      // configuration fork. The old legacy slot and same-ID IDB copy stay
+      // untouched. A second CAS tab races us during human final consent.
+      const nativeCleanFork=page.getByTestId("cas-retired-native-fork-start");
+      await expect(nativeCleanFork).toBeEnabled();
+      page.once("dialog",d=>void d.dismiss());
+      await nativeCleanFork.click();
+      assert.equal(new URL(page.url()).searchParams.get("workspace"),null,
+        "Dismissing native clean fork must not switch root");
+      const nativeRival=await handoffContext.newPage();
+      await nativeRival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await nativeRival.addScriptTag({content:casBundle});
+      let nativeRaceDialogs=0, nativeReservedId=null;
+      let nativeReservedSnapshot=null;
+      page.on("dialog",async d=>{
+        nativeRaceDialogs++;
+        if(nativeRaceDialogs===3){
+          const match=d.message().match(/NEW ID: ([0-9a-f-]{36})/i);
+          assert.ok(match,"New CAS fork consent must display fresh UUID");
+          nativeReservedId=match[1];
+          const rivalProject=JSON.parse(original.raw);
+          rivalProject.id=nativeReservedId;
+          rivalProject.config.name="RIVAL_NATIVE_IDB_FORK_175";
+          nativeReservedSnapshot=await nativeRival.evaluate(async raw=>{
+            const candidate=JSON.parse(raw);
+            return window.FactoryProjectCas.compareAndSwapCasProject(
+              candidate,null);
+          },JSON.stringify(rivalProject));
+        }
+        await d.accept();
+      });
+      const nativeRaceBackup=page.waitForEvent("download");
+      await nativeCleanFork.click();
+      const racedBackup=await nativeRaceBackup;
+      assert.equal(racedBackup.suggestedFilename(),
+        "softwarefactory-before-native-clean-fork-"+original.id+".json");
+      assert.equal((await readFile(await racedBackup.path()))
+        .toString("utf8"),original.raw,
+        "Native clean fork must offer exact source JSON even on target race");
+      await expect(page.locator(".alert.error"))
+        .toContainText(/Nuova copia CAS non confermata/i);
+      assert.equal(nativeRaceDialogs,3);
+      assert.deepEqual(await nativeRival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),nativeReservedId),
+        nativeReservedSnapshot,
+        "Native rival must win collision: no overwrite");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),
+        original.id),original.raw);
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.cas.retired.v1."+id),
+        original.id),retired);
+      page.removeAllListeners("dialog");
+      await nativeRival.close();
+
+      // New independent recovery attempt: source is still read-only and
+      // still pinned; native IDB gets a fresh UUID on three consents.
+      let nativeConsents=0;
+      page.on("dialog",async d=>{nativeConsents++;await d.accept();});
+      const nativeBackup=page.waitForEvent("download");
+      const nativeNavigation=page.waitForURL(u=>{
+        const url=new URL(u);
+        return url.searchParams.get("workspace")==="cas" &&
+          url.searchParams.has("casHandoff") &&
+          url.searchParams.get("casHandoff")!==original.id &&
+          url.searchParams.get("casHandoff")!==nativeReservedId;
+      },{timeout:20000});
+      await nativeCleanFork.click();
+      const nativeFile=await nativeBackup;
+      await nativeNavigation;
+      page.removeAllListeners("dialog");
+      const nativeHint=new URL(page.url());
+      const nativeNewId=nativeHint.searchParams.get("casHandoff");
+      assert.ok(nativeNewId);
+      assert.equal(nativeHint.searchParams.get("casRevision"),"1");
+      assert.match(nativeHint.searchParams.get("casDigest"),/^[0-9a-f]{64}$/);
+      assert.equal(nativeConsents,3);
+      assert.equal((await readFile(await nativeFile.path()))
+        .toString("utf8"),original.raw,
+        "Native clean fork still requires exact original raw backup");
+      await expect(page.getByTestId("cas-root-shell")).toBeVisible();
+      await expect(page.getByTestId("cas-root-handoff-hint"))
+        .toContainText(nativeNewId);
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0,
+        "Native clean fork hint must NOT auto-select new CAS project");
+      await page.addScriptTag({content:casBundle});
+      const nativeClean=await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),nativeNewId);
+      assert.equal(nativeClean.revision,1);
+      const nativeCleanBody=JSON.parse(nativeClean.raw);
+      assert.notEqual(nativeCleanBody.id,original.id);
+      assert.notEqual(nativeCleanBody.id,nativeReservedId);
+      assert.deepEqual(nativeCleanBody.config,{
+        ...JSON.parse(original.raw).config,
+        name:JSON.parse(original.raw).config.name+" (recovery)",
+      });
+      assert.deepEqual(nativeCleanBody.stages,
+        JSON.parse(original.raw).stages.map(s=>({
+          id:s.id,label:s.label,status:"pending",output:"",sources:[],
+        })));
+      assert.deepEqual(Object.keys(nativeCleanBody).sort(),[
+        "config","createdAt","id","stages","updatedAt"]);
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),
+        nativeNewId),null,
+        "New native CAS fork must NEVER persist a legacy target");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.project.library.v1."+id),
+        original.id),original.raw,
+        "Native recovery must preserve old legacy source");
+      assert.equal(await page.evaluate(id=>
+        localStorage.getItem("softwarefactory.cas.retired.v1."+id),
+        original.id),retired);
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id)).raw,
+        native.raw,"Historical native same-ID CAS row unchanged");
+
+      // Only a second explicit user approval opens the new CAS revision.
+      const openClean=page.getByTestId("cas-root-handoff-open");
+      const openNativeDialog=page.waitForEvent("dialog",{timeout:15000});
+      const openNativeClick=openClean.click();
+      await (await openNativeDialog).accept();
+      await openNativeClick;
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText(nativeNewId);
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+      // Return to legacy, preserving selected historic retired ID, so the
+      // previous #174 regression can still exercise its alternative fork.
+      page.once("dialog",d=>void d.accept());
+      const returnNative=page.waitForURL(u=>
+        !new URL(u).searchParams.has("workspace") &&
+        !new URL(u).searchParams.has("casHandoff"),
+        {timeout:15000});
+      await page.getByTestId("cas-root-return-action").click();
+      await returnNative;
+      await expect(page.getByTestId("cas-legacy-retired-banner"))
+        .toBeVisible();
+      console.log("FACTORY_RETIRED_LEGACY_TO_NATIVE_CAS_FORK_E2E_PASS: exact legacy JSON backup + 3 consents, fresh native IDB UUID, two-tab final-consent collision safe, zero new legacy slot, all stages pending, no evidence/GitHub binding, unchanged source/marker/old CAS row, CAS-only full reload with untrusted hint and second explicit open");
+
       // #174: retired legacy source can be used ONLY as a configuration
       // blueprint for a NEW UUID. Three consents and exact source backup.
       // A noncooperating second tab must not reserve the target while the
