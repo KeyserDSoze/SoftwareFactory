@@ -198,7 +198,7 @@ describe("retired legacy -> NEW native IndexedDB CAS clean config fork (#175)",(
     let reads=0;
     readNative.mockImplementation(async id=>{
       reads++;
-      if(reads>2)return {state:"tombstone",revision:2};
+      if(reads>=2)return {state:"tombstone",revision:2};
       return nativeRead(id);
     });
     const out=await commitRetiredLegacyToCasFork(ticket,true,()=>true);

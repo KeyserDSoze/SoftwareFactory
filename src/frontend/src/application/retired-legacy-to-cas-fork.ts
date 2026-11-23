@@ -3,7 +3,6 @@
  * historical legacy project's validated non-secret CONFIGURATION only.
  * No original-ID retry, legacy write, local target or cross-store merging.
  */
-import type {FactoryProject} from "../domain/types";
 import {
   prepareRetiredLegacyConfigFork,assertRetiredLegacyForkSource,
   validateRetiredLegacyForkTarget,
@@ -89,8 +88,11 @@ export async function commitRetiredLegacyToCasFork(
     // Handoff hint is a local selector, NOT an auto-open authority:
     // CAS-only root still requires a second explicit operator decision.
     const digest=await casHandoffRawDigest(ticket.target.raw);
-    if(!isStable() || localProjectSnapshot(ticket.source.id)!==
-         ticket.source.raw)
+    // The digest calculation crosses another await: a rival could alter
+    // the marker (or reserve the UUID locally) while it is pending.
+    await assertRetiredLegacyForkSource(ticket.source);
+    assertLocalTargetAbsent(target.id);
+    if(!isStable())
       return {status:"copied_unverified",id:ticket.target.id,revision:1};
     return {
       status:"ready",id:ticket.target.id,revision:1,
