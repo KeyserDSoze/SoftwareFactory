@@ -4920,21 +4920,31 @@ if (!inside) {
         window.FactoryProjectCas.readCasProjectSlot(id),historical.id),
         {state:"tombstone",revision:3});
 
-      page.once("dialog",d=>void d.dismiss());
-      await upload("historical.json",historical.raw);
+      // setInputFiles can resolve BEFORE React's async preflight reaches
+      // window.confirm: wait for and resolve the actual dialog explicitly.
+      const deniedReady=page.waitForEvent("dialog");
+      const deniedUpload=upload("historical.json",historical.raw);
+      const denied=await deniedReady;
+      await denied.dismiss();
+      await deniedUpload;
+      await expect(file).toBeEnabled();
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProjectSlot(id),historical.id),
         {state:"tombstone",revision:3},
         "Refusing the first consent cannot restore an IDB row");
 
-      let approvals=0;
-      const accept=d=>{approvals++;void d.accept();};
-      page.on("dialog",accept);
-      await upload("historical.json",historical.raw);
+      const firstReady=page.waitForEvent("dialog");
+      const acceptedUpload=upload("historical.json",historical.raw);
+      const first=await firstReady;
+      const secondReady=page.waitForEvent("dialog");
+      await first.accept();
+      const second=await secondReady;
+      await second.accept();
+      await acceptedUpload;
       await expect(panel.getByRole("status")).toContainText(
         "Progetto storico ripristinato",{timeout:15000});
-      page.off("dialog",accept);
-      assert.equal(approvals,2,"Native historical restore needs two consents");
+      assert.notEqual(first,second,
+        "Native historical restore requires two distinct dialogs");
       const restored=await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),historical.id);
       assert.equal(restored.revision,4);
@@ -4951,16 +4961,12 @@ if (!inside) {
       const nextTomb=await rival.evaluate(snap=>
         window.FactoryProjectCas.deleteCasProject(snap.id,snap),restored);
       assert.equal(nextTomb.revision,5);
-      let seen=0,release;
-      const secondDialog=new Promise(resolve=>{release=resolve;});
-      const onRaceDialog=d=>{
-        seen++;
-        if(seen===1)void d.accept();
-        else release(d);
-      };
-      page.on("dialog",onRaceDialog);
+      const firstRaceReady=page.waitForEvent("dialog");
       const pending=upload("historical.json",historical.raw);
-      const held=await secondDialog;
+      const firstRace=await firstRaceReady;
+      const secondRaceReady=page.waitForEvent("dialog");
+      await firstRace.accept();
+      const held=await secondRaceReady;
       const winner=await rival.evaluate(async ({snapshot,tomb})=>
         window.FactoryProjectCas.restoreCasTombstoneProject(
           JSON.parse(snapshot.raw),{id:snapshot.id,revision:tomb.revision},
@@ -4969,8 +4975,8 @@ if (!inside) {
       assert.equal(winner.revision,6);
       await held.accept();
       await pending;
-      page.off("dialog",onRaceDialog);
-      assert.equal(seen,2);
+      assert.notEqual(firstRace,held,
+        "Rival race must be inserted between TWO distinct consents");
       await expect(panel.getByRole("alert")).toContainText(
         "ACK incerto",{timeout:15000});
       const exact=await rival.evaluate(id=>
