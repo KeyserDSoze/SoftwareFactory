@@ -231,6 +231,55 @@ export async function listCasProjects(): Promise<CasProjectChoice[]> {
   } finally { db.close(); }
 }
 
+
+/** #181: native read-only tombstone inventory. NOT a restore authorization.
+ * A deleted project keeps ONLY its ID and revision. Never consult legacy.
+ * Snapshot may become stale after a rival tab's write.
+ */
+export const MAX_CAS_TOMBSTONE_INVENTORY = 256;
+
+export async function listCasTombstones(): Promise<ReadonlyArray<CasProjectTombstone>> {
+  const db = await openCasDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const deleted: CasProjectTombstone[] = [];
+      let active = 0;
+      let failure = "Inventario tombstone IndexedDB interrotto.";
+      tx.oncomplete = () => resolve(Object.freeze(
+        deleted.sort((a,b)=>a.id.localeCompare(b.id)),
+      ));
+      tx.onabort = () => reject(Error(failure));
+      tx.onerror = () => reject(Error("Inventario tombstone IndexedDB non riuscito."));
+      const req = tx.objectStore(STORE).openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        try {
+          if (typeof cursor.key !== "string") throw Error("Invalid key");
+          checkId(cursor.key);
+          const row = readRow(cursor.value as unknown,cursor.key);
+          if (!row) throw Error("Missing row");
+          if (row.raw === null) {
+            deleted.push(Object.freeze({id:row.id,revision:row.revision}));
+            if (deleted.length > MAX_CAS_TOMBSTONE_INVENTORY) {
+              failure = "Troppe tombstone IndexedDB: inventario incompleto, recupero manuale richiesto.";
+              tx.abort(); return;
+            }
+          } else if (++active > 40) {
+            failure = "Libreria IndexedDB oltre 40 progetti: inventario non disponibile.";
+            tx.abort(); return;
+          }
+          cursor.continue();
+        } catch {
+          failure = "Archivio IndexedDB corrotto: nessuna lista di tombstone attendibile.";
+          tx.abort();
+        }
+      };
+    });
+  } finally { db.close(); }
+}
+
 export async function compareAndSwapCasProject(
   project: FactoryProject, expected: CasProjectSnapshot | null,
 ): Promise<CasProjectSnapshot> {

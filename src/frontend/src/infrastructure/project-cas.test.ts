@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../domain/defaults";
 import { compareAndSwapCasProject, deleteCasProject, restoreCasTombstoneProject, readCasProject,
-  serializeCasProject, listCasProjects } from "./project-cas";
+  serializeCasProject, listCasProjects, listCasTombstones } from "./project-cas";
 
 describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -45,6 +45,7 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
     const p=createProject();
     await expect(readCasProject(p.id)).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(listCasProjects()).rejects.toThrow(/IndexedDB non disponibile/);
+    await expect(listCasTombstones()).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(compareAndSwapCasProject(p,null)).rejects.toThrow(/IndexedDB non disponibile/);
     await expect(restoreCasTombstoneProject(p,{id:p.id,revision:2},
       serializeCasProject(p),true)).rejects.toThrow(/IndexedDB non disponibile/);
@@ -64,5 +65,28 @@ describe("IndexedDB CAS preflight and fail-closed contracts #138", () => {
       expect(String(e)).toMatch(/IndexedDB CAS/);
       expect(String(e)).not.toContain("NEVER_ECHO_DB_NATIVE_REASON_SECRET");
     }
+  });
+});
+
+
+describe("read-only native tombstone inventory #181",()=>{
+  afterEach(()=>vi.unstubAllGlobals());
+  it("rejects failed indexedDB open without exposing provider secrets or consulting legacy",async()=>{
+    const forbidden=vi.fn(()=>{throw Error("LEGACY_FORBIDDEN");});
+    vi.stubGlobal("localStorage",{getItem:forbidden,setItem:forbidden});
+    vi.stubGlobal("sessionStorage",{getItem:forbidden,setItem:forbidden});
+    vi.stubGlobal("indexedDB",{open:()=>{throw Error("NATIVE_SECRET_181");}});
+    await expect(listCasTombstones()).rejects.toThrow(/IndexedDB CAS/);
+    try{await listCasTombstones();}catch(e){
+      expect(String(e)).not.toContain("NATIVE_SECRET_181");
+    }
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it("requires IndexedDB and never falls back to localStorage",async()=>{
+    vi.stubGlobal("indexedDB",undefined);
+    const legacy=vi.fn();
+    vi.stubGlobal("localStorage",{getItem:legacy});
+    await expect(listCasTombstones()).rejects.toThrow(/IndexedDB non disponibile/);
+    expect(legacy).not.toHaveBeenCalled();
   });
 });
