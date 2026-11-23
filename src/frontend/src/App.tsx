@@ -12,6 +12,8 @@ import {factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas,
   from "./application/cas-root-workspace";
 import {prepareLegacyCasHandoff,commitLegacyCasHandoff}
   from "./application/cas-legacy-handoff";
+import {LEGACY_CAS_RETIREMENT_PREFIX,legacyCasRetirementBlocked}
+  from "./infrastructure/legacy-cas-retirement";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
 import AgentRoleRouter from "./components/AgentRoleRouter";
 import AgentHandoffBoard from "./components/AgentHandoffBoard";
@@ -164,6 +166,9 @@ function LegacyFactoryApp() {
       if (event.storageArea === localStorage && event.key === "softwarefactory.project.index.v1")
         setProjectIndexRevision(v => v + 1);
       if (event.storageArea === localStorage &&
+          event.key === LEGACY_CAS_RETIREMENT_PREFIX + id)
+        setProjectIndexRevision(v => v + 1);
+      if (event.storageArea === localStorage &&
           event.key === "softwarefactory.project.library.v1." + id &&
           event.newValue !== localBaselineRef.current.get(id) &&
           // Storage notifications can arrive after a user-controlled recovery
@@ -190,7 +195,8 @@ function LegacyFactoryApp() {
     const tick = async () => {
       const current = projectRef.current, config = settingsRef.current;
       const git = config.git;
-      if (disposed || inFlight || busyRef.current || Boolean(localConflict) || !config.githubAutoSync ||
+      if (disposed || inFlight || busyRef.current || Boolean(localConflict) ||
+          legacyCasRetirementBlocked(current.id) || !config.githubAutoSync ||
           document.visibilityState === "hidden" || !githubBindingMatches(current, git) ||
           !githubProjectDirty(current, git) || !readSecret("github.pat")) return;
       const key = "softwarefactory.github.outbox." + current.id;
@@ -301,6 +307,9 @@ function LegacyFactoryApp() {
   }, [project]);
   const paths = Object.keys(files).sort();
   const localProjects = useMemo(() => listLocalProjects(), [projectIndexRevision]);
+  // Bad/missing storage permission is fail-closed; the actual store write
+  // path independently checks every mutation (not just the UI state).
+  const legacyRetired=legacyCasRetirementBlocked(project.id);
   function changeProject(nextProject: FactoryProject): boolean {
     if (!writerLeaseRef.current || writerLeaseRef.current.projectId !== nextProject.id) {
       setError("Scrittura rifiutata: il progetto non ha il lock esclusivo della scheda. " +
@@ -371,7 +380,8 @@ function LegacyFactoryApp() {
     }
   }
   function editConfig(change: (config: ProjectConfig) => void) {
-    if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current) return;
+    if (busy || legacyCasRetirementBlocked(projectRef.current.id) ||
+        localConflict || !writerLeaseReady || projectSwitchRef.current) return;
     const config = structuredClone(projectRef.current.config);
     change(config);
     if (!changeProject(invalidateStages(updateConfig(projectRef.current, config)))) return;
@@ -402,6 +412,9 @@ function LegacyFactoryApp() {
   }
   function clearMessages() { setError(""); setNotice(""); }
   async function execute(from: StageId, runAll: boolean) {
+    if (legacyCasRetirementBlocked(projectRef.current.id)) {
+      setError(t(normalizeLocale(settingsRef.current.language),"casRetiredWriteBlocked"));return;
+    }
     if (busy || localConflict || !writerLeaseReady || projectSwitchRef.current) return;
     clearMessages();
     if (!projectRef.current.config.name.trim() || !projectRef.current.config.description.trim()) {
@@ -536,6 +549,9 @@ function LegacyFactoryApp() {
   }
   async function publish() {
     clearMessages();
+    if (legacyCasRetirementBlocked(projectRef.current.id)) {
+      setError(t(normalizeLocale(settingsRef.current.language),"casRetiredWriteBlocked"));return;
+    }
     if (localConflict || !writerLeaseReady || writerLeaseRef.current?.projectId !== projectRef.current.id) {
       setError("Progetto non protetto dal lock locale: non pubblicare finché il controllo di scrittura non è pronto."); return;
     }
@@ -891,6 +907,8 @@ function LegacyFactoryApp() {
       // No inference about whether a prior native IDB write ACKed.
       setError(t(locale,"casHandoffCheckLibrary"));
     }finally{
+      // A native ACK may be ambiguous: never clear or retry the marker.
+      setProjectIndexRevision(v=>v+1);
       casHandoffBusyRef.current=false;
       setBusy(false);setOperation("");
     }
@@ -898,6 +916,9 @@ function LegacyFactoryApp() {
 
   async function recoverLostGithubAck() {
     const active = projectRef.current;
+    if (legacyCasRetirementBlocked(active.id)) {
+      setError(t(normalizeLocale(settingsRef.current.language),"casRetiredWriteBlocked"));return;
+    }
     if (busy || localConflict || !writerLeaseReady ||
         writerLeaseRef.current?.projectId !== active.id) {
       setError("Recupero bloccato: occorre il lock esclusivo del progetto locale.");
@@ -955,6 +976,9 @@ function LegacyFactoryApp() {
     finally { setBusy(false); setOperation(""); }
   }
   async function importFromGithub(mode: "status" | "import") {
+    if (mode==="import" && legacyCasRetirementBlocked(projectRef.current.id)) {
+      setError(t(normalizeLocale(settingsRef.current.language),"casRetiredWriteBlocked"));return;
+    }
     if (busy || localConflict || !writerLeaseReady) return;
     clearMessages(); setBusy(true); setOperation("GitHub import");
     try {
@@ -1013,6 +1037,9 @@ function LegacyFactoryApp() {
     finally { setBusy(false); setOperation(""); }
   }
   function toggleGithubAutoSync(enabled: boolean) {
+    if (enabled && legacyCasRetirementBlocked(projectRef.current.id)) {
+      setError(t(normalizeLocale(settingsRef.current.language),"casRetiredWriteBlocked"));return;
+    }
     if (enabled && (!writerLeaseReady || writerLeaseRef.current?.projectId !== projectRef.current.id)) {
       setError("Autosync non abilitabile senza lock esclusivo della scheda."); return;
     }
@@ -1122,6 +1149,22 @@ function LegacyFactoryApp() {
           </select></label><span className="top-status"><span className={"status-dot " + (busy ? "pulse" : "")} /> {busy ? operation : "Sistema pronto"}</span><button className="icon-button" onClick={() => setTab("connections")} title="Impostazioni"><Settings2 size={18} /></button></div>
       </div>
       <div className="page">
+        {legacyRetired && <section className="panel" role="status"
+          data-testid="cas-legacy-retired-banner">
+          <h3>{t(normalizeLocale(settings.language),"casRetiredTitle")}</h3>
+          <p className="helper">{t(normalizeLocale(settings.language),"casRetiredExplain")}</p>
+          <div className="button-group">
+            <button type="button" className="secondary"
+              data-testid="cas-retired-open-cas"
+              onClick={()=>window.location.assign(factoryWorkspaceUrl(window.location.href,"cas"))}>
+              {t(normalizeLocale(settings.language),"casRetiredOpenCas")}
+            </button>
+            <button type="button" className="secondary"
+              onClick={()=>downloadRecoveryProject(projectRef.current)}>
+              <Download size={15}/>{t(normalizeLocale(settings.language),"casRetiredBackup")}
+            </button>
+          </div>
+        </section>}
         {error && <div className="alert error" role="alert"><ShieldAlert size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {notice && <div className="alert success" role="status"><CheckCircle2 size={18} /><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Chiudi"><X size={17} /></button></div>}
         {tab === "workspace" && <>
@@ -1247,9 +1290,9 @@ function LegacyFactoryApp() {
           </div>
           <div className="two-col">
             <section className="panel"><div className="panel-title"><div><span className="eyebrow">01 / PRODUCT BRIEF</span><h3>La tua prossima applicazione</h3></div><FileText size={20} className="muted" /></div>
-              <label>Nome progetto<input value={project.config.name} disabled={busy} placeholder="Es. Legal Research Platform" onChange={e => editConfig(c => { c.name = e.target.value; })} /></label>
-              <label>Descrizione dell'idea<textarea rows={6} value={project.config.description} disabled={busy} placeholder="Descrivi cosa deve fare l'app, per chi, quali problemi risolve..." onChange={e => editConfig(c => { c.description = e.target.value; })} /></label>
-              <label>Vincoli e requisiti opzionali<textarea rows={3} value={project.config.requirements} disabled={busy} placeholder="Sicurezza, GDPR, mercati, budget, integrazioni..." onChange={e => editConfig(c => { c.requirements = e.target.value; })} /></label>
+              <label>Nome progetto<input value={project.config.name} disabled={busy || legacyRetired} placeholder="Es. Legal Research Platform" onChange={e => editConfig(c => { c.name = e.target.value; })} /></label>
+              <label>Descrizione dell'idea<textarea rows={6} value={project.config.description} disabled={busy || legacyRetired} placeholder="Descrivi cosa deve fare l'app, per chi, quali problemi risolve..." onChange={e => editConfig(c => { c.description = e.target.value; })} /></label>
+              <label>Vincoli e requisiti opzionali<textarea rows={3} value={project.config.requirements} disabled={busy || legacyRetired} placeholder="Sicurezza, GDPR, mercati, budget, integrazioni..." onChange={e => editConfig(c => { c.requirements = e.target.value; })} /></label>
               <div className="panel-footer"><span>Ogni modifica invalida le analisi precedenti.</span><button className="secondary" onClick={() => setTab("stack")}>Configura stack <ArrowRight size={16} /></button></div>
             </section>
             <section className="panel"><div className="panel-title"><div><span className="eyebrow">02 / EXECUTION ENGINE</span><h3>Pipeline intelligente</h3></div><span className="count-pill">{progress}%</span></div>
@@ -1268,7 +1311,7 @@ function LegacyFactoryApp() {
           <SectionHead eyebrow="FACTORY / ORCHESTRATION" title="Pipeline di generazione" text="Ogni agente ha un compito, un output versionabile e uno stato. I risultati sono salvati nel browser al completamento di ogni fase." />
           <div className="toolbar"><div className="toolbar-info"><span className="status-dot" /> {busy ? "Elaborazione in corso: " + operation : completed + " su " + STAGES.length + " step terminati"}</div>
             <div className="button-group">{busy ? <button className="danger-button" onClick={pause}><Pause size={16} /> Interrompi</button> :
-              <button className="primary" disabled={!next} onClick={() => { if (next) void execute(next.id, true); }}><Play size={16} /> {completed ? "Continua" : "Avvia workflow"}</button>}</div></div>
+              <button className="primary" disabled={!next || legacyRetired} onClick={() => { if (next) void execute(next.id, true); }}><Play size={16} /> {completed ? "Continua" : "Avvia workflow"}</button>}</div></div>
           <AgentHandoffBoard project={project} />
           <div className="stage-layout"><div className="stage-list">{STAGES.map((s, i) => <button key={s.id} className={"stage-item " + (selectedStage === s.id ? "selected" : "")} onClick={() => { setSelectedStage(s.id); setEditingOutput(false); }}>
             <span className="stage-num">{String(i + 1).padStart(2, "0")}</span><div><strong>{s.label}</strong><small>{s.detail}</small></div><IconStatus status={project.stages[i].status} /></button>)}</div>
@@ -1291,7 +1334,7 @@ function LegacyFactoryApp() {
           <section className="panel activity-panel"><div className="panel-title"><div><span className="eyebrow">OPERATION LOG</span><h3>Attività della sessione</h3></div><Activity size={20} /></div>
             {runLog.length ? runLog.map((item, i) => <div key={i} className="log-line"><span className="status-dot" /> {item}</div>) : <p className="dimmed">Le attività appariranno qui dopo il primo task. I checkpoint sono salvati nel progetto.</p>}</section>
         </>}
-        {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy || !writerLeaseReady || Boolean(localConflict)}
+        {tab === "code" && <CodeAgentPanel project={project} settings={settings} busy={busy || legacyRetired || !writerLeaseReady || Boolean(localConflict)}
           onBusy={(active, label) => { setBusy(active); setOperation(active ? label || "Code Agent" : ""); }}
           onProjectChange={next => {
             if (!changeProject(next)) throw Error("Modifica Code Agent non persistita: lock locale o conflitto.");
