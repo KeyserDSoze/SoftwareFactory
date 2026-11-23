@@ -348,6 +348,26 @@ export async function readCasLibraryBackupSnapshot(): Promise<CasLibraryBackupSn
 }
 
 
+
+/** #189: read-only, one-transaction empty check for operator preview.
+ * An existing tombstone counts as OCCUPIED; do not infer emptiness from
+ * listCasProjects(), which intentionally excludes deleted rows.
+ */
+export async function inspectCasLibraryTrulyEmpty():Promise<boolean> {
+  const db=await openCasDb();
+  try{
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(STORE,"readonly");
+      let empty=false;
+      tx.oncomplete=()=>resolve(empty);
+      tx.onabort=()=>reject(Error("Preflight archivio IndexedDB interrotto."));
+      tx.onerror=()=>reject(Error("Preflight archivio IndexedDB non riuscito."));
+      const req=tx.objectStore(STORE).openCursor();
+      req.onsuccess=()=>{empty=req.result===null;};
+    });
+  }finally{db.close();}
+}
+
 /** #189: restore a full historical library to a TRULY EMPTY native store.
  * This is one real atomic IndexedDB readwrite transaction, not 40 inserts:
  * any existing active row, tombstone or malformed key rejects EVERYTHING.
