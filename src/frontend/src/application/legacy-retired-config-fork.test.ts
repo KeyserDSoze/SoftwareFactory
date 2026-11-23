@@ -88,7 +88,7 @@ describe("retired legacy clean configuration fork (#174)",()=>{
     expect(items.get(SLOT+ticket.target.id)).toBe(ticket.target.raw);
     expect(items.get(SLOT+p.id)).toBe(raw);
     expect(items.get(LEGACY_CAS_RETIREMENT_PREFIX+p.id)).toBeDefined();
-    expect(locks.size).toBe(0);
+    await vi.waitFor(()=>expect(locks.size).toBe(0));
   });
   it("rejects incorrect marker digest, malformed marker, source changed, running stage",async()=>{
     const {p,raw}=await source();

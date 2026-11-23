@@ -506,6 +506,120 @@ if (!inside) {
         "softwarefactory.cas.retired.v1."+id),original.id),retired);
       await oldWriter.close();
 
+      // #174: retired legacy source can be used ONLY as a configuration
+      // blueprint for a NEW UUID. Three consents and exact source backup.
+      // A noncooperating second tab must not reserve the target while the
+      // human final consent dialog is open, even if it skips Web Locks.
+      const cleanFork=page.getByTestId("cas-retired-fork-start");
+      await expect(cleanFork).toBeEnabled();
+      const initialIds=await page.evaluate(()=>
+        Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1.")));
+      page.once("dialog",d=>void d.dismiss());
+      await cleanFork.click();
+      assert.deepEqual(await page.evaluate(()=>
+        Object.keys(localStorage).filter(k=>
+          k.startsWith("softwarefactory.project.library.v1."))),initialIds,
+        "Declining backup consent must not create a new project");
+      const forkRival=await handoffContext.newPage();
+      await forkRival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      let forkRaceDialogs=0,reservedId=null;
+      page.on("dialog",async dialog=>{
+        forkRaceDialogs++;
+        if(forkRaceDialogs===3){
+          const matched=dialog.message().match(/NEW ID: ([0-9a-f-]{36})/i);
+          assert.ok(matched,"Final clean-fork consent must show target UUID");
+          reservedId=matched[1];
+          await forkRival.evaluate(id=>localStorage.setItem(
+            "softwarefactory.project.library.v1."+id,
+            "RIVAL_RESERVED_TARGET_174"),reservedId);
+        }
+        await dialog.accept();
+      });
+      const raceBackup=page.waitForEvent("download");
+      await cleanFork.click();
+      assert.equal((await readFile(await (await raceBackup).path()))
+        .toString("utf8"),original.raw,
+        "Rival target race must still produce exact original backup");
+      await expect(page.locator(".alert.error"))
+        .toContainText(/NON riprovare|non confermato/i);
+      assert.equal(forkRaceDialogs,3);
+      assert.equal(await forkRival.evaluate(id=>localStorage.getItem(
+        "softwarefactory.project.library.v1."+id),reservedId),
+        "RIVAL_RESERVED_TARGET_174",
+        "Rival target must NOT be overwritten by clean fork");
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.project.library.v1."+id),original.id),original.raw);
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),original.id),retired);
+      page.removeAllListeners("dialog");
+      await forkRival.close();
+
+      // A NEW attempt requires an independently prepared NEW target UUID,
+      // and explicitly acknowledges the saved byte-exact source backup.
+      let cleanConsents=0;
+      page.on("dialog",async d=>{cleanConsents++;await d.accept();});
+      const cleanBackup=page.waitForEvent("download");
+      const forkReload=page.waitForEvent("load",{timeout:20000});
+      await cleanFork.click();
+      const forkFile=await cleanBackup;
+      await forkReload;
+      page.removeAllListeners("dialog");
+      assert.equal(cleanConsents,3,
+        "A clean fork must obtain download/saved/final consents");
+      assert.equal(forkFile.suggestedFilename(),
+        "softwarefactory-before-clean-fork-"+original.id+".json");
+      assert.equal((await readFile(await forkFile.path()))
+        .toString("utf8"),original.raw,
+        "Clean fork backup must preserve byte-exact source including history");
+      const clean=await page.evaluate(()=>{
+        const active=JSON.parse(localStorage.getItem(
+          "softwarefactory.project.v1")||"{}");
+        const raw=localStorage.getItem(
+          "softwarefactory.project.library.v1."+active.id);
+        return {id:active.id,raw,
+          activeTab:sessionStorage.getItem("softwarefactory.project.active-tab.v1"),
+          settings:JSON.parse(localStorage.getItem(
+            "softwarefactory.settings.v1")||"{}")};
+      });
+      assert.notEqual(clean.id,original.id);
+      assert.notEqual(clean.id,reservedId);
+      assert.equal(clean.activeTab,clean.id);
+      assert.ok(clean.raw,"Fresh local project must have confirmed slot");
+      const fresh=JSON.parse(clean.raw),oldProject=JSON.parse(original.raw);
+      assert.deepEqual(fresh.config,{
+        ...oldProject.config,name:oldProject.config.name+" (recovery)",
+      });
+      assert.deepEqual(fresh.stages,oldProject.stages.map(s=>({
+        id:s.id,label:s.label,status:"pending",output:"",sources:[],
+      })));
+      assert.deepEqual(Object.keys(fresh).sort(),[
+        "config","createdAt","id","stages","updatedAt",
+      ]);
+      assert.equal(fresh.githubSync,undefined);
+      assert.equal(fresh.development,undefined);
+      assert.equal(fresh.githubTestReceipt,undefined);
+      assert.equal(fresh.githubDestination,undefined);
+      assert.equal(clean.settings.githubAutoSync,false);
+      assert.equal(clean.settings.git.owner,"");
+      assert.equal(clean.settings.git.repo,"");
+      await expect(page.getByTestId("cas-legacy-retired-banner"))
+        .toHaveCount(0);
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.project.library.v1."+id),original.id),original.raw);
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),original.id),retired);
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas?.readCasProjectSlot(id),
+        original.id))?.state,undefined,
+        "Legacy reload must not execute CAS-only global scripts");
+      await page.addScriptTag({content:casBundle});
+      assert.equal((await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id)).raw,
+        native.raw,"Fork must not change the existing IndexedDB project");
+      console.log("FACTORY_RETIRED_LEGACY_CLEAN_FORK_E2E_PASS: exact source JSON backup + 3 consents, new UUID & pending stages, no historical evidence/GitHub settings, rival target race blocked, original marker and native CAS row unchanged after reload");
+
       // If a non-cooperating native writer modifies the imported copy
       // *after* reload but *before* hinted open, never adopt its new rev.
       const rival=await handoffContext.newPage();
