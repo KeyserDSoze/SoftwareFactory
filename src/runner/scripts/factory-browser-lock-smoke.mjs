@@ -79,6 +79,12 @@ if (!inside) {
       globalName:"FactoryLegacyStore",target:"es2022",
     });
     const legacyStoreBundle=legacyStoreBuild.outputFiles[0].text;
+    const githubAutosyncBuild=await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/application/github-autosync-fence.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryGithubAutosyncFence",target:"es2022",
+    });
+    const githubAutosyncBundle=githubAutosyncBuild.outputFiles[0].text;
 
     // #167: root workspace routing must choose the CAS-only React tree BEFORE
     // the live LegacyFactoryApp can initialize its project, writer lock,
@@ -5642,6 +5648,160 @@ if (!inside) {
       originals.insert.id),"Non-cooperative create winner 186");
       console.log("FACTORY_LEGACY_SECOND_BASELINE_E2E_PASS: 2-tab real localStorage, post-scan rival update+insert denied, original raw retained, unchanged caches, reload recovery, no fictional atomic CAS");
     }finally{await writerRaceContext.close();}
+
+
+    // #188: real Chromium with TWO same-origin tabs and actual localStorage.
+    // The GitHub network is intentionally mocked as an async boundary:
+    // no PAT, remote writes or false provider attestations.
+    const autosyncFenceContext=await browser.newContext();
+    try{
+      const page=await autosyncFenceContext.newPage();
+      const rival=await autosyncFenceContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await page.addScriptTag({content:githubAutosyncBundle});
+      await page.addScriptTag({content:legacyStoreBundle});
+      const fixture=await page.evaluate(()=>{
+        const git={owner:"owner188",repo:"repo188",branch:"main",
+          authMode:"pat",appGateway:"",privateRepo:true};
+        const project={id:"a1880000-1111-4111-8111-111111111188",
+          config:{name:"Exact pinned project 188"},
+          stages:[],updatedAt:"2026-11-23T16:50:00.000Z",
+          createdAt:"2026-11-23T16:50:00.000Z",
+          githubSync:{owner:git.owner,repo:git.repo,branch:git.branch,
+            lastCommit:"a".repeat(40),
+            syncedLocalUpdatedAt:"2026-11-20T16:50:00.000Z",
+            syncedAt:"2026-11-20T16:50:00.000Z"}};
+        window.FactoryLegacyStore.persistProject(project);
+        return {project,git};
+      });
+      const slot="softwarefactory.project.library.v1."+fixture.project.id;
+      const originalRaw=JSON.stringify(fixture.project);
+
+      // Pause while the (mocked) token resolves. A rival tab changes RAW
+      // with IDENTICAL updatedAt, bypassing Web Locks and legacy editor.
+      const duringToken=page.evaluate(async({project,git,slot})=>{
+        const api=window.FactoryGithubAutosyncFence;
+        const pin=api.prepareGithubAutosyncPin(project,git);
+        api.assertGithubAutosyncPin(pin,project,git,true,
+          localStorage.getItem(slot),true);
+        window.__autosyncFenceStage="token";
+        await new Promise(resolve=>{window.__autosyncFenceResume=resolve;});
+        let published=0,blocked=false;
+        try{
+          api.assertGithubAutosyncPin(pin,project,git,true,
+            localStorage.getItem(slot),true);
+          published++;
+        }catch(error){
+          blocked=String(error).includes("Conflitto GitHub autosync");
+        }
+        return {blocked,published};
+      },{...fixture,slot});
+      await page.waitForFunction(()=>window.__autosyncFenceStage==="token");
+      const rivalRaw=await rival.evaluate(({id})=>{
+        const key="softwarefactory.project.library.v1."+id;
+        const p=JSON.parse(localStorage.getItem(key));
+        p.config.name="Rival saved at SAME timestamp 188";
+        const text=JSON.stringify(p);
+        localStorage.setItem(key,text);
+        return text;
+      },{id:fixture.project.id});
+      await page.evaluate(()=>window.__autosyncFenceResume());
+      const afterToken=await duringToken;
+      assert.deepEqual(afterToken,{blocked:true,published:0},
+        "Changed native local RAW after token must prevent ANY GitHub publish");
+      assert.equal(await page.evaluate(k=>localStorage.getItem(k),slot),
+        rivalRaw,"Rival RAW must never be overwritten by stalled autosync");
+
+      // Reset the fixture as an explicit test setup; a second race happens
+      // AFTER remote publish succeeded, immediately BEFORE local ACK.
+      await page.evaluate(({slot,raw})=>localStorage.setItem(slot,raw),
+        {slot,raw:originalRaw});
+      const duringPush=page.evaluate(async({project,git,slot})=>{
+        const api=window.FactoryGithubAutosyncFence;
+        const pin=api.prepareGithubAutosyncPin(project,git);
+        api.assertGithubAutosyncPin(pin,project,git,true,
+          localStorage.getItem(slot),true);
+        await Promise.resolve("mock-token");
+        api.assertGithubAutosyncPin(pin,project,git,true,
+          localStorage.getItem(slot),true);
+        const response={sha:"b".repeat(40),project:{
+          ...project,githubSync:{...project.githubSync,
+            lastCommit:"b".repeat(40),
+            syncedLocalUpdatedAt:project.updatedAt,
+            syncedAt:"2026-11-23T16:51:00.000Z"},
+        }};
+        window.__autosyncFenceStage="push";
+        await new Promise(resolve=>{window.__autosyncFenceResume=resolve;});
+        let acknowledged=false,blocked=false;
+        try{
+          const next=api.prepareGithubAutosyncAck(
+            pin,response,project,window.__autosyncFenceGit ?? git,
+            true,localStorage.getItem(slot),true);
+          window.FactoryLegacyStore.persistProjectIfUnchanged(next,pin.raw);
+          acknowledged=true;
+        }catch(error){
+          blocked=String(error).includes("Conflitto GitHub autosync");
+        }
+        return {blocked,acknowledged};
+      },{...fixture,slot});
+      await page.waitForFunction(()=>window.__autosyncFenceStage==="push");
+      // A changing destination is local session state, not a shared
+      // localStorage string. Mutate that AND simulate another tab's write.
+      await page.evaluate(git=>{window.__autosyncFenceGit={...git,branch:"changed"};},
+        fixture.git);
+      const newRaw=await rival.evaluate(({id})=>{
+        const key="softwarefactory.project.library.v1."+id;
+        const p=JSON.parse(localStorage.getItem(key));
+        p.config.name="Rival edited during completed push";
+        const text=JSON.stringify(p);
+        localStorage.setItem(key,text);
+        return text;
+      },{id:fixture.project.id});
+      await page.evaluate(()=>window.__autosyncFenceResume());
+      const afterPush=await duringPush;
+      assert.deepEqual(afterPush,{blocked:true,acknowledged:false},
+        "A completed remote push cannot ACK newer project or destination");
+      assert.equal(await rival.evaluate(k=>localStorage.getItem(k),slot),
+        newRaw,"A refused ACK must not rewrite the rival source");
+      assert.equal(JSON.parse(newRaw).githubSync.lastCommit,"a".repeat(40),
+        "No false local GitHub ACK after remote push ambiguity");
+
+      // A stable project may ACK one matching SHA, without touching the
+      // historical AI/runner data; second tab sees the durable local result.
+      await page.evaluate(({slot,raw})=>{
+        localStorage.setItem(slot,raw);
+        window.__autosyncFenceGit=undefined;
+      },{slot,raw:originalRaw});
+      const confirmed=await page.evaluate(({project,git,slot})=>{
+        const api=window.FactoryGithubAutosyncFence;
+        const pin=api.prepareGithubAutosyncPin(project,git);
+        const response={sha:"c".repeat(40),project:{
+          ...project,githubSync:{...project.githubSync,
+            lastCommit:"c".repeat(40),
+            syncedLocalUpdatedAt:project.updatedAt,
+            syncedAt:"2026-11-23T16:52:00.000Z"},
+        }};
+        const acknowledged=api.prepareGithubAutosyncAck(
+          pin,response,project,git,true,localStorage.getItem(slot),true);
+        return window.FactoryLegacyStore.persistProjectIfUnchanged(
+          acknowledged,pin.raw);
+      },{...fixture,slot});
+      assert.equal(JSON.parse(confirmed).githubSync.lastCommit,"c".repeat(40));
+      const rivalResult=await rival.evaluate(id=>
+        window.localStorage.getItem("softwarefactory.project.library.v1."+id),
+      fixture.project.id);
+      assert.equal(rivalResult,confirmed,
+        "Stable ACK must be durable and visible to the second tab");
+      await rival.reload({waitUntil:"networkidle"});
+      assert.equal(await rival.evaluate(k=>JSON.parse(localStorage.getItem(k))
+        .githubSync.lastCommit,slot),"c".repeat(40));
+      console.log("FACTORY_GITHUB_AUTOSYNC_PIN_E2E_PASS: real 2-tab RAW changed during token blocks push, destination and rival changed after push blocks ACK, stable matching ACK succeeds, reload preserves it, no GitHub provider calls");
+    }finally{await autosyncFenceContext.close();}
 
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
