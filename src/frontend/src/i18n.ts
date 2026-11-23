@@ -83,6 +83,11 @@ export const messages = {
     casIsoRestoreUnverified: "Ripristino CAS rifiutato o ACK incerto: NON riprovare automaticamente. Controlla la revisione nella libreria e conserva il backup.",
     casIsoRestorePostAck: "Ripristino CAS GIÀ CONFERMATO, ma readback/elenco successivo incerto: NON ripetere! Controlla manualmente questo ID. Le prove storiche non sono riverificate.",
     casIsoRestoreDone: "Progetto storico ripristinato SOLO in IndexedDB, senza apertura automatica. Le vecchie evidenze NON sono riverificate; selezionalo manualmente dalla libreria.",
+    casIsoTombstoneExplain: "Cestino CAS SOLO LETTURA: controlla manualmente gli ID IndexedDB eliminati e le revisioni. Nessun nome o contenuto è recuperato. Per ripristinare serve ancora un BACKUP JSON locale e due conferme; l'elenco non autorizza il ripristino.",
+    casIsoTombstoneScan: "Controlla ID eliminati in IndexedDB",
+    casIsoTombstoneSnapshot: "Istantanea locale: un'altra scheda può modificare queste tombstone. Nessun progetto è stato aperto o ripristinato.",
+    casIsoTombstoneEmpty: "Nessuna tombstone IndexedDB in questa istantanea.",
+
 
     casIsoTitle: "Editor IndexedDB isolato — anteprima",
     casRootEnterTitle: "Apri un workspace IndexedDB senza l'editor legacy",
@@ -451,6 +456,11 @@ export const messages = {
     casIsoRestoreUnverified: "CAS restore rejected or acknowledgement uncertain: DO NOT auto-retry. Inspect the revision in the library and keep the backup.",
     casIsoRestorePostAck: "CAS restore ALREADY ACKNOWLEDGED but later readback/library uncertain: DO NOT retry! Inspect this ID manually. Historical evidence is not reverified.",
     casIsoRestoreDone: "Historical project restored ONLY in IndexedDB without auto-opening. Old evidence is NOT reverified; select it manually from the library.",
+    casIsoTombstoneExplain: "READ-ONLY CAS recycle bin: manually inspect deleted native IndexedDB IDs and revisions. No names or data recovery. An original local JSON BACKUP and two confirmations are still required; this list never authorizes restore.",
+    casIsoTombstoneScan: "Inspect deleted IndexedDB IDs",
+    casIsoTombstoneSnapshot: "Local snapshot: another tab can change these tombstones. No project was opened or restored.",
+    casIsoTombstoneEmpty: "No IndexedDB tombstones in this snapshot.",
+
 
     casIsoTitle: "Isolated IndexedDB editor — preview",
     casRootEnterTitle: "Open an IndexedDB workspace without the legacy editor",

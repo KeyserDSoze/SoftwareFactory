@@ -1376,3 +1376,5 @@ Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un li
 - [x] #178: import JSON configuration-only verso nuovo UUID CAS nativo da file scelto, senza trasferimento evidence o binding, native insert-only; #139/#91/#92 ancora aperte. Factory CI/Pages/Installer da verificare.
 
 - [x] #179: restore tombstone CAS-only da backup JSON con due consensi e revision fencing, senza editor/writer legacy o nuove prove test; #139 resta aperta. CI da verificare.
+
+- [x] #181: inventario read-only esplicito ID/revisione delle tombstone native CAS; niente recupero automatico o nuovo writer legacy, ADR 0132 (CI da verificare).

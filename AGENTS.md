@@ -1309,3 +1309,10 @@ Dal root \`?workspace=cas\`, senza un progetto già selezionato, si può sceglie
 Nel root `?workspace=cas`, con nessun progetto selezionato, l'operatore può scegliere un backup JSON locale (raw oppure envelope recovery v1, massimo 1,5 MB) per **ripristinare un ID IndexedDB già eliminato con tombstone**. Dopo due consensi, il ripristino controlla la generazione della tombstone e usa una transazione CAS IndexedDB. Un ID assente/già presente, una race concorrente o un ACK incerto bloccano auto-retry e fallback. Un readback post-ACK incerto richiede ispezione manuale, non annulla una scrittura già confermata. Niente auto-selezione, localStorage, cloud o push GitHub. **Tutti i checkpoint/test/review/runner/GitHub del backup sono STORICI, non nuove attestazioni**. Non è migrazione completa dei writer legacy né sync multi-device (ADR 0131, #139).
 
 - #179: ripristino root CAS solo da tombstone nativa corrente e file JSON manuale; non riattestare prove né riprovare dopo ACK incerto.
+
+
+## Cestino CAS-only in sola lettura (#181)
+
+Dal percorso `?workspace=cas` il pulsante **Controlla ID eliminati in IndexedDB** legge su richiesta le tombstone native: mostra **soltanto ID e revisione**, non recupera nome, brief, output AI o credenziali. Una scansione in transazione `readonly` valida ogni record e rifiuta archivi corrotti, oltre 40 progetti attivi o oltre 256 tombstone, senza dati parziali. È un'istantanea: un'altra scheda può modificarla. La selezione e le bozze non cambiano. Per riattivare un progetto resta **obbligatorio** il backup JSON originale e il doppio consenso di #179, con revision-fencing nativo; non si fa auto-restore o garbage collection. Non è sync cross-device né cutover dei writer legacy (ADR 0132, #139).
+
+- #181: l'inventario IDB di tombstone è solo readonly e non sostituisce il backup né il consenso revision-fenced di #179.

@@ -28,7 +28,8 @@ import {
 import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
-import {listCasProjects} from "../infrastructure/project-cas";
+import {listCasProjects,listCasTombstones} from "../infrastructure/project-cas";
+import type {CasProjectTombstone} from "../infrastructure/project-cas";
 import {
   prepareCasIsolatedNewProject,confirmCasIsolatedNewProject,
   verifyCasIsolatedCreatedReadback,
@@ -110,6 +111,7 @@ export default function CasIsolatedEditor({
 }:Props) {
   const [expanded,setExpanded]=useState(false);
   const [list,setList]=useState<CasProjectChoice[]|null>(null);
+  const [deleted,setDeleted]=useState<ReadonlyArray<CasProjectTombstone>|null>(null);
   const [snapshot,setSnapshot]=useState<CasProjectSnapshot|null>(null);
   const [draftName,setDraftName]=useState("");
   const [draftDescription,setDraftDescription]=useState("");
@@ -279,7 +281,7 @@ export default function CasIsolatedEditor({
     if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm"))) return;
     active.current=null; setExpanded(false);
     setResumeLink(null);
-    setList(null); setSnapshot(null); setError(""); setNotice("");
+    setList(null); setDeleted(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
     setDraftStack(null);
     setStageToReset("features");setStageToRun("features");
@@ -403,7 +405,7 @@ export default function CasIsolatedEditor({
         setError(t(locale,"casIsoRestoreUnverified")+" ID: "+ticket.id);
         return;
       }
-      setList(null);
+      setList(null);setDeleted(null);
       const restored=" ID: "+saved.id+" (rev. "+saved.revision+")";
       const verified=await verifyCasIsolatedCreatedReadback(
         saved,async id=>(await openCasSelectionController(id)).snapshot(),
@@ -474,6 +476,16 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function scanDeleted():void {
+    if(inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      // Explicit readonly scan; never discard the selection or human drafts.
+      // Clear obsolete results BEFORE an unsuccessful new scan.
+      setDeleted(null);
+      const observations=await listCasTombstones();
+      setDeleted(observations);
+    });
+  }
   function refresh():void {
     if(inFlight.current) return;
     // A ready controller retains its pinned snapshot and draft on refresh.
@@ -483,6 +495,7 @@ export default function CasIsolatedEditor({
     if(resetsSelection && dirty &&
        !window.confirm(t(locale,"casIsoRefreshDirtyConfirm"))) return;
     void run(async()=>{
+      setDeleted(null); // list refresh does not refresh a prior tombstone snapshot
       // Do the read FIRST: if IndexedDB is unavailable, retain even a
       // blocked selected project and its human/Code Agent drafts. An
       // explicit discard consent must not destroy the only draft if read
@@ -565,7 +578,7 @@ export default function CasIsolatedEditor({
       setSnapshot(null);
       setDraftName("");setDraftDescription("");setDraftRequirements("");
         setDraftStack(null);
-      setList(null);
+      setList(null);setDeleted(null);
       // Do not make an already acknowledged delete appear to have failed
       // solely because a later read-only library refresh is unavailable.
       try{setList(await listCasProjects());}catch{setList(null);}
@@ -1154,6 +1167,20 @@ export default function CasIsolatedEditor({
             }}/>
         </label>
       </div>
+      <section data-testid="cas-isolated-tombstone-inventory">
+        <p className="helper">{t(locale,"casIsoTombstoneExplain")}</p>
+        <button type="button" className="secondary"
+          data-testid="cas-tombstone-scan"
+          disabled={working || pipelineRunning}
+          onClick={scanDeleted}>{t(locale,"casIsoTombstoneScan")}</button>
+        {deleted!==null && <div data-testid="cas-tombstone-results">
+          <p className="helper">{t(locale,"casIsoTombstoneSnapshot")}</p>
+          {deleted.length===0 ? <p>{t(locale,"casIsoTombstoneEmpty")}</p> :
+            <ul>{deleted.map(row=><li key={row.id}>
+              <code>{row.id}</code> · rev. {row.revision}
+            </li>)}</ul>}
+        </div>}
+      </section>
       {list!==null && <div data-testid="cas-isolated-library">
         {list.length===0 ? <p>{t(locale,"casIsoEmpty")}</p> :
           <ul>{list.map(choice=><li key={choice.id}>
