@@ -10,7 +10,7 @@ import {
 const SLOT="softwarefactory.project.library.v1.";
 const items=new Map<string,string>();
 const locks=new Set<string>();
-let blockTarget=false,quota=false,afterSource=false;
+let blockTarget=false,quota=false,ackFaultSlot="",ackReadCount=0,slotWrites=0;
 const source=async()=>{
   const p=createProject();
   p.config.name="Recover this project";
@@ -35,13 +35,19 @@ const source=async()=>{
 };
 describe("retired legacy clean configuration fork (#174)",()=>{
   beforeEach(()=>{
-    items.clear();locks.clear();blockTarget=false;quota=false;afterSource=false;
+    items.clear();locks.clear();blockTarget=false;quota=false;
+    ackFaultSlot="";ackReadCount=0;slotWrites=0;
     vi.stubGlobal("localStorage",{
       get length(){return items.size;},
       key:(i:number)=>[...items.keys()][i]??null,
-      getItem:(key:string)=>items.get(key)??null,
+      getItem:(key:string)=>{
+        if(key===ackFaultSlot && items.has(key) && ++ackReadCount===2)
+          return null; // simulated missing ACK after actual slot write
+        return items.get(key)??null;
+      },
       setItem:(key:string,value:string)=>{
         if(quota && key.startsWith(SLOT))throw Error("QUOTA_SECRET");
+        if(key.startsWith(SLOT))slotWrites++;
         items.set(key,value);
       },
     });
@@ -133,6 +139,23 @@ describe("retired legacy clean configuration fork (#174)",()=>{
       .rejects.toThrow(/Spazio locale insufficiente/);
     expect(items.get(SLOT+ticket.target.id)).toBeUndefined();
     expect(items.get(SLOT+p.id)).toBe(raw);
+  });
+  it("never retries an unknown acknowledgement after the target slot was written",async()=>{
+    const {p,raw}=await source();
+    const ticket=await prepareRetiredLegacyConfigFork(p.id);
+    const beforeWrites=slotWrites;
+    ackFaultSlot=SLOT+ticket.target.id;
+    await expect(confirmRetiredLegacyConfigFork(ticket,true,()=>true))
+      .rejects.toThrow(/non confermata/);
+    expect(slotWrites).toBe(beforeWrites+1);
+    expect(items.get(ackFaultSlot)).toBe(ticket.target.raw);
+    expect(items.get(SLOT+p.id)).toBe(raw);
+    expect(items.get(LEGACY_CAS_RETIREMENT_PREFIX+p.id)).toBeDefined();
+    // A brand-new ticket is required for a new attempt; never reuse the
+    // occupied UUID from an unacknowledged insert.
+    await expect(confirmRetiredLegacyConfigFork(ticket,true,()=>true))
+      .rejects.toThrow(/già utilizzato/);
+    expect(slotWrites).toBe(beforeWrites+1);
   });
   it("denies forged target that transfers evidence and blocks missing marker",async()=>{
     const {p}=await source(),ticket=await prepareRetiredLegacyConfigFork(p.id);
