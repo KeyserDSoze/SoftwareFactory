@@ -5370,6 +5370,164 @@ if (!inside) {
       await libraryBackupContext.close();
     }
 
+
+    // #185: selected native revision stays pinned until a human explicitly
+    // reconciles across TWO same-origin tabs. No auto-merge of drafts.
+    const selectedReconcileContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await selectedReconcileContext.newPage();
+      const rival=await selectedReconcileContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      const legacyStart=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const create=panel.getByTestId("cas-isolated-create");
+      await create.locator("input").fill("Root revision 185");
+      await create.locator("textarea").fill("Manual reconciliation");
+      const createConfirm=page.waitForEvent("dialog");
+      const creation=create.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      }).click();
+      await (await createConfirm).accept();
+      await creation;
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("Root revision 185",{timeout:15000});
+      const original=await rival.evaluate(async()=>{
+        const choices=await window.FactoryProjectCas.listCasProjects();
+        return window.FactoryProjectCas.readCasProject(choices[0].id);
+      });
+      const openConfirm=page.waitForEvent("dialog");
+      const opening=panel.getByRole("button",{
+        name:"Apri copia IDB: Root revision 185",
+      }).click();
+      await (await openConfirm).accept();
+      await opening;
+      const action=panel.getByTestId("cas-selected-revision-check-action");
+      const selected=panel.getByTestId("cas-isolated-active");
+      await expect(selected).toContainText("rev. 1");
+      await action.click();
+      await expect(panel.getByRole("status")).toContainText(
+        "Revisione CAS ancora identica");
+      const remote=await rival.evaluate(async snap=>{
+        const p=JSON.parse(snap.raw);
+        p.config.name="Rival revision 185";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,snap);
+      },original);
+      assert.equal(remote.revision,2);
+
+      // New revision inspection must NOT lose a human draft or claim it
+      // was saved, even if there is another valid native writer.
+      const name=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      await name.fill("UNSAVED_DRAFT_185");
+      await action.click();
+      await expect(panel.getByRole("status")).toContainText(
+        "BOZZA non salvata");
+      assert.equal(await name.inputValue(),"UNSAVED_DRAFT_185");
+      await expect(selected).toContainText("rev. 1");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),remote.id),remote);
+      await name.fill("Root revision 185");
+
+      // First consent decline: no download, no adoption.
+      const declineReady=page.waitForEvent("dialog");
+      const declining=action.click();
+      const decline=await declineReady;
+      assert.match(decline.message(),/PRIMA CONFERMA/);
+      await decline.dismiss();
+      await declining;
+      await expect(selected).toContainText("rev. 1");
+
+      // Three distinct human consents: download RAW from the PREVIOUS
+      // revision, confirm actually saved, final adopt exact remote snapshot.
+      const firstReady=page.waitForEvent("dialog");
+      const positive=action.click();
+      const first=await firstReady;
+      const downloadReady=page.waitForEvent("download");
+      const savedReady=page.waitForEvent("dialog");
+      await first.accept();
+      const downloaded=await downloadReady;
+      const saved=await savedReady;
+      assert.match(saved.message(),/SECONDA CONFERMA/);
+      const finalReady=page.waitForEvent("dialog");
+      await saved.accept();
+      const final=await finalReady;
+      assert.match(final.message(),/ULTIMA CONFERMA/);
+      await final.accept();
+      await positive;
+      await expect(panel.getByRole("status")).toContainText(
+        "Revisione CAS concorrente esatta adottata",{timeout:15000});
+      await expect(selected).toContainText("rev. 2");
+      assert.equal(await name.inputValue(),"Rival revision 185");
+      assert.equal(downloaded.suggestedFilename(),
+        "softwarefactory-cas-before-reconcile-"+original.id+"-r1.json");
+      assert.equal((await readFile(await downloaded.path())).toString("utf8"),
+        original.raw,"Old historical backup must be byte-exact, never rival raw");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original.id),remote,
+        "Adopting a revision may not write or reserialize native project");
+
+      // New rival write DURING the FINAL confirmation: no silent rebase.
+      const newer=await rival.evaluate(async snap=>{
+        const p=JSON.parse(snap.raw);p.config.name="Later rival 185";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,snap);
+      },remote);
+      const raceFirstReady=page.waitForEvent("dialog");
+      const racing=action.click();
+      const raceFirst=await raceFirstReady;
+      const raceSavedReady=page.waitForEvent("dialog");
+      await raceFirst.accept();
+      const raceSaved=await raceSavedReady;
+      const raceFinalReady=page.waitForEvent("dialog");
+      await raceSaved.accept();
+      const held=await raceFinalReady;
+      const winner=await rival.evaluate(async snap=>{
+        const p=JSON.parse(snap.raw);p.config.name="Winning rival 185";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,snap);
+      },newer);
+      await held.accept();
+      await racing;
+      await expect(panel.getByRole("alert")).toContainText(
+        "CAMBIATA durante il consenso",{timeout:15000});
+      await expect(selected).toContainText("rev. 2");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),winner.id),winner);
+      assert.equal(await name.inputValue(),"Rival revision 185");
+
+      // An explicit subsequent check discovers a tombstone, suspends the
+      // writable controller, and keeps old raw visible for manual recovery.
+      const tombstone=await rival.evaluate(snap=>
+        window.FactoryProjectCas.deleteCasProject(snap.id,snap),winner);
+      assert.equal(tombstone.revision,5);
+      await action.click();
+      await expect(panel.getByRole("status")).toContainText(
+        "ID CAS ELIMINATO",{timeout:15000});
+      await expect(selected).toContainText("rev. 2");
+      await expect(name).toBeDisabled();
+      await expect(action).toBeDisabled();
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),original.id),
+        {state:"tombstone",revision:5},
+        "Observation must never revive or delete a tombstone");
+      const legacyEnd=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      assert.deepEqual(legacyEnd,legacyStart,
+        "Explicit native revision reconciliation must not touch legacy storage");
+      await page.reload({waitUntil:"networkidle"});
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
+      console.log("FACTORY_CAS_SELECTED_REVISION_RECONCILE_E2E_PASS: unchanged, rival advance, dirty draft preserved, declined consent, exact old JSON backup, 3 consent adopt, final-dialog race, tombstone fail-closed, reload and unchanged legacy");
+    }finally{await selectedReconcileContext.close();}
+
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
     // creation or encourage a second new UUID; operator can recover via ID.
