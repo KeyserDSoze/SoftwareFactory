@@ -1274,3 +1274,10 @@ Il solo pannello CAS isolato può memorizzare un **JSON di patch Code Agent come
 - Solo per handoff completo assistito #171 (NON per la copia preview #141), salvare/verificare il marker per ID DOPO backup raw e tre consensi, PRIMA di inserire in IDB. Marker già presente/corrotto o quota/readback fallito → nessun insert. ACK native incerto → **marker conservato**, nessun rilascio/riprova automatica.
 - I salvataggi legacy cooperativi rileggeranno il marker prima della scrittura per-ID; anche i side effect della pipeline e di GitHub devono essere bloccati dall'interfaccia sul progetto protetto. Il marker non è un CAS cross-store o multi-device e non ferma client vecchi/direct edits.
 - Test reale Chromium (marker FACTORY_CAS_LEGACY_RETIREMENT_E2E_PASS) dopo ritorno dalla route CAS e con un secondo tab che usa lo store legacy; controllare che slot locale e snapshot IDB rimangano invariati. #139/#91/#92 sempre aperte finché manca cutover reale e collaudo remoto.
+
+
+## Fork configurazione da legacy protetto (#174)
+
+- Preflight del fork solo con marker CAS per-ID **valido**: JSON raw canonico identico al digest SHA-256 del marker, stack validato, sei checkpoint consistenti e nessuna fase `running`. Se il vecchio client non ha un marker valido o lo storage è corrotto, nessuna scrittura.
+- UI: backup del raw esatto, conferma che sia salvato e consenso finale su un **NUOVO UUID**. Prima/dopo il Web Lock sul nuovo ID verificare target assente e snapshot/marker originali immutati. `persistProjectIfUnchanged(target, null)` unicamente dopo consenso; ACK incerto non va ritentato.
+- I nuovi stage sono tutti `pending`, senza sviluppo/Code Agent, receipt/runner, GitHub binding o storia. Resettare destinazione GitHub e autosync **prima** di ricaricare sul nuovo progetto. Mai togliere il marker originario o toccare IDB. Test Chromium marker `FACTORY_RETIRED_LEGACY_CLEAN_FORK_E2E_PASS` per backup/tre consensi, secondo tab rival, reload, source e CAS intatti. Questo non completa #139, #91 o #92.

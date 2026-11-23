@@ -1357,3 +1357,8 @@ Recupero mirato dopo crash con un solo stage running privo di esito: backup JSON
 ### #173 — Retirement della copia legacy dopo handoff CAS (23 novembre 2026)
 
 Introduzione di una write fence persistente per-ID prima dell'insert CAS, con verifica del marker, blocco dei writer legacy cooperativi, UI backup/read-only e ingresso CAS, regressioni unit (quota/corruzione/ACK) e Chromium due schede. Non equivale alla conversione di tutti i writer live o a CAS tra i due archivi, né a sincronizzazione cloud. #139, #91, #92 rimangono aperte.
+
+
+### #174 — Fork pulito da snapshot legacy protetto (23 novembre 2026)
+
+Recovery manuale opzionale di un vecchio progetto con barriera CAS #173: backup raw, tre consensi, digest verificato, target UUID nuovo + lock e insert-only localStorage, copia **sola configurazione**, reset degli stage e dei legami GitHub/runner/test, reload sul nuovo workspace. Il progetto storico e la copia IndexedDB restano invariati; collisioni/ACK incerti sono fail-closed. Suite Vitest e Chromium su due tab. **Non** è il cutover completo IndexedDB: #139/#91/#92 restano aperte.
