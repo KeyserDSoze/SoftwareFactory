@@ -14,6 +14,10 @@ import {prepareLegacyCasHandoff,commitLegacyCasHandoff}
   from "./application/cas-legacy-handoff";
 import {prepareRetiredLegacyConfigFork,confirmRetiredLegacyConfigFork}
   from "./application/legacy-retired-config-fork";
+import {prepareRetiredLegacyToCasFork,commitRetiredLegacyToCasFork}
+  from "./application/retired-legacy-to-cas-fork";
+import type {RetiredLegacyToCasTicket}
+  from "./application/retired-legacy-to-cas-fork";
 import {LEGACY_CAS_RETIREMENT_PREFIX,legacyCasRetirementBlocked}
   from "./infrastructure/legacy-cas-retirement";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
@@ -116,6 +120,7 @@ function LegacyFactoryApp() {
   const casRestoreBusyRef = useRef(false);
   const casHandoffBusyRef = useRef(false);
   const retiredForkBusyRef = useRef(false);
+  const retiredCasForkBusyRef = useRef(false);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -917,6 +922,73 @@ function LegacyFactoryApp() {
     }
   }
 
+  /**
+   * #175: explicitly create a CLEAN NEW UUID in IndexedDB. Unlike #174
+   * this makes NO new localStorage project and switches to the CAS-only
+   * root only after a native tx.oncomplete and exact source/readback.
+   */
+  async function forkRetiredLegacyToCas():Promise<void> {
+    if(retiredCasForkBusyRef.current)return;
+    const original=projectRef.current;
+    const locale=normalizeLocale(settingsRef.current.language);
+    let raw:string;
+    try{raw=JSON.stringify(original);}
+    catch{setError(t(locale,"casRetiredNativeBlocked"));return;}
+    const stable=()=>Boolean(
+      projectRef.current===original &&
+      writerLeaseReady && !writerContended &&
+      writerLeaseRef.current?.projectId===original.id &&
+      !projectSwitchRef.current && !casRestoreBusyRef.current &&
+      !casHandoffBusyRef.current && !retiredForkBusyRef.current &&
+      !localConflict && !editingOutput && !runnerVaultPassphrase &&
+      !settingsRef.current.githubAutoSync &&
+      (!busyRef.current || retiredCasForkBusyRef.current) &&
+      localProjectSnapshot(original.id)===raw
+    );
+    let ticket:RetiredLegacyToCasTicket|null=null;
+    try{
+      if(!stable() || !legacyCasRetirementBlocked(original.id))
+        throw Error("Protected legacy source not stable");
+      retiredCasForkBusyRef.current=true;
+      setBusy(true);setOperation(t(locale,"casRetiredNativeBusy"));
+      ticket=await prepareRetiredLegacyToCasFork(original.id);
+      if(!stable() || ticket.source.raw!==raw)
+        throw Error("Protected legacy source stale");
+      if(!window.confirm(t(locale,"casRetiredNativeBackupConsent")+
+         "\nID: "+ticket.source.id))return;
+      const url=URL.createObjectURL(new Blob([ticket.source.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-before-native-clean-fork-"+
+          ticket.source.id+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
+      if(!window.confirm(t(locale,"casRetiredNativeSavedConsent")))return;
+      if(!window.confirm(t(locale,"casRetiredNativeFinalConsent")+
+         "\nNEW ID: "+ticket.target.id))return;
+      if(!stable())throw Error("Source stale after operator consent");
+      const result=await commitRetiredLegacyToCasFork(ticket,true,stable);
+      if(result.status!=="ready" || !result.hint || !stable()){
+        setError(t(locale,"casRetiredNativeUnverified")+
+          " ID: "+result.id);
+        return;
+      }
+      window.location.assign(factoryCasHandoffUrl(
+        window.location.href,result.hint));
+    }catch{
+      // A native tx can have committed despite a lost acknowledgement.
+      // The prepared ID is the ONLY reconciliation hint. Never retry here.
+      setError(t(locale,"casRetiredNativeCheckLibrary")+
+        (ticket?" ID: "+ticket.target.id:""));
+    }finally{
+      retiredCasForkBusyRef.current=false;
+      setBusy(false);setOperation("");
+    }
+  }
+
   async function handoffLegacyToCas():Promise<void> {
     if(casHandoffBusyRef.current)return;
     const original=projectRef.current;
@@ -1243,6 +1315,14 @@ function LegacyFactoryApp() {
                 Boolean(settings.githubAutoSync) || Boolean(runnerVaultPassphrase)}
               onClick={()=>void forkRetiredLegacyConfiguration()}>
               <Plus size={15}/>{t(normalizeLocale(settings.language),"casRetiredForkAction")}
+            </button>
+            <button type="button" className="secondary"
+              data-testid="cas-retired-native-fork-start"
+              disabled={busy || !writerLeaseReady || writerContended ||
+                Boolean(localConflict) || editingOutput ||
+                Boolean(settings.githubAutoSync) || Boolean(runnerVaultPassphrase)}
+              onClick={()=>void forkRetiredLegacyToCas()}>
+              <Plus size={15}/>{t(normalizeLocale(settings.language),"casRetiredNativeAction")}
             </button>
           </div>
         </section>}
