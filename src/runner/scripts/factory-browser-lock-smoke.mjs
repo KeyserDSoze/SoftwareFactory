@@ -574,11 +574,13 @@ if (!inside) {
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id),winner);
       assert.equal(winner.revision,1);
-      assert.ok(await page.evaluate(id=>localStorage.getItem(
-        "softwarefactory.cas.retired.v1."+id),id),
-        "Ambiguous/failed IDB handoff must keep the legacy fence armed");
-      await expect(page.getByTestId("cas-legacy-retired-banner"))
-        .toBeVisible();
+      // The rival inserted BEFORE our post-consent IDB preflight.
+      // No native insert was attempted, so the legacy retirement fence
+      // must NOT be armed for this refused transfer.
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),id),null,
+        "Pre-insert IDB collision must leave legacy unchanged/unretired");
+      assert.equal(await page.getByTestId("cas-legacy-retired-banner").count(),0);
       page.removeAllListeners("dialog");
       // Tombstoned IDs must never be silently resurrected by a stale copy.
       const tomb=await rival.evaluate(async previous=>
