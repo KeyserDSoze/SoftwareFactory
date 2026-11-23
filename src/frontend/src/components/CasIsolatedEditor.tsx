@@ -809,11 +809,15 @@ export default function CasIsolatedEditor({
       try{
         // Compare the actual ZIP with the strict import parser before
         // offering a file; 16M characters can encode to >20MB UTF-8.
-        const bytes=await encodeCasLibraryRecoveryZip({
+        const packed=await encodeCasLibraryRecoveryZip({
           fileName:ticket.fileName,
           projectCount:ticket.snapshot.projects.length,
           files,
         });
+        // BlobPart requires an owned ArrayBuffer (not ArrayBufferLike).
+        // Keep this copy AFTER the restore-parser preflight succeeds.
+        const bytes=new Uint8Array(packed.byteLength);
+        bytes.set(packed);
         downloadUrl=URL.createObjectURL(new Blob([bytes],{
           type:"application/zip",
         }));
