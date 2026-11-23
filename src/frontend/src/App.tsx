@@ -12,6 +12,8 @@ import {factoryWorkspaceMode,factoryWorkspaceUrl,canNavigateLegacyToCas,
   from "./application/cas-root-workspace";
 import {prepareLegacyCasHandoff,commitLegacyCasHandoff}
   from "./application/cas-legacy-handoff";
+import {prepareRetiredLegacyConfigFork,confirmRetiredLegacyConfigFork}
+  from "./application/legacy-retired-config-fork";
 import {LEGACY_CAS_RETIREMENT_PREFIX,legacyCasRetirementBlocked}
   from "./infrastructure/legacy-cas-retirement";
 import RunnerConnectorSetup from "./components/RunnerConnectorSetup";
@@ -113,6 +115,7 @@ function LegacyFactoryApp() {
   const projectSwitchRef = useRef(false);
   const casRestoreBusyRef = useRef(false);
   const casHandoffBusyRef = useRef(false);
+  const retiredForkBusyRef = useRef(false);
   const localBaselineRef = useRef<Map<string,string|null>>(
     new Map([[project.id, safeLocalSnapshot(project.id)]]));
   const settingsRef = useRef(settings);
@@ -844,6 +847,76 @@ function LegacyFactoryApp() {
    * Native insert is NEVER an overwrite/restore of present or tombstoned ID.
    * Source backup is per-ID canonical bytes, not a pretty wrapper.
    */
+  /**
+   * #174: fork only safe config from a PROTECTED historical legacy snapshot.
+   * No old marker removal, no IDB write/retry, no GitHub/project evidence.
+   * Source writer lease stays held throughout operator consents.
+   */
+  async function forkRetiredLegacyConfiguration():Promise<void> {
+    if(retiredForkBusyRef.current)return;
+    const original=projectRef.current;
+    const locale=normalizeLocale(settingsRef.current.language);
+    let captured:string;
+    try{captured=JSON.stringify(original);}
+    catch{setError(t(locale,"casRetiredForkBlocked"));return;}
+    const stable=()=>Boolean(
+      projectRef.current===original &&
+      writerLeaseReady && !writerContended &&
+      writerLeaseRef.current?.projectId===original.id &&
+      !projectSwitchRef.current && !casRestoreBusyRef.current &&
+      !casHandoffBusyRef.current && !localConflict && !editingOutput &&
+      !runnerVaultPassphrase && !settingsRef.current.githubAutoSync &&
+      (!busyRef.current || retiredForkBusyRef.current) &&
+      localProjectSnapshot(original.id)===captured
+    );
+    try{
+      if(!stable() || !legacyCasRetirementBlocked(original.id))
+        throw Error("Source writer not ready");
+      retiredForkBusyRef.current=true;
+      setBusy(true);setOperation(t(locale,"casRetiredForkBusy"));
+      const ticket=await prepareRetiredLegacyConfigFork(original.id);
+      if(!stable() || ticket.source.raw!==captured)
+        throw Error("Source became stale during preflight");
+      if(!window.confirm(t(locale,"casRetiredForkBackupConsent")+
+          "\nID: "+ticket.source.id))return;
+      const url=URL.createObjectURL(new Blob([ticket.source.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-before-clean-fork-"+ticket.source.id+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{setTimeout(()=>URL.revokeObjectURL(url),30000);}
+      if(!window.confirm(t(locale,"casRetiredForkSavedConsent")))return;
+      if(!window.confirm(t(locale,"casRetiredForkFinalConsent")+
+         "\nNEW ID: "+ticket.target.id))return;
+      if(!stable())throw Error("Source changed during consent");
+      const result=await confirmRetiredLegacyConfigFork(ticket,true,stable);
+      if(result.status!=="created"){
+        setError(t(locale,"casRetiredForkUnverified")+" ID: "+result.id);
+        return;
+      }
+      // The exact destination slot has been checked and ACKed. Set safe
+      // per-project publish settings BEFORE reload: the old repository must
+      // not be silently bound to the clean fork.
+      const safeSettings={...settingsRef.current,
+        git:{...DEFAULT_SETTINGS.git},githubAutoSync:false};
+      persistSettings(safeSettings);
+      settingsRef.current=safeSettings;
+      setSettings(safeSettings);
+      window.location.reload();
+    }catch{
+      // A localStorage adapter may commit a target slot before losing its
+      // ACK. Never reuse the ticket or retry from this error handler.
+      setError(t(locale,"casRetiredForkCheckLibrary"));
+    }finally{
+      retiredForkBusyRef.current=false;
+      setBusy(false);setOperation("");
+      setProjectIndexRevision(v=>v+1);
+    }
+  }
+
   async function handoffLegacyToCas():Promise<void> {
     if(casHandoffBusyRef.current)return;
     const original=projectRef.current;
@@ -1162,6 +1235,14 @@ function LegacyFactoryApp() {
             <button type="button" className="secondary"
               onClick={()=>downloadRecoveryProject(projectRef.current)}>
               <Download size={15}/>{t(normalizeLocale(settings.language),"casRetiredBackup")}
+            </button>
+            <button type="button" className="secondary"
+              data-testid="cas-retired-fork-start"
+              disabled={busy || !writerLeaseReady || writerContended ||
+                Boolean(localConflict) || editingOutput ||
+                Boolean(settings.githubAutoSync) || Boolean(runnerVaultPassphrase)}
+              onClick={()=>void forkRetiredLegacyConfiguration()}>
+              <Plus size={15}/>{t(normalizeLocale(settings.language),"casRetiredForkAction")}
             </button>
           </div>
         </section>}
