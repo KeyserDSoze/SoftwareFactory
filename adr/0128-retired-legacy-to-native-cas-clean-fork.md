@@ -1,0 +1,25 @@
+# ADR 0128 — Retired legacy config-only recovery to a NEW native CAS project (#175)
+
+Date: 23 November 2026. Status: accepted as an incremental opt-in cutover milestone, NOT the complete migration of the live Factory (#139).
+
+## Problem
+
+The assisted same-ID legacy→IndexedDB handoff (#171/#173) deliberately arms a persistent localStorage per-ID write barrier before native insertion and cannot safely unlock it on uncertain ACK. ADR 0127 (#174) allows copying **only validated configuration** to a new *legacy* localStorage UUID, but this leaves the operator with another synchronous legacy writer, not a CAS-only workspace. We need an alternative clean recovery that starts fresh in IndexedDB without transferring historical claims or creating another legacy project.
+
+## Decision
+
+Offer a distinct IT/EN banner action on a protected legacy source: **Recover ONLY configuration into a NEW IndexedDB project**. Reuse the #174 strict source and target validation: original raw canonical JSON matching the per-ID marker's SHA-256; stack whitelist (no recognized private-key/PAT/token signatures), coherent six checkpoints with none running; immutable fresh-UUID ticket including source ID/raw/digest and clean target serialized raw. Target has exactly `config`, `createdAt`, `id`, `stages`, `updatedAt`; copy only validated name/description/requirements/frontend/backend/deployment/services and append `(recovery)`. Six stage shells are reset to pending and all development, Code Agent, GitHub destination/sync/test receipt, runner and AI/review assertions are omitted.
+
+No writes before **three explicit operator decisions**: (1) download exact source JSON file (may contain sensitive historical material), (2) acknowledgement of truly saved backup, (3) consent to creating precisely one fresh native IndexedDB-only target ID. Preserve the original source writer lease and check its exact raw before and after all awaits. Also ensure no legacy local slot/retirement marker exists for the new UUID, and IDB target is `missing` both before dialogs and immediately before insertion. These reads are not atomic across storage engines. IndexedDB's native `insertCasProjectNeverSeen` is the only authoritative write: one readwrite transaction, never-seen record, abort on present/tombstoned ID, cap 40 active, quota/versionchange fail-closed, resolve ACK only at transaction `oncomplete`. The original legacy slot, its marker, and any old same-ID CAS copy remain untouched. There is **never** a legacy target setItem, nor an IDB reinsert under the historical ID.
+
+A confirmed native ACK is *not* undone by an observational readback failure. Compare the target ID/revision/serialized raw in a fresh read-only transaction, reread original marker+digest+raw and target local slot, and recheck source UI lease. If anything changes, return `copied_unverified` with new ID, never navigate or auto-retry. If exact, construct an untrusted CAS route hint with ONLY new target ID, revision 1 and SHA-256 digest, and **full reload** the CAS-only React root (no legacy editor/lock/GitHub/cloud effects mounted). The root requires a SECOND human consent before opening the hinted project. Missing/blocked IDB, concurrent target writer and lost native ACK leave the operator to inspect the IDB library and backup manually.
+
+## Limits
+
+This is a one-off *fork* to a fresh independent project, not continuation or rewriting of historical stages, no old ID unlocking, no synchronous↔async live editor cutover, no automatic cross-store merge, no multi-device/global CAS, no GitHub publication/test or cloud restoration. A preflight on legacy target absence is only cooperative; old clients/extensions or separate devices can still race outside the native transaction. The full set of live Factory, Code Agent, GitHub import/ACK and cloud restore writes remains in #139, provider security #91/#92 independently open. The existing #174 local clean fork stays available, not replaced.
+
+## Verification
+
+Vitest: source digest/marker corruption/stale, missing consents, ticket evidence tampering, target present/tombstone/local collision, native collision/lost ACK (no retry), post-ACK source or readback drift suppresses navigation. Native atomic insert and quota/capacity/versionchange semantics are already covered by project-cas unit and Chromium integration tests. Browser Chromium (#175): a second tab inserts the proposed target during final consent; the operation refuses without replacing that row; new attempt with fresh UUID downloads byte-exact legacy backup and gets three consents, creates IDB-only baseline, no new local slot, preserves source/marker/old same-ID native row, reloads CAS-only with ID/rev/digest hint but no automatic project selection, then an explicit second consent opens the CAS project. Marker `FACTORY_RETIRED_LEGACY_TO_NATIVE_CAS_FORK_E2E_PASS`.
+
+Before closing #175 verify the **same final SHA** Factory CI, Pages and Installer candidate `completed/success`; installer packaging/publishing may be skipped when immutable release tag exists, which is not a fresh release. 

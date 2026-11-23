@@ -1362,3 +1362,8 @@ Introduzione di una write fence persistente per-ID prima dell'insert CAS, con ve
 ### #174 — Fork pulito da snapshot legacy protetto (23 novembre 2026)
 
 Recovery manuale opzionale di un vecchio progetto con barriera CAS #173: backup raw, tre consensi, digest verificato, target UUID nuovo + lock e insert-only localStorage, copia **sola configurazione**, reset degli stage e dei legami GitHub/runner/test, reload sul nuovo workspace. Il progetto storico e la copia IndexedDB restano invariati; collisioni/ACK incerti sono fail-closed. Suite Vitest e Chromium su due tab. **Non** è il cutover completo IndexedDB: #139/#91/#92 restano aperte.
+
+
+### #175 — Clean recovery da legacy protetto verso IndexedDB nativo (23 novembre 2026)
+
+Milestone opt-in #139: dalla sorgente retired #173 valida, un nuovo UUID IDB con **solo** configurazione/brief/requisiti, sei stage vuoti, backup raw e tre consensi, transazione native insert-only e readback. Route CAS-only su ACK esatto (seconda apertura esplicita); originale legacy/marker e copia CAS same-ID intatti. Nessun nuovo progetto localStorage né trasferimento di GitHub/Code Agent/runner/test evidence. Unit + due tab Chromium, ADR 0128. Restano da migrare i writer live #139 e integrazioni #91/#92.
