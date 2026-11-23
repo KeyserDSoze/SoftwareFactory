@@ -1367,3 +1367,8 @@ Recovery manuale opzionale di un vecchio progetto con barriera CAS #173: backup 
 ### #175 — Clean recovery da legacy protetto verso IndexedDB nativo (23 novembre 2026)
 
 Milestone opt-in #139: dalla sorgente retired #173 valida, un nuovo UUID IDB con **solo** configurazione/brief/requisiti, sei stage vuoti, backup raw e tre consensi, transazione native insert-only e readback. Route CAS-only su ACK esatto (seconda apertura esplicita); originale legacy/marker e copia CAS same-ID intatti. Nessun nuovo progetto localStorage né trasferimento di GitHub/Code Agent/runner/test evidence. Unit + due tab Chromium, ADR 0128. Restano da migrare i writer live #139 e integrazioni #91/#92.
+
+
+### #176 — Link CAS-only di ripresa a revisione esatta (23 novembre 2026)
+
+Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un link origin/path + ID/revisione/SHA-256 soltanto dopo doppio readback native; nessun token, progetto raw o vecchio parametro OAuth nell'URL. Reload CAS-only senza auto-apertura, conferma di apertura e controllo stale su seconda tab. Unit e Chromium dedicati, ADR 0129. **Non è** sync cloud/multi-device e non converte editor live #139.
