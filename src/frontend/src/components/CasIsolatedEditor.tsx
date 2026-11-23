@@ -66,6 +66,8 @@ import {
   prepareCasIsolatedExport,confirmCasIsolatedExport,
 } from "../application/cas-isolated-export";
 import {prepareCasIsolatedSourceZip} from "../application/cas-isolated-source-zip";
+import {prepareCasSelectedRevisionReconcile,confirmCasSelectedRevisionReconcile}
+  from "../application/cas-selected-revision-reconcile";
 import {prepareCasLibraryRecoveryBundle,confirmCasLibraryRecoveryBundle}
   from "../application/cas-library-recovery-bundle";
 import {
@@ -488,6 +490,89 @@ export default function CasIsolatedEditor({
       setDeleted(observations);
     });
   }
+  function recheckSelectedRevision():void {
+    if(inFlight.current || pipelineRunning || !onRequestLegacy)return;
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         !exact(controller.snapshot(),expected)){
+        setError(t(locale,"casRevisionCheckUnavailable"));return;
+      }
+      let checked;
+      try{
+        // Always a manually triggered, native-only readonly inspection.
+        checked=await prepareCasSelectedRevisionReconcile(expected);
+      }catch{
+        setError(t(locale,"casRevisionCheckUnavailable"));return;
+      }
+      const identity=" ID: "+expected.id+" / rev. "+expected.revision;
+      if(checked.state==="unchanged"){
+        setNotice(t(locale,"casRevisionCheckUnchanged")+identity);
+        return;
+      }
+      if(checked.state==="tombstone" || checked.state==="missing"){
+        // A lost/deleted native row cannot remain a writable selection.
+        // The previous raw remains on screen for manual historical recovery.
+        active.current=null;setList(null);setResumeLink(null);
+        setNotice(t(locale,checked.state==="tombstone"?
+          "casRevisionCheckDeleted":"casRevisionCheckMissing")+identity);
+        return;
+      }
+      if(dirty){
+        // User draft wins over any automatic rebase. CAS commit still fences
+        // the stale snapshot; no overwrite of the rival or silent discard.
+        setNotice(t(locale,"casRevisionCheckDirty")+
+          identity+" / rev. "+checked.next.revision);
+        return;
+      }
+      const stable=()=>controller===active.current &&
+        controller.state()==="ready" &&
+        resumeView.current.snapshot===expected &&
+        !resumeView.current.dirty && !resumeView.current.pipelineRunning &&
+        exact(controller.snapshot(),expected);
+      if(!stable())return;
+      if(!window.confirm(t(locale,"casRevisionCheckBackupConsent")+
+        "\n"+identity+" → rev. "+checked.next.revision))return;
+      // Backup the PINNED old raw, not silently a new rival version.
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      try{
+        const link=document.createElement("a");
+        link.href=url;
+        link.download="softwarefactory-cas-before-reconcile-"+
+          expected.id+"-r"+expected.revision+".json";
+        document.body.appendChild(link);link.click();link.remove();
+      }finally{
+        setTimeout(()=>URL.revokeObjectURL(url),30000);
+      }
+      if(!window.confirm(t(locale,"casRevisionCheckSavedConsent")))return;
+      if(!window.confirm(t(locale,"casRevisionCheckFinalConsent")+
+        "\n"+identity+" → rev. "+checked.next.revision))return;
+      try{
+        if(!stable())
+          throw Error("CAS UI changed during explicit rebase consent");
+        const next=await confirmCasSelectedRevisionReconcile(
+          checked,true,stable);
+        // This SECOND native read also fences a rival between the final
+        // confirmed readonly inspection and newly opened CAS editor session.
+        const opened=await openCasSelectionController(expected.id);
+        if(!stable() || !exact(opened.snapshot(),next))
+          throw Error("Selected CAS revision changed before adopt");
+        active.current=opened;
+        accept(next);
+        setList(null);setDeleted(null);
+        setNotice(t(locale,"casRevisionCheckAdopted")+
+          " ID: "+next.id+" / rev. "+next.revision);
+      }catch{
+        // No automatic retry or force-sync. Never claim the old revision
+        // is gone; it is still pinned in the original UI until explicit
+        // operator reconciliation is repeated.
+        setError(t(locale,"casRevisionCheckStale")+identity);
+      }
+    });
+  }
+
   function refresh():void {
     if(inFlight.current) return;
     // A ready controller retains its pinned snapshot and draft on refresh.
@@ -1256,6 +1341,16 @@ export default function CasIsolatedEditor({
       {snapshot && <div data-testid="cas-isolated-active">
         <p><strong>{t(locale,"casIsoSelected")}</strong> ·
           rev. {snapshot.revision} · {snapshot.id}</p>
+        {onRequestLegacy && <div data-testid="cas-selected-revision-check">
+          <p className="helper">{t(locale,"casRevisionCheckExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-selected-revision-check-action"
+            disabled={working || pipelineRunning ||
+              active.current?.state()!=="ready"}
+            onClick={recheckSelectedRevision}>
+            {t(locale,"casRevisionCheckAction")}
+          </button>
+        </div>}
         {onRequestLegacy && <div data-testid="cas-revision-resume">
           <p className="helper">{t(locale,"casResumeExplain")}</p>
           <button type="button" className="secondary"
