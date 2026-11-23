@@ -1089,3 +1089,8 @@ Aprendo quell'URL, la pagina CAS-only **non apre alcun progetto automaticamente*
 ## Import configurazione da JSON nel solo workspace CAS (#178)
 
 Dal root \`?workspace=cas\`, senza un progetto già selezionato, si può scegliere **manualmente** un JSON progetto canonico (massimo 1 MB) e confermare la creazione di un **nuovo UUID** IndexedDB. Vengono copiati soltanto nome, descrizione, requisiti e configurazione stack; le sei fasi ripartono vuote. Nessuna evidence Code Agent/runner/test, storia AI, destinazione/consenso GitHub o token è importata, e la nuova copia si apre solo tramite scelta esplicita dalla libreria. L'archivio originale rimane immutato; conservare il backup. Errori/collisioni/ACK incerti non autorizzano retry automatico. Non è una migrazione legacy dell'intero editor né sincronizzazione fra dispositivi (ADR 0130, #139).
+
+
+## Ripristino tombstone direttamente nel workspace CAS (#179)
+
+Nel root `?workspace=cas`, con nessun progetto selezionato, l'operatore può scegliere un backup JSON locale (raw oppure envelope recovery v1, massimo 1,5 MB) per **ripristinare un ID IndexedDB già eliminato con tombstone**. Dopo due consensi, il ripristino controlla la generazione della tombstone e usa una transazione CAS IndexedDB. Un ID assente/già presente, una race concorrente o un ACK incerto bloccano auto-retry e fallback. Un readback post-ACK incerto richiede ispezione manuale, non annulla una scrittura già confermata. Niente auto-selezione, localStorage, cloud o push GitHub. **Tutti i checkpoint/test/review/runner/GitHub del backup sono STORICI, non nuove attestazioni**. Non è migrazione completa dei writer legacy né sync multi-device (ADR 0131, #139).

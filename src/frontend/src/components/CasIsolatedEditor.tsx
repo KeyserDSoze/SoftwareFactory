@@ -8,6 +8,9 @@ import {matchesCasHandoffHint} from "../application/cas-root-workspace";
 import {prepareCasRevisionResumeLink} from "../application/cas-revision-resume";
 import {prepareCasExternalConfigImport,confirmCasExternalConfigImport}
   from "../application/cas-external-config-import";
+import {prepareCasIsolatedTombstoneRestore,confirmCasIsolatedTombstoneRestore}
+  from "../application/cas-isolated-tombstone-restore";
+import {MAX_CAS_RESTORE_FILE_BYTES} from "../infrastructure/project-cas-restore-file";
 import type {CasRevisionResumeLink} from "../application/cas-revision-resume";
 import type {CasHandoffHint} from "../application/cas-root-workspace";
 import {strToU8,zipSync} from "fflate";
@@ -367,6 +370,53 @@ export default function CasIsolatedEditor({
       }catch{
         setList(null);
         setNotice(t(locale,"casIsoCreateReadbackWarning")+identity);
+      }
+    });
+  }
+  function restoreDeletedCasBackup(file:File):void {
+    if(snapshot || active.current || inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      if(snapshot || active.current || file.size===0 ||
+         file.size>MAX_CAS_RESTORE_FILE_BYTES ||
+         !file.name.toLowerCase().endsWith(".json")){
+        setError(t(locale,"casIsoRestoreInvalid"));return;
+      }
+      let ticket;
+      try{
+        // Local backup only, then read-only native tombstone preflight.
+        ticket=await prepareCasIsolatedTombstoneRestore(await file.text());
+      }catch{
+        setError(t(locale,"casIsoRestoreInvalid"));return;
+      }
+      if(active.current || snapshot)return;
+      const identity=" ID: "+ticket.id+
+        " / tombstone rev. "+ticket.tombstone.revision;
+      if(!window.confirm(t(locale,"casIsoRestoreFirstConfirm")+
+         "\n"+ticket.name.slice(0,120)+"\n"+identity))return;
+      if(!window.confirm(t(locale,"casIsoRestoreFinalConfirm")+
+         "\n"+identity))return;
+      let saved:CasProjectSnapshot;
+      try{
+        saved=await confirmCasIsolatedTombstoneRestore(ticket,true);
+      }catch{
+        // Native race/ambiguous acknowledgement: no silent rebase or retry.
+        setError(t(locale,"casIsoRestoreUnverified")+" ID: "+ticket.id);
+        return;
+      }
+      setList(null);
+      const restored=" ID: "+saved.id+" (rev. "+saved.revision+")";
+      const verified=await verifyCasIsolatedCreatedReadback(
+        saved,async id=>(await openCasSelectionController(id)).snapshot(),
+      );
+      if(!verified){
+        setNotice(t(locale,"casIsoRestorePostAck")+restored);return;
+      }
+      try{
+        setList(await listCasProjects());
+        setNotice(t(locale,"casIsoRestoreDone")+restored);
+      }catch{
+        setList(null);
+        setNotice(t(locale,"casIsoRestorePostAck")+restored);
       }
     });
   }
@@ -1088,6 +1138,19 @@ export default function CasIsolatedEditor({
               const file=e.currentTarget.files?.[0];
               e.currentTarget.value="";
               if(file)importBackupFile(file);
+            }}/>
+        </label>
+      </div>
+      <div data-testid="cas-isolated-tombstone-restore">
+        <p className="helper">{t(locale,"casIsoRestoreExplain")}</p>
+        <label>{t(locale,"casIsoRestoreLabel")}
+          <input type="file" accept=".json,application/json"
+            data-testid="cas-isolated-tombstone-restore-file"
+            disabled={working || Boolean(snapshot) || pipelineRunning}
+            onChange={e=>{
+              const file=e.currentTarget.files?.[0];
+              e.currentTarget.value="";
+              if(file)restoreDeletedCasBackup(file);
             }}/>
         </label>
       </div>
