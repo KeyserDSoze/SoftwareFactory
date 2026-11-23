@@ -280,6 +280,73 @@ export async function listCasTombstones(): Promise<ReadonlyArray<CasProjectTombs
   } finally { db.close(); }
 }
 
+
+/** #183: a consistent, bounded, *read-only* whole-library recovery snapshot.
+ * One IDB readonly transaction observes ALL active rows + tombstones together.
+ * No legacy index, credentials, GitHub, cloud or on-mount enumeration.
+ * Tombstones carry only ID/revision: deleted payloads are NOT recoverable.
+ */
+export const MAX_CAS_LIBRARY_BACKUP_CHARS = 16_000_000;
+export type CasLibraryBackupSnapshot = Readonly<{
+  projects: ReadonlyArray<CasProjectSnapshot>;
+  tombstones: ReadonlyArray<CasProjectTombstone>;
+}>;
+
+export async function readCasLibraryBackupSnapshot(): Promise<CasLibraryBackupSnapshot> {
+  const db=await openCasDb();
+  try{
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(STORE,"readonly");
+      const projects:CasProjectSnapshot[]=[];
+      const tombstones:CasProjectTombstone[]=[];
+      let chars=0;
+      let failure="Snapshot di recupero IndexedDB interrotto.";
+      tx.oncomplete=()=>resolve(Object.freeze({
+        projects:Object.freeze(projects.sort((a,b)=>a.id.localeCompare(b.id))),
+        tombstones:Object.freeze(tombstones.sort((a,b)=>a.id.localeCompare(b.id))),
+      }));
+      tx.onabort=()=>reject(Error(failure));
+      tx.onerror=()=>reject(Error("Snapshot di recupero IndexedDB non riuscito."));
+      const request=tx.objectStore(STORE).openCursor();
+      request.onsuccess=()=>{
+        const cursor=request.result;
+        if(!cursor)return;
+        try{
+          if(typeof cursor.key!=="string")throw Error("Invalid native key");
+          checkId(cursor.key);
+          const row=readRow(cursor.value as unknown,cursor.key);
+          if(!row)throw Error("Missing native row");
+          if(row.raw===null){
+            tombstones.push(Object.freeze({id:row.id,revision:row.revision}));
+            if(tombstones.length>MAX_CAS_TOMBSTONE_INVENTORY){
+              failure="Troppe tombstone IndexedDB: backup completo impossibile.";
+              tx.abort();return;
+            }
+          }else{
+            // Canonical raw is mandatory: a pretty-printed or corrupted row
+            // cannot become a quietly normalized/different recovery file.
+            const parsed=JSON.parse(row.raw) as FactoryProject;
+            if(serializeCasProject(parsed)!==row.raw)
+              throw Error("Noncanonical project");
+            chars+=row.raw.length;
+            projects.push(Object.freeze({
+              id:row.id,revision:row.revision,raw:row.raw,
+            }));
+            if(projects.length>40 || chars>MAX_CAS_LIBRARY_BACKUP_CHARS){
+              failure="Libreria IndexedDB oltre il limite backup completo (40 progetti / 16M caratteri).";
+              tx.abort();return;
+            }
+          }
+          cursor.continue();
+        }catch{
+          failure="Archivio IndexedDB corrotto: nessun backup parziale consentito.";
+          tx.abort();
+        }
+      };
+    });
+  }finally{db.close();}
+}
+
 export async function compareAndSwapCasProject(
   project: FactoryProject, expected: CasProjectSnapshot | null,
 ): Promise<CasProjectSnapshot> {
