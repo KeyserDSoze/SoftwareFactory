@@ -5002,6 +5002,177 @@ if (!inside) {
       await rootRestoreContext.close();
     }
 
+
+    // #181: manual readonly tombstone inventory, with same-origin rival
+    // writes, corrupt rows and no implicit historical data resurrection.
+    const tombInventoryContext=await browser.newContext();
+    try {
+      const page=await tombInventoryContext.newPage();
+      const rival=await tombInventoryContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])await tab.addScriptTag({content:casBundle});
+      const legacyStart=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      const setup=await rival.evaluate(async()=>{
+        const base={stages:[],updatedAt:"2026-11-23T14:00:00.000Z"};
+        const removed={...base,id:"a1111111-1111-4111-8111-111111111181",
+          config:{name:"SECRET_DELETED_NAME_181",description:"PRIVATE_DELETED_CONTENT_181"}};
+        const active={...base,id:"b1111111-1111-4111-8111-111111111181",
+          config:{name:"Active 181",description:"Keep unsaved draft"}};
+        const native=window.FactoryProjectCas;
+        const saved=await native.compareAndSwapCasProject(removed,null);
+        const tombstone=await native.deleteCasProject(removed.id,saved);
+        await native.compareAndSwapCasProject(active,null);
+        return {removed,active,tombstone};
+      });
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const scan=panel.getByTestId("cas-tombstone-scan");
+      const results=panel.getByTestId("cas-tombstone-results");
+      assert.equal(await results.count(),0,
+        "Tombstone inventory must not auto-scan on root/panel mount");
+      await scan.click();
+      await expect(results).toContainText(setup.removed.id);
+      await expect(results).toContainText("rev. 2");
+      const onlyMetadata=await results.textContent();
+      assert.ok(!onlyMetadata.includes("SECRET_DELETED_NAME_181"));
+      assert.ok(!onlyMetadata.includes("PRIVATE_DELETED_CONTENT_181"));
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),setup.removed.id),
+        {state:"tombstone",revision:2},
+        "Read-only listing must not restore the deleted project");
+      const nativeSnapshot=await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasTombstones());
+      assert.deepEqual(nativeSnapshot,[setup.tombstone]);
+
+      // The cached list is an observation, not a lease: rival restore makes
+      // it stale. Only another HUMAN click can obtain new inventory.
+      const alive=await rival.evaluate(async({removed,tombstone})=>{
+        const n=window.FactoryProjectCas;
+        return n.restoreCasTombstoneProject(
+          removed,tombstone,JSON.stringify(removed),true,
+        );
+      },setup);
+      assert.equal(alive.revision,3);
+      await expect(results).toContainText("rev. 2");
+      await scan.click();
+      await expect(results).toContainText("Nessuna tombstone IndexedDB");
+      const again=await rival.evaluate(snapshot=>
+        window.FactoryProjectCas.deleteCasProject(snapshot.id,snapshot),alive);
+      assert.equal(again.revision,4);
+      await scan.click();
+      await expect(results).toContainText("rev. 4");
+
+      // A selected project with an UNSAVED human draft must not be discarded
+      // when viewing tombstones, nor should the scan rebase its CAS token.
+      await panel.getByRole("button",{
+        name:"Ricarica libreria IndexedDB (non cambia la revisione selezionata)",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("Active 181");
+      const selectReady=page.waitForEvent("dialog");
+      const select=panel.getByRole("button",{
+        name:"Apri copia IDB: Active 181",
+      }).click();
+      await (await selectReady).accept();
+      await select;
+      const projectName=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      await projectName.fill("Unsaved draft INVENTORY 181");
+      await scan.click();
+      await expect(results).toContainText(setup.removed.id);
+      assert.equal(await projectName.inputValue(),
+        "Unsaved draft INVENTORY 181");
+      await expect(panel.getByTestId("cas-isolated-active"))
+        .toContainText(setup.active.id);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),setup.active.id),
+        {state:"present",snapshot:{
+          id:setup.active.id,revision:1,raw:JSON.stringify(setup.active),
+        }},"Inventory must not persist a human draft");
+
+      // A corrupt native row MUST abort the entire inventory, not return
+      // the previously known valid tombstone as an incomplete list.
+      await rival.evaluate(async()=>{
+        const id="c1111111-1111-4111-8111-111111111181";
+        const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+        const db=await new Promise((resolve,reject)=>{
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(request.error);
+        });
+        try{
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;
+            tx.onabort=()=>reject(tx.error);
+            tx.objectStore("projects").put({id,revision:0,raw:null},id);
+          });
+        }finally{db.close();}
+      });
+      await scan.click();
+      await expect(panel.getByRole("alert")).toBeVisible();
+      assert.equal(await results.count(),0,
+        "Corrupt native rows must not yield partial tombstone inventory");
+      assert.equal(await projectName.inputValue(),
+        "Unsaved draft INVENTORY 181",
+        "Failed readonly scan must not lose selected human draft");
+
+      // A clean fresh context checks count cap independently: 257 valid
+      // tombstones must fail closed rather than silently truncating at 256.
+      const overfull=await browser.newContext();
+      try{
+        const overflow=await overfull.newPage();
+        await overflow.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"});
+        await overflow.addScriptTag({content:casBundle});
+        await overflow.evaluate(async()=>{
+          const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+          const db=await new Promise((resolve,reject)=>{
+            request.onsuccess=()=>resolve(request.result);
+            request.onerror=()=>reject(request.error);
+          });
+          try {
+            await new Promise((resolve,reject)=>{
+              const tx=db.transaction("projects","readwrite");
+              tx.oncomplete=resolve;
+              tx.onabort=()=>reject(tx.error);
+              const store=tx.objectStore("projects");
+              for(let i=0;i<257;i++){
+                const id="d"+String(i).padStart(7,"0")+
+                  "-1111-4111-8111-111111111181";
+                store.put({id,revision:2,raw:null},id);
+              }
+            });
+          }finally{db.close();}
+        });
+        let overflowError="";
+        try{await overflow.evaluate(()=>
+          window.FactoryProjectCas.listCasTombstones());}
+        catch(error){overflowError=String(error);}
+        assert.match(overflowError,/Troppe tombstone/,
+          "Over 256 tombstones cannot return a partial list");
+      }finally{await overfull.close();}
+
+      // On reload the panel does not auto-open or enumerate the stale list.
+      await page.reload({waitUntil:"networkidle"});
+      assert.equal(await page.getByTestId("cas-tombstone-results").count(),0);
+      const legacyEnd=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      assert.deepEqual(legacyEnd,legacyStart,
+        "Read-only tombstone scans must not write localStorage");
+      console.log("FACTORY_CAS_TOMBSTONE_INVENTORY_E2E_PASS: manual-only ID+revision, stale rival restore, draft preserved, corrupt full-reject, 257-row cap, reload and unchanged legacy");
+    }finally {
+      await tombInventoryContext.close();
+    }
+
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
     // creation or encourage a second new UUID; operator can recover via ID.
