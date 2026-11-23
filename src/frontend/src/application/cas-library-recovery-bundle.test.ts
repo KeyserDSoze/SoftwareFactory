@@ -203,7 +203,18 @@ describe("native CAS full library historical recovery bundle #183",()=>{
     const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
     await expect(encodeCasLibraryRecoveryZip(archive,sha,entries=>{
       const compressed=zipSync(entries,{level:6});
-      compressed[0]=0; // invalid local-file-header signature
+      // The restore parser reads the ZIP central directory. A modified
+      // local header alone may be tolerated by fflate: poison an entry's
+      // declared uncompressed size with the disallowed ZIP64 sentinel.
+      let poisoned=false;
+      for(let i=0;i<compressed.length-30;i++){
+        if(compressed[i]===0x50 && compressed[i+1]===0x4b &&
+           compressed[i+2]===0x01 && compressed[i+3]===0x02){
+          compressed.set([0xff,0xff,0xff,0xff],i+24);
+          poisoned=true;break;
+        }
+      }
+      expect(poisoned).toBe(true);
       return compressed;
     })).rejects.toBeInstanceOf(CasLibraryZipPortabilityError);
   });
