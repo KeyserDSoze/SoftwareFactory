@@ -84,7 +84,12 @@ describe("opt-in legacy→CAS-only assist #171",()=>{
     const current=JSON.stringify(p);
     entries.set(prefix+p.id,current);
     const committed={id:p.id,revision:1,raw:current};
-    mockCopy.mockResolvedValue(committed);
+    mockCopy.mockImplementation(async()=>{
+      const marker=entries.get("softwarefactory.cas.retired.v1."+p.id);
+      expect(marker).toBeDefined();
+      expect(JSON.parse(marker!).digest).toMatch(/^[0-9a-f]{64}$/);
+      return committed;
+    });
     mockRead.mockResolvedValueOnce({state:"missing"})
       .mockResolvedValueOnce({state:"present",snapshot:committed});
     const ready=vi.fn(()=>true);
@@ -138,6 +143,33 @@ describe("opt-in legacy→CAS-only assist #171",()=>{
       .mockRejectedValueOnce(Error("OUTAGE_WITH_SECRET"));
     expect(await commitLegacyCasHandoff(ticket,true,()=>true))
       .toEqual({status:"copied_unverified",id:p.id,revision:1});
+    expect(mockCopy).toHaveBeenCalledTimes(1);
+  });
+  it("quota-denied marker prevents any native IDB insert",async()=>{
+    const {p,ticket}=source();
+    vi.stubGlobal("localStorage",{
+      getItem:(key:string)=>entries.get(key)??null,
+      setItem:(key:string,value:string)=>{
+        if(key.startsWith("softwarefactory.cas.retired.v1."))
+          throw Error("SECRET_QUOTA_NEVER_LOG");
+        entries.set(key,value);
+      },
+    });
+    await expect(commitLegacyCasHandoff(ticket,true,()=>true))
+      .rejects.toThrow(/Barriera CAS legacy non salvata/);
+    expect(mockCopy).not.toHaveBeenCalled();
+    expect(entries.get(prefix+p.id)).toBe(ticket.raw);
+  });
+  it("ambiguous native ACK retains fence and never retries the same source",async()=>{
+    const {p,ticket}=source();
+    mockCopy.mockRejectedValue(Error("NATIVE_ACK_UNCERTAIN"));
+    await expect(commitLegacyCasHandoff(ticket,true,()=>true))
+      .rejects.toThrow(/NATIVE_ACK_UNCERTAIN/);
+    expect(mockCopy).toHaveBeenCalledTimes(1);
+    expect(entries.get("softwarefactory.cas.retired.v1."+p.id))
+      .toContain('"schema":1');
+    await expect(commitLegacyCasHandoff(ticket,true,()=>true))
+      .rejects.toThrow(/già presente/);
     expect(mockCopy).toHaveBeenCalledTimes(1);
   });
   it("no retry when post-consent guard rejects after asynchronous read",async()=>{
