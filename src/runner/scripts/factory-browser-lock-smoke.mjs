@@ -634,6 +634,47 @@ if (!inside) {
         .toContainText(nativeNewId);
       await expect(page.getByTestId("cas-isolated-active"))
         .toContainText("rev. 1");
+      // #176: exact native CAS revision resume URL is generated only
+      // after consent, with no dirty draft, and never autoopens on reload.
+      const resumeAction=page.getByTestId("cas-resume-generate");
+      await expect(resumeAction).toBeEnabled();
+      const casNameDraft=page.getByTestId("cas-isolated-active")
+        .locator("input").first();
+      const beforeDraft=await casNameDraft.inputValue();
+      await casNameDraft.fill("UNSAVED_CAS_DRAFT_176");
+      await expect(resumeAction).toBeDisabled();
+      await casNameDraft.fill(beforeDraft);
+      await expect(resumeAction).toBeEnabled();
+      page.once("dialog",d=>void d.dismiss());
+      await resumeAction.click();
+      await expect(page.getByTestId("cas-resume-url")).toHaveCount(0);
+      page.once("dialog",d=>void d.accept());
+      await resumeAction.click();
+      const pinnedInput=page.getByTestId("cas-resume-url");
+      await expect(pinnedInput).toBeVisible();
+      const resumeUrl=await pinnedInput.inputValue();
+      const resumeParsed=new URL(resumeUrl);
+      assert.equal(resumeParsed.pathname,"/");
+      assert.deepEqual([...resumeParsed.searchParams.keys()].sort(),[
+        "casDigest","casHandoff","casRevision","workspace",
+      ],"CAS return URL must contain only four safe params");
+      assert.equal(resumeParsed.searchParams.get("workspace"),"cas");
+      assert.equal(resumeParsed.searchParams.get("casHandoff"),nativeNewId);
+      assert.equal(resumeParsed.searchParams.get("casRevision"),"1");
+      assert.match(resumeParsed.searchParams.get("casDigest"),
+        /^[0-9a-f]{64}$/);
+      assert.equal(resumeParsed.hash,"");
+      await page.goto(resumeUrl,{waitUntil:"networkidle"});
+      await expect(page.getByTestId("cas-root-handoff-hint"))
+        .toContainText(nativeNewId);
+      await expect(page.getByTestId("cas-isolated-active")).toHaveCount(0);
+      page.once("dialog",d=>void d.accept());
+      await page.getByTestId("cas-root-handoff-open").click();
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText(nativeNewId);
+      await expect(page.getByTestId("cas-isolated-active"))
+        .toContainText("rev. 1");
+
       // Return to legacy, preserving selected historic retired ID, so the
       // previous #174 regression can still exercise its alternative fork.
       page.once("dialog",d=>void d.accept());
@@ -645,6 +686,34 @@ if (!inside) {
       await returnNative;
       await expect(page.getByTestId("cas-legacy-retired-banner"))
         .toBeVisible();
+      // A different native writer advances the revision AFTER we created
+      // the bookmark. The old URL must fail closed without rebasing/opening.
+      const resumeRival=await handoffContext.newPage();
+      await resumeRival.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await resumeRival.addScriptTag({content:casBundle});
+      const changedCas=await resumeRival.evaluate(async current=>{
+        const p=JSON.parse(current.raw);
+        p.config.description="RIVAL_REVISION_AFTER_LINK_176";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,current);
+      },nativeClean);
+      assert.equal(changedCas.revision,2);
+      const staleResume=await handoffContext.newPage();
+      await staleResume.goto(resumeUrl,{waitUntil:"networkidle"});
+      await expect(staleResume.getByTestId("cas-root-handoff-hint"))
+        .toContainText(nativeNewId);
+      await expect(staleResume.getByTestId("cas-isolated-active"))
+        .toHaveCount(0);
+      await staleResume.getByTestId("cas-root-handoff-open").click();
+      await expect(staleResume.getByRole("alert"))
+        .toContainText(/non più uguale|non corrisponde|Stale/i);
+      await expect(staleResume.getByTestId("cas-isolated-active"))
+        .toHaveCount(0);
+      assert.equal((await resumeRival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),nativeNewId)).revision,
+        2,"Stale return must not rebase or overwrite another CAS revision");
+      await staleResume.close();await resumeRival.close();
+      console.log("FACTORY_CAS_REVISION_RESUME_E2E_PASS: dirty and declined consent rejected, exact native revision URL only safe query keys, full reload no auto-open, explicit re-open succeeds, rival tab advances revision and stale URL refuses opening without mutation");
       console.log("FACTORY_RETIRED_LEGACY_TO_NATIVE_CAS_FORK_E2E_PASS: exact legacy JSON backup + 3 consents, fresh native IDB UUID, two-tab final-consent collision safe, zero new legacy slot, all stages pending, no evidence/GitHub binding, unchanged source/marker/old CAS row, CAS-only full reload with untrusted hint and second explicit open");
 
       // #174: retired legacy source can be used ONLY as a configuration
