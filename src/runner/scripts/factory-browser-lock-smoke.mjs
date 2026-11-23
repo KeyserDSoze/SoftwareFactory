@@ -72,6 +72,12 @@ if (!inside) {
       globalName:"FactoryProjectCas",target:"es2022",
     });
     const casBundle = casBuild.outputFiles[0].text;
+    const legacyStoreBuild = await require("esbuild").build({
+      entryPoints:[path.join(root,"src/frontend/src/infrastructure/store.ts")],
+      bundle:true,write:false,platform:"browser",format:"iife",
+      globalName:"FactoryLegacyStore",target:"es2022",
+    });
+    const legacyStoreBundle=legacyStoreBuild.outputFiles[0].text;
 
     // #167: root workspace routing must choose the CAS-only React tree BEFORE
     // the live LegacyFactoryApp can initialize its project, writer lock,
@@ -424,6 +430,11 @@ if (!inside) {
         "Handoff must preserve exact historical raw, no sanitizing claims");
       assert.equal(JSON.stringify(JSON.parse(native.raw).config),
         JSON.stringify(backupRaw.config));
+      const retired=await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),original.id);
+      assert.deepEqual(JSON.parse(retired),{
+        schema:1,id:original.id,digest:hint.searchParams.get("casDigest"),
+      },"Durable legacy retirement marker must exist for the CAS handoff");
       const handoffOpen=page.getByTestId("cas-root-handoff-open");
       await expect(handoffOpen).toBeEnabled();
       // The hinted open is asynchronous: wait for the ONE dialog to be
@@ -462,10 +473,38 @@ if (!inside) {
       await page.getByTestId("cas-root-return-action").click();
       await returned;
       await expect(page.getByTestId("cas-root-entry")).toBeVisible();
+      await expect(page.getByTestId("cas-legacy-retired-banner"))
+        .toContainText("Progetto legacy protetto");
+      await expect(page.getByPlaceholder("Es. Legal Research Platform"))
+        .toBeDisabled();
       assert.equal(await page.evaluate(id=>
         localStorage.getItem(
           "softwarefactory.project.library.v1."+id),original.id),
         original.raw,"Returning to legacy must not auto-merge CAS source");
+      // Another browser tab running the CURRENT cooperating store API
+      // must not overwrite the historical legacy source.
+      const oldWriter=await handoffContext.newPage();
+      await oldWriter.goto("http://127.0.0.1:4174/",
+        {waitUntil:"networkidle"});
+      await expect(oldWriter.getByTestId("cas-legacy-retired-banner"))
+        .toBeVisible();
+      await oldWriter.addScriptTag({content:legacyStoreBundle});
+      const refused=await oldWriter.evaluate(id=>{
+        const slot="softwarefactory.project.library.v1."+id;
+        const raw=localStorage.getItem(slot),project=JSON.parse(raw);
+        project.config.name="FORBIDDEN_LEGACY_WRITE_173";
+        try {
+          window.FactoryLegacyStore.persistProject(project);
+          return {blocked:false,current:localStorage.getItem(slot)};
+        }catch{
+          return {blocked:true,current:localStorage.getItem(slot)};
+        }
+      },original.id);
+      assert.equal(refused.blocked,true);
+      assert.equal(refused.current,original.raw);
+      assert.equal(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),original.id),retired);
+      await oldWriter.close();
 
       // If a non-cooperating native writer modifies the imported copy
       // *after* reload but *before* hinted open, never adopt its new rev.
@@ -489,6 +528,7 @@ if (!inside) {
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original.id),winner);
       console.log("FACTORY_INDEXEDDB_ASSISTED_HANDOFF_E2E_PASS: exact legacy raw backup + 3 consents, native same-ID insert-only, SHA-256 query hint without code/token, full reload CAS-only no automatic IDB project selection, explicit double-read open, return strips hint, rival later revision rejected and legacy unchanged");
+      console.log("FACTORY_CAS_LEGACY_RETIREMENT_E2E_PASS: write fence survives reload and return, second-tab cooperative legacy writer rejected, source and CAS copy preserved");
     }finally{
       await handoffContext.close();
     }
@@ -534,6 +574,11 @@ if (!inside) {
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),id),winner);
       assert.equal(winner.revision,1);
+      assert.ok(await page.evaluate(id=>localStorage.getItem(
+        "softwarefactory.cas.retired.v1."+id),id),
+        "Ambiguous/failed IDB handoff must keep the legacy fence armed");
+      await expect(page.getByTestId("cas-legacy-retired-banner"))
+        .toBeVisible();
       page.removeAllListeners("dialog");
       // Tombstoned IDs must never be silently resurrected by a stale copy.
       const tomb=await rival.evaluate(async previous=>
