@@ -112,7 +112,7 @@ describe("native CAS full library historical recovery bundle #183",()=>{
     ])await expect(prepareCasLibraryRecoveryBundle(async()=>altered))
       .rejects.toThrow(/non canonico/);
     const hugeProject=createProject();
-    hugeProject.config.requirements="x".repeat(999_000);
+    hugeProject.config.requirements="x".repeat(950_000);
     const raw=JSON.stringify(hugeProject);
     const bigger=Array.from({length:17},(_,i)=>({
       id:"a"+String(i).padStart(7,"0")+"-1111-4111-8111-111111111183",
@@ -120,6 +120,9 @@ describe("native CAS full library historical recovery bundle #183",()=>{
         id:"a"+String(i).padStart(7,"0")+"-1111-4111-8111-111111111183"}),
     }));
     expect(raw.length).toBeLessThan(1_000_000);
+    expect(bigger.every(p=>p.raw.length<1_000_000)).toBe(true);
+    expect(bigger.reduce((total,p)=>total+p.raw.length,0))
+      .toBeGreaterThan(16_000_000);
     await expect(prepareCasLibraryRecoveryBundle(async()=>({
       projects:bigger,tombstones:[],
     }))).rejects.toThrow(/troppo grande/);
