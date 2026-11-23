@@ -611,7 +611,8 @@ export default function CasIsolatedEditor({
       }catch{
         setError(t(locale,"casIsoDraftBackupFailure"));
       }finally{
-        if(url)setTimeout(()=>URL.revokeObjectURL(url),30000);
+        const objectUrl=url;
+        if(objectUrl)setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);
       }
     });
   }
