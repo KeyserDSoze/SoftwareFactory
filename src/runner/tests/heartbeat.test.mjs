@@ -173,12 +173,18 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
     heartbeat = await startWorkerHeartbeat({
       dataDir, intervalMs: 20, probeIntervalMs: 60_000, probeDocker,
     });
-    const start = await readWorkerHeartbeat(dataDir);
+    // The live worker atomically renames its file every 20ms. A direct
+    // single-open read is intentionally strict: an unlinked FD (nlink=0)
+    // fails as HEARTBEAT_ROTATED. For observational reads during this
+    // intentionally rotating stress fixture, use the HTTP path's bounded
+    // fresh-open retry, NOT a generic retry for corrupt/insecure heartbeats.
+    const liveHeartbeat = () => readWorkerHeartbeatForHttp(dataDir);
+    const start = await liveHeartbeat();
     assert.equal(start.docker.rootless, false);
     assert.equal(start.docker.checkedAt, null);
     assert.equal((await get(0, "/v1/execution-readiness")).status, 503);
     await sleep(90);
-    const stillRunning = await readWorkerHeartbeat(dataDir);
+    const stillRunning = await liveHeartbeat();
     assert.ok(Date.parse(stillRunning.updatedAt) > Date.parse(start.updatedAt),
       "a blocked Docker probe must not suspend the heartbeat");
     assert.equal(calls, 1, "probe must not overlap itself");
@@ -193,7 +199,7 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
     // The worker continues to replace its heartbeat atomically every 20ms.
     // Concurrent GETs must not compare a freshly renamed file to a clock
     // frozen BEFORE their asynchronous filesystem read (false HTTP 503).
-    const beforeStress = await readWorkerHeartbeat(dataDir);
+    const beforeStress = await liveHeartbeat();
     for (let attempt = 0; attempt < 80; attempt++) {
       const ready = await get(attempt % 2, "/v1/execution-readiness");
       if (ready.status !== 200) {
@@ -214,7 +220,7 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
       assert.equal(ready.status, 200);
       if (attempt % 8 === 0) await sleep(4);
     }
-    const afterStress = await readWorkerHeartbeat(dataDir);
+    const afterStress = await liveHeartbeat();
     assert.ok(Date.parse(afterStress.updatedAt) > Date.parse(beforeStress.updatedAt),
       "stress must overlap actual worker heartbeat updates");
     mode = "rootful";
@@ -228,7 +234,7 @@ test("rootless daemon execution readiness is gated by a fresh probe on both API 
     }
     mode = "rootless";
     await heartbeat.checkDockerNow();
-    const current = await readWorkerHeartbeat(dataDir);
+    const current = await liveHeartbeat();
     assert.equal(current.docker.rootless, true);
     await heartbeat.stop();
     heartbeat = null;
