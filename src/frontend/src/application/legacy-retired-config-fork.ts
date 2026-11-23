@@ -48,7 +48,7 @@ function assertTargetFree(id:string):void {
     throw Error("UUID recupero già utilizzato o protetto: non sovrascrivere.");
 }
 
-async function assertSource(ticket:RetiredLegacyForkTicket["source"]):
+export async function assertRetiredLegacyForkSource(ticket:RetiredLegacyForkTicket["source"]):
   Promise<FactoryProject> {
   if(!ticket || typeof ticket.id!=="string")
     throw Error("Ticket recupero legacy non valido.");
@@ -70,7 +70,7 @@ async function assertSource(ticket:RetiredLegacyForkTicket["source"]):
   return source;
 }
 
-function validateTarget(ticket:RetiredLegacyForkTicket,source:FactoryProject):
+export function validateRetiredLegacyForkTarget(ticket:RetiredLegacyForkTicket,source:FactoryProject):
   FactoryProject {
   try{
     const target=JSON.parse(ticket.target.raw) as FactoryProject;
@@ -104,7 +104,7 @@ export async function prepareRetiredLegacyConfigFork(
   const raw=localProjectSnapshot(id);
   if(!raw)throw Error("Snapshot legacy protetto non trovato.");
   const sourceInfo=Object.freeze({id,raw,digest:marker.digest});
-  const source=await assertSource(sourceInfo);
+  const source=await assertRetiredLegacyForkSource(sourceInfo);
   const fresh=createProject();
   if(fresh.id===id)throw Error("UUID recupero uguale all'originale.");
   assertTargetFree(fresh.id);
@@ -117,8 +117,8 @@ export async function prepareRetiredLegacyConfigFork(
     source:sourceInfo,
     target:Object.freeze({id:target.id,raw:serializeCasProject(target),name}),
   });
-  validateTarget(ticket,source);
-  await assertSource(sourceInfo);
+  validateRetiredLegacyForkTarget(ticket,source);
+  await assertRetiredLegacyForkSource(sourceInfo);
   assertTargetFree(target.id);
   return ticket;
 }
@@ -135,15 +135,15 @@ export async function confirmRetiredLegacyConfigFork(
 ):Promise<RetiredLegacyForkResult> {
   if(consent!==true || typeof isStable!=="function" || !isStable())
     throw Error("Fork legacy non autorizzato: consenso o lease sorgente mancanti.");
-  const source=await assertSource(ticket.source);
-  const target=validateTarget(ticket,source);
+  const source=await assertRetiredLegacyForkSource(ticket.source);
+  const target=validateRetiredLegacyForkTarget(ticket,source);
   assertTargetFree(target.id);
   if(!isStable())throw Error("Workspace legacy cambiato: fork annullato.");
   const lease=await acquireProjectWriterLease(target.id);
   try{
     if(!isStable())throw Error("Lease sorgente cambiato: fork annullato.");
     // Second preflight AFTER the destination lease. No new baselines.
-    await assertSource(ticket.source);
+    await assertRetiredLegacyForkSource(ticket.source);
     assertTargetFree(target.id);
     if(!isStable())throw Error("Workspace cambiato prima dell'inserimento.");
     // No retries: a localStorage ACK can be indeterminate in faulty adapters.
@@ -151,7 +151,7 @@ export async function confirmRetiredLegacyConfigFork(
     if(confirmed!==ticket.target.raw)
       throw Error("Conferma fork incoerente: ispeziona la libreria.");
     try{
-      await assertSource(ticket.source);
+      await assertRetiredLegacyForkSource(ticket.source);
       if(!isStable() || localProjectSnapshot(target.id)!==ticket.target.raw)
         return {status:"created_unverified",id:target.id};
       return {status:"created",id:target.id};
