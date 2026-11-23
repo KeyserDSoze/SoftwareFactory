@@ -5,6 +5,8 @@
  */
 import {useEffect,useMemo,useRef,useState} from "react";
 import {matchesCasHandoffHint} from "../application/cas-root-workspace";
+import {prepareCasRevisionResumeLink} from "../application/cas-revision-resume";
+import type {CasRevisionResumeLink} from "../application/cas-revision-resume";
 import type {CasHandoffHint} from "../application/cas-root-workspace";
 import {strToU8,zipSync} from "fflate";
 import {STAGES,SERVICE_KINDS,SERVICE_LABELS,SERVICE_OPTIONS} from "../domain/defaults";
@@ -121,6 +123,7 @@ export default function CasIsolatedEditor({
   const [working,setWorking]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
+  const [resumeLink,setResumeLink]=useState<CasRevisionResumeLink|null>(null);
   const active=useRef<CasSelectionController|null>(null);
   const inFlight=useRef(false);
   const pipelineAbort=useRef<AbortController|null>(null);
@@ -136,6 +139,12 @@ export default function CasIsolatedEditor({
   // it without explicit consent. Saving config must not silently erase it.
   const dirty=configDirty || manualOutput.length>0 ||
     codeRequest.length>0 || codeProposalJson.length>0;
+  const resumeView=useRef({snapshot,dirty,pipelineRunning});
+  resumeView.current={snapshot,dirty,pipelineRunning};
+  const shownResumeLink=snapshot && resumeLink &&
+    snapshot.id===resumeLink.id &&
+    snapshot.revision===resumeLink.revision &&
+    !dirty && !pipelineRunning ? resumeLink : null;
   // This projection is read-only and pinned to the selection's exact CAS
   // revision; a rival tab cannot silently replace the text being inspected.
   const inspectedStages=inspectCasIsolatedStages(snapshot);
@@ -161,6 +170,7 @@ export default function CasIsolatedEditor({
     // openCasSelectionController validates canonical raw before exposing it.
     const p=JSON.parse(current.raw) as {config:{name:string;description:string;requirements?:string}};
     setSnapshot(current);
+    setResumeLink(null);
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
     setDraftRequirements(p.config.requirements ?? "");
@@ -230,12 +240,40 @@ export default function CasIsolatedEditor({
         " (rev. "+exactSource.revision+")");
     });
   }
+  function generateResumeLink():void {
+    const controller=active.current,expected=snapshot;
+    if(!controller || !expected || inFlight.current ||
+       controller.state()!=="ready" || dirty || pipelineRunning ||
+       !exact(controller.snapshot(),expected))return;
+    if(!window.confirm(t(locale,"casResumeConfirm")+"\nID: "+
+       expected.id+" / rev. "+expected.revision))return;
+    const stable=()=>controller===active.current &&
+      controller.state()==="ready" &&
+      resumeView.current.snapshot===expected &&
+      !resumeView.current.dirty &&
+      !resumeView.current.pipelineRunning &&
+      exact(controller.snapshot(),expected);
+    void run(async()=>{
+      setResumeLink(null);
+      try{
+        const link=await prepareCasRevisionResumeLink(
+          expected,window.location.href,stable,
+        );
+        if(!stable())throw Error("Revision changed before displaying link");
+        setResumeLink(link);
+        setNotice(t(locale,"casResumeCreated"));
+      }catch{
+        setError(t(locale,"casResumeStale"));
+      }
+    });
+  }
   function close():void {
     if(inFlight.current) return;
     // "Close panel" does not mean permission to destroy a human draft.
     // An explicit rejection keeps both the CAS selection and all text.
     if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm"))) return;
     active.current=null; setExpanded(false);
+    setResumeLink(null);
     setList(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
     setDraftStack(null);
@@ -1004,6 +1042,23 @@ export default function CasIsolatedEditor({
       {snapshot && <div data-testid="cas-isolated-active">
         <p><strong>{t(locale,"casIsoSelected")}</strong> ·
           rev. {snapshot.revision} · {snapshot.id}</p>
+        {onRequestLegacy && <div data-testid="cas-revision-resume">
+          <p className="helper">{t(locale,"casResumeExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-resume-generate"
+            disabled={working || pipelineRunning || Boolean(dirty) ||
+              active.current?.state()!=="ready"}
+            onClick={generateResumeLink}>
+            {t(locale,"casResumeAction")}
+          </button>
+          {shownResumeLink && <label>{t(locale,"casResumeLinkLabel")}
+            <input type="text" readOnly value={shownResumeLink.url}
+              data-testid="cas-resume-url"
+              aria-label={t(locale,"casResumeLinkLabel")}
+              onFocus={e=>e.currentTarget.select()}/>
+            <small>{t(locale,"casResumePinned")} · rev. {shownResumeLink.revision}</small>
+          </label>}
+        </div>
         <label>{t(locale,"casIsoName")}
           <input value={draftName} maxLength={CAS_ISOLATED_NAME_MAX}
             disabled={working || !active.current}
