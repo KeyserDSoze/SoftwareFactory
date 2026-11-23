@@ -119,13 +119,23 @@ export function persistProjectIfUnchanged(project: FactoryProject, expected: str
   if (current !== expected)
     throw Error("Conflitto locale: un'altra scheda ha modificato questo progetto. " +
       "Salva un backup di recupero e ricarica la versione aggiornata, senza sovrascrivere.");
-  persistProject(project);
+  persistProjectInternal(project,{expected});
   const confirmed = localProjectSnapshot(project.id);
   if (!confirmed || confirmed !== JSON.stringify(project))
     throw Error("Scrittura progetto locale non confermata.");
   return confirmed;
 }
 export function persistProject(project: FactoryProject): void {
+  persistProjectInternal(project);
+}
+
+/** #186: preserve the caller's first observed baseline through expensive
+ * validation/library enumeration. This check is best-effort localStorage,
+ * NOT atomic CAS: a noncooperative writer could still race after this read.
+ */
+function persistProjectInternal(
+  project: FactoryProject, pinned?: Readonly<{expected:string|null}>,
+): void {
   // #173: guard both direct and checked writes, including old tabs with a
   // valid local baseline. This is cooperative, NOT cross-store atomic CAS.
   assertLegacyProjectWritable(project.id);
@@ -150,6 +160,13 @@ export function persistProject(project: FactoryProject): void {
 
   const slot = PROJECT_LIBRARY_PREFIX + project.id;
   assertLegacyProjectWritable(project.id);
+  // Initial equality in persistProjectIfUnchanged() is not enough: scanning
+  // up to 40 other slots / caches above can overlap an old tab's direct
+  // localStorage writer. Re-read the SAME original raw immediately before
+  // touching the authoritative slot, never treat a new value as our baseline.
+  if (pinned && localProjectSnapshot(project.id) !== pinned.expected)
+    throw Error("Conflitto locale: il progetto è cambiato durante i controlli di salvataggio. " +
+      "Nessuna sovrascrittura: conserva un backup e riconcilia la copia rivale.");
   try { localStorage.setItem(slot, raw); }
   catch { throw Error("Spazio locale insufficiente: progetto non salvato. Esporta un backup JSON."); }
   // A no-op/faulty adapter must not make a save look successful. This also
