@@ -120,6 +120,7 @@ export const messages = {
     casLibraryBackupSaved: "Download backup ZIP CAS consegnato al browser con SALVATAGGIO dichiarato dall'operatore (NON verificabile). Archivio storico, nessun nuovo test attestato.",
     casLibraryBackupUnverified: "Download backup ZIP CAS avviato, ma SALVATAGGIO NON confermato. Nessuna garanzia di recupero: controlla il file scaricato.",
     casLibraryBackupStale: "BACKUP BLOCCATO: libreria IndexedDB modificata in un'altra scheda, tombstone cambiata o verifica fallita. Nessuno ZIP consegnato; controlla la libreria e riprova SOLO manualmente.",
+    casLibraryBackupNotRestorable: "BACKUP ZIP BLOCCATO: il file risultante supera i 20 MB ammessi dal ripristino CAS o non supera la verifica ZIP di import. Nessun file consegnato e nessuna scrittura IndexedDB. Conserva backup JSON dei singoli progetti; non eliminare la libreria originale.",
     casLibraryBackupUnavailable: "Backup COMPLETO CAS non disponibile: nessun progetto attivo, IndexedDB indisponibile, archive corrotto, oltre limite 16M o errore ZIP. Nessun backup parziale prodotto.",
 
 
@@ -528,6 +529,7 @@ export const messages = {
     casLibraryBackupSaved: "CAS ZIP backup handed to the browser with user-declared (NOT verified) disk save. Historical archive, no new tests attested.",
     casLibraryBackupUnverified: "CAS ZIP backup download offered, but disk save NOT confirmed. No recovery assurance: inspect the downloaded file.",
     casLibraryBackupStale: "BACKUP BLOCKED: IndexedDB library, tombstone or verification changed in another tab. No ZIP delivered; inspect the library and retry ONLY manually.",
+    casLibraryBackupNotRestorable: "CAS ZIP BACKUP BLOCKED: the produced archive is above the 20 MB restore limit or fails the ZIP import preflight. No file delivered and no IndexedDB writes. Save individual project JSON backups; do not delete the original library.",
     casLibraryBackupUnavailable: "FULL CAS backup unavailable: no active projects, IndexedDB unavailable, corrupt archive, exceeds 16M limit or ZIP error. No partial backup produced.",
 
 

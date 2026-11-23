@@ -1,9 +1,13 @@
 import {describe,expect,it,vi} from "vitest";
+import {createHash} from "node:crypto";
+import {MAX_CAS_LIBRARY_ZIP_BYTES,parseCasEmptyLibraryBackupZip}
+  from "./cas-empty-library-zip-restore";
 import {createProject} from "../domain/defaults";
 import type {CasLibraryBackupSnapshot} from "../infrastructure/project-cas";
 import {
   CAS_LIBRARY_RECOVERY_FILE,prepareCasLibraryRecoveryBundle,
-  confirmCasLibraryRecoveryBundle,
+  confirmCasLibraryRecoveryBundle,encodeCasLibraryRecoveryZip,
+  assertCasLibraryZipPortableSize,CasLibraryZipPortabilityError,
 } from "./cas-library-recovery-bundle";
 
 function fixture():CasLibraryBackupSnapshot {
@@ -126,6 +130,61 @@ describe("native CAS full library historical recovery bundle #183",()=>{
     await expect(prepareCasLibraryRecoveryBundle(async()=>({
       projects:bigger,tombstones:[],
     }))).rejects.toThrow(/troppo grande/);
+  });
+  it("round-trips the exact compressed backup through the native restore ZIP parser",async()=>{
+    const base=fixture();
+    base.projects[0].raw=base.projects[0].raw.replace(
+      '"Backup second"','"Backup 日本語 🗂️ second"');
+    const sha=async(raw:string)=>createHash("sha256").update(raw).digest("hex");
+    const ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
+    const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
+    const zipped=await encodeCasLibraryRecoveryZip(archive,sha);
+    expect(zipped.byteLength).toBeLessThanOrEqual(MAX_CAS_LIBRARY_ZIP_BYTES);
+    const checked=await parseCasEmptyLibraryBackupZip(zipped,sha);
+    expect(checked.projects).toHaveLength(2);
+    for(const original of base.projects){
+      const matching=checked.projects.find(p=>p.id===original.id);
+      expect(matching?.revision).toBe(original.revision);
+      expect(matching?.raw).toBe(original.raw);
+    }
+    expect(checked.tombstones).toEqual(base.tombstones);
+  });
+  it("rejects ZIPs above the restore limit before handing off any file",async()=>{
+    const base=fixture(),ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
+    const archive=await confirmCasLibraryRecoveryBundle(
+      ticket,true,async()=>base,mockDigest);
+    expect(()=>assertCasLibraryZipPortableSize(0))
+      .toThrow(CasLibraryZipPortabilityError);
+    expect(()=>assertCasLibraryZipPortableSize(Number.POSITIVE_INFINITY))
+      .toThrow(CasLibraryZipPortabilityError);
+    expect(()=>assertCasLibraryZipPortableSize(MAX_CAS_LIBRARY_ZIP_BYTES+1))
+      .toThrow(CasLibraryZipPortabilityError);
+    expect(()=>assertCasLibraryZipPortableSize(MAX_CAS_LIBRARY_ZIP_BYTES))
+      .not.toThrow();
+    const oversize=vi.fn(()=>new Uint8Array(MAX_CAS_LIBRARY_ZIP_BYTES+1));
+    await expect(encodeCasLibraryRecoveryZip(archive,mockDigest,oversize))
+      .rejects.toBeInstanceOf(CasLibraryZipPortabilityError);
+    expect(oversize).toHaveBeenCalledOnce();
+  });
+  it("does not deliver a ZIP with mismatched RAW, manifest, file names or counts",async()=>{
+    const base=fixture(),ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
+    const sha=async(raw:string)=>createHash("sha256").update(raw).digest("hex");
+    const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
+    const manifest={...archive.files};
+    manifest["manifest.json"]=manifest["manifest.json"].replace(
+      '"automaticRestore": false','"automaticRestore": true');
+    const wrongRaw={...archive.files};
+    const projectPath=Object.keys(wrongRaw).find(p=>p.startsWith("projects/"))!;
+    wrongRaw[projectPath]+=" ";
+    const bad=[
+      {...archive,projectCount:1},
+      {...archive,files:manifest},
+      {...archive,files:wrongRaw},
+      {...archive,files:{...archive.files,"../sensitive.txt":"bad"}},
+    ];
+    for(const corrupted of bad)
+      await expect(encodeCasLibraryRecoveryZip(corrupted,sha))
+        .rejects.toBeInstanceOf(CasLibraryZipPortabilityError);
   });
   it("rejects invalid digests and never touches localStorage/cloud",async()=>{
     const f=fixture(),blocked=vi.fn(()=>{throw Error("FORBIDDEN_IO");});

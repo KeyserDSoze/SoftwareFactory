@@ -4,6 +4,9 @@
  * authorization to write the legacy editor. Project raw JSON is PLAINTEXT
  * and may contain sensitive user-authored data: preserve it EXACTLY.
  */
+import {strToU8,zipSync} from "fflate";
+import {MAX_CAS_LIBRARY_ZIP_BYTES,parseCasEmptyLibraryBackupZip}
+  from "./cas-empty-library-zip-restore";
 import type {FactoryProject} from "../domain/types";
 import {
   MAX_CAS_LIBRARY_BACKUP_CHARS,MAX_CAS_TOMBSTONE_INVENTORY,
@@ -130,4 +133,68 @@ export async function confirmCasLibraryRecoveryBundle(
     projectCount:expected.projects.length,
     files:Object.freeze(files),
   });
+}
+
+/**
+ * #192: a successfully exported archive must be accepted by the very same
+ * offline ZIP parser used by the empty-store restore (#189). The 16M JS
+ * character limit does NOT bound compressed UTF-8 ZIP bytes to 20 MB.
+ * Keep the payload and its historical evidence unchanged; reject before the
+ * browser receives a downloadable file if round-trip is not possible.
+ */
+export class CasLibraryZipPortabilityError extends Error {
+  constructor(){
+    super("ZIP backup CAS non ripristinabile con il parser corrente: download bloccato.");
+    this.name="CasLibraryZipPortabilityError";
+  }
+}
+
+export type CasLibraryZipCompressor=(entries:Record<string,Uint8Array>)=>Uint8Array;
+
+/** Caller-visible boundary shared with the #189 restore file size cap. */
+export function assertCasLibraryZipPortableSize(bytes:number):void {
+  if(!Number.isSafeInteger(bytes) || bytes<50 ||
+     bytes>MAX_CAS_LIBRARY_ZIP_BYTES)
+    throw new CasLibraryZipPortabilityError();
+}
+
+/** Pure offline packaging, after both backup consents and native readbacks.
+ * The ZIP itself (not only the precompression manifest) is parsed again
+ * before offering a download. This is NOT proof it was saved to disk.
+ */
+export async function encodeCasLibraryRecoveryZip(
+  archive:CasLibraryRecoveryArchive,
+  digest:CasLibraryRecoveryDigest=casHandoffRawDigest,
+  compress:CasLibraryZipCompressor=entries=>zipSync(entries,{level:6}),
+):Promise<Uint8Array> {
+  try{
+    if(!archive || archive.fileName!==CAS_LIBRARY_RECOVERY_FILE ||
+       !Number.isInteger(archive.projectCount) ||
+       archive.projectCount<1 || archive.projectCount>40 ||
+       !archive.files || typeof archive.files!=="object" ||
+       Array.isArray(archive.files))
+      throw new CasLibraryZipPortabilityError();
+    const entries:Record<string,Uint8Array>=Object.create(null);
+    for(const [path,raw] of Object.entries(archive.files)){
+      if(typeof raw!=="string" || !raw)
+        throw new CasLibraryZipPortabilityError();
+      entries[path]=strToU8(raw);
+    }
+    const zipped=compress(entries);
+    if(!(zipped instanceof Uint8Array))
+      throw new CasLibraryZipPortabilityError();
+    assertCasLibraryZipPortableSize(zipped.byteLength);
+    // No IDB, localStorage, cloud, network, or user action is invoked here.
+    const checked=await parseCasEmptyLibraryBackupZip(zipped,digest);
+    if(checked.projects.length!==archive.projectCount ||
+       checked.projects.some(p=>
+         archive.files["projects/"+p.id+"-r"+p.revision+".json"]!==p.raw))
+      throw new CasLibraryZipPortabilityError();
+    // Manifest/tombstones, unique paths and all SHA hashes are checked
+    // strictly by the restore parser against the compressed bytes.
+    return Uint8Array.from(zipped);
+  }catch{
+    // Never interpolate project RAW, filenames or provider errors in UI.
+    throw new CasLibraryZipPortabilityError();
+  }
 }

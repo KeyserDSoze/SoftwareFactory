@@ -13,3 +13,6 @@ File storici e brief possono contenere segreti inseriti dall'utente: NON si affe
 
 ## Test e gate
 Unit test per canonicalità/limiti/consenso/race dopo preflight e durante SHA-256/ticket alterati, Chromium reale 2 tab per ZIP, manifest+raw, rifiuto e conflitti, corruzione/limite e reload. Factory CI, Pages e Installer candidate `completed/success` stesso main SHA prima della chiusura.
+
+## Compatibilità ZIP prima del download (#192)
+Il limite di 16 milioni di caratteri JSON (UTF-16) NON implica che il file ZIP abbia dimensione inferiore ai **20 MB** ammessi dal restore #189: molti caratteri Unicode poco comprimibili possono espandersi a più byte UTF-8 per carattere. Dopo i due consensi e i due readback, la funzione pura `encodeCasLibraryRecoveryZip` genera lo ZIP localmente, confronta la dimensione COMPRESSA con lo stesso limite del parser e passa **il ZIP prodotto** attraverso `parseCasEmptyLibraryBackupZip` per validare v1/path/manifest/digest/RAW/revisioni/tombstone. Soltanto dopo questi gate la UI crea object URL e offre il download; su fallimento, mostra errore IT/EN e consiglia backup JSON individuali. Non riduce il limite d'import o espone i RAW nei messaggi. È un preflight di compatibilità, non una garanzia di scrittura su disco, autenticità storica, test o restore su un dispositivo realmente nuovo.

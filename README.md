@@ -1126,3 +1126,7 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 ## Ticket ZIP CAS protetti da mutazioni durante i digest (#191)
 
 Il ripristino offline della #189 verifica un'istantanea immutabile dei RAW **prima** di attendere SHA-256: una modifica del ticket o delle tombstone mentre il digest è in corso blocca l'import, senza invocare la transazione IndexedDB. Il JSON inviato alla writer deriva soltanto dalla copia byte-esatta verificata. Ciò difende anche i chiamanti che costruiscono ticket mutabili invece di usare il parser frozen; non autentica il file ZIP, non rende fresche le evidenze storiche e non completa il cutover legacy (#139, ADR 0137).
+
+## Verifica della compatibilità ZIP backup ↔ restore CAS (#192)
+
+L'export ZIP dell'intera libreria CAS ora controlla **il file compresso effettivo** prima di consegnarlo al browser: massimo 20 MB, stesso parser ZIP v1 del restore #189 e digest/JSON RAW/revisioni coerenti. Un archivio di 16M caratteri JSON può superare 20 MB a causa dell'UTF-8 e della compressione: in tal caso l'export viene bloccato senza ZIP ambiguo, mostrando l'opzione manuale di conservare i backup JSON dei singoli progetti. Nessun upload, modifica IndexedDB o import automatico. Il preflight non autentica l'archivio storico, non prova il salvataggio su disco e non completa il cutover #139 (ADR 0133/0137).

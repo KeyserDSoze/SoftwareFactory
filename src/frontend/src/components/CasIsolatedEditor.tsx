@@ -68,8 +68,10 @@ import {
 import {prepareCasIsolatedSourceZip} from "../application/cas-isolated-source-zip";
 import {prepareCasSelectedRevisionReconcile,confirmCasSelectedRevisionReconcile}
   from "../application/cas-selected-revision-reconcile";
-import {prepareCasLibraryRecoveryBundle,confirmCasLibraryRecoveryBundle}
-  from "../application/cas-library-recovery-bundle";
+import {
+  prepareCasLibraryRecoveryBundle,confirmCasLibraryRecoveryBundle,
+  encodeCasLibraryRecoveryZip,CasLibraryZipPortabilityError,
+} from "../application/cas-library-recovery-bundle";
 import {
   prepareCasEmptyLibraryRestorePreview,confirmCasEmptyLibraryBackupRestore,
   MAX_CAS_LIBRARY_ZIP_BYTES,
@@ -805,17 +807,20 @@ export default function CasIsolatedEditor({
       }
       let downloadUrl:string;
       try{
-        const entries:Record<string,Uint8Array>=Object.create(null);
-        for(const [path,raw] of Object.entries(files))
-          entries[path]=strToU8(raw);
-        const zipped=zipSync(entries,{level:6});
-        const bytes=new Uint8Array(zipped.length);
-        bytes.set(zipped);
+        // Compare the actual ZIP with the strict import parser before
+        // offering a file; 16M characters can encode to >20MB UTF-8.
+        const bytes=await encodeCasLibraryRecoveryZip({
+          fileName:ticket.fileName,
+          projectCount:ticket.snapshot.projects.length,
+          files,
+        });
         downloadUrl=URL.createObjectURL(new Blob([bytes],{
           type:"application/zip",
         }));
-      }catch{
-        setError(t(locale,"casLibraryBackupUnavailable"));return;
+      }catch(error){
+        setError(t(locale,error instanceof CasLibraryZipPortabilityError ?
+          "casLibraryBackupNotRestorable":"casLibraryBackupUnavailable"));
+        return;
       }
       try{
         const link=document.createElement("a");

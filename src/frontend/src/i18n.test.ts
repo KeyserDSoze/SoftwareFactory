@@ -9,6 +9,12 @@ describe("installer and GitHub Actions i18n", () => {
         expect(value).not.toContain("github_pat_");
       }
   });
+  it("explains non-restorable oversized CAS ZIP exports in both languages",()=>{
+    expect(t("it","casLibraryBackupNotRestorable")).toContain("20 MB");
+    expect(t("en","casLibraryBackupNotRestorable")).toContain("20 MB");
+    expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
+    expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
+  });
   it("normalizes a language preference safely and translates operational steps", () => {
     expect(normalizeLocale("en")).toBe("en");
     expect(normalizeLocale("not-a-locale")).toBe("it");
