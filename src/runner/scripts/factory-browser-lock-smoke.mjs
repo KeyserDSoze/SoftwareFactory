@@ -5132,6 +5132,11 @@ if (!inside) {
         await overflow.goto("http://127.0.0.1:4174/?workspace=cas",
           {waitUntil:"networkidle"});
         await overflow.addScriptTag({content:casBundle});
+        // A fresh browser context has NO database yet. The production CAS
+        // open path creates the correct v1 projects store on upgrade.
+        // Direct indexedDB.open(1) first would create an EMPTY database.
+        assert.deepEqual(await overflow.evaluate(()=>
+          window.FactoryProjectCas.listCasTombstones()),[]);
         await overflow.evaluate(async()=>{
           const request=indexedDB.open("softwarefactory.project.cas.v1",1);
           const db=await new Promise((resolve,reject)=>{
