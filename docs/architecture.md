@@ -814,3 +814,8 @@ Un trasferimento confermato ricarica la pagina nel root CAS-only con un *hint* l
 ## Recovery di checkpoint AI running nel CAS separato (#172)
 
 La route/pannello CAS può mantenere running dopo un crash successivo all'ACK nativo di inizio fase. Il builder prepareCasRunningRecovery controlla snapshot canonico e una sola fase running senza evidenze, poi invalida esattamente quella fase e le successive, preservando quelle precedenti. Backup raw e tre consensi precedono un compare-and-swap transazionale; il writer rivale che modifica revision/raw prevale senza retry. È una correzione locale manuale, non stop provider, attestazione di completion o cutover della Factory live. [ADR 0125](../adr/0125-cas-running-stage-explicit-recovery.md).
+
+
+## Protezione cooperativa della fonte legacy trasferita (#173)
+
+Il trasferimento assistito registra un marker localStorage minimale per ID, verificato **prima** dell'inserimento nativo in IndexedDB. Le funzioni di persistenza legacy e i side effect GitHub/AI nelle schede aggiornate rifiutano le operazioni su quella copia storica. Se la scrittura IDB non è confermata, il marker resta attivo e richiede verifica umana della libreria e del backup. Non c'è atomicità tra gli store, né revoca di writer vecchi/non cooperativi, altre sessioni browser o dispositivi. [ADR 0126](../adr/0126-cas-legacy-writer-retirement.md).

@@ -1268,3 +1268,9 @@ Il solo pannello CAS isolato può memorizzare un **JSON di patch Code Agent come
 - Nessun reset automatico: scaricare JSON raw esatto, confermare il file salvato e poi confermare il recupero. Commit nativo CAS ID/revision/raw dopo consenso, senza force/rebase/retry e senza fallback legacy.
 - Non assumere che altre schede o provider abbiano smesso: i risultati tardivi devono perdere il CAS. Non creare evidenze AI/test/reviewer o attribuire successi non attestati.
 - La Factory legacy resta su localStorage sync: #139/#91/#92 aperte. Testare Vitest e Chromium due schede (marker FACTORY_INDEXEDDB_RUNNING_RECOVERY_E2E_PASS) e verificare CI, Pages, Installer prima di chiudere #172.
+
+## Retirement per-ID del legacy dopo handoff CAS (#173)
+
+- Solo per handoff completo assistito #171 (NON per la copia preview #141), salvare/verificare il marker per ID DOPO backup raw e tre consensi, PRIMA di inserire in IDB. Marker già presente/corrotto o quota/readback fallito → nessun insert. ACK native incerto → **marker conservato**, nessun rilascio/riprova automatica.
+- I salvataggi legacy cooperativi rileggeranno il marker prima della scrittura per-ID; anche i side effect della pipeline e di GitHub devono essere bloccati dall'interfaccia sul progetto protetto. Il marker non è un CAS cross-store o multi-device e non ferma client vecchi/direct edits.
+- Test reale Chromium (marker FACTORY_CAS_LEGACY_RETIREMENT_E2E_PASS) dopo ritorno dalla route CAS e con un secondo tab che usa lo store legacy; controllare che slot locale e snapshot IDB rimangano invariati. #139/#91/#92 sempre aperte finché manca cutover reale e collaudo remoto.

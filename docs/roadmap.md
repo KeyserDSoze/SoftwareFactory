@@ -1352,3 +1352,8 @@ Un trasferimento confermato ricarica la pagina nel root CAS-only con un *hint* l
 ### #172 — Recovery manuale della fase AI running nel pilota IndexedDB (23 novembre 2026)
 
 Recupero mirato dopo crash con un solo stage running privo di esito: backup JSON esatto, tre consensi, CAS ID/revision/raw senza auto-retry; predecessori conservati e successivi pending. Due schede Chromium verificano la race sull'ultima conferma. Non è cutover del live localStorage né stop provider cross-tab/device: #139/#91/#92 restano aperte.
+
+
+### #173 — Retirement della copia legacy dopo handoff CAS (23 novembre 2026)
+
+Introduzione di una write fence persistente per-ID prima dell'insert CAS, con verifica del marker, blocco dei writer legacy cooperativi, UI backup/read-only e ingresso CAS, regressioni unit (quota/corruzione/ACK) e Chromium due schede. Non equivale alla conversione di tutti i writer live o a CAS tra i due archivi, né a sincronizzazione cloud. #139, #91, #92 rimangono aperte.
