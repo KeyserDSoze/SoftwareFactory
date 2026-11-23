@@ -4782,19 +4782,25 @@ if (!inside) {
       assert.equal((await rival.evaluate(()=>
         window.FactoryProjectCas.listCasProjects())).length,1);
 
-      page.once("dialog",dialog=>void dialog.dismiss());
-      await selected("source.json",historical.raw);
+      // #187: precisely one dialog belongs to each file-selection action.
+      // A stale page.once handler could otherwise dismiss a later consent,
+      // then a second handler tries to accept the same already-held dialog.
+      const declinedDialog=page.waitForEvent("dialog");
+      const declinedImport=selected("source.json",historical.raw);
+      await (await declinedDialog).dismiss();
+      await declinedImport;
       assert.equal((await rival.evaluate(()=>
         window.FactoryProjectCas.listCasProjects())).length,1,
       "Rejected import consent must never create an IndexedDB row");
       let importedId="";
-      page.once("dialog",dialog=>{
-        const match=dialog.message().match(/ID: ([0-9a-f-]{36})/i);
-        assert.ok(match,"Import must disclose its fresh UUID before consent");
-        importedId=match[1];
-        void dialog.accept();
-      });
-      await selected("source.json",historical.raw);
+      const acceptedDialog=page.waitForEvent("dialog");
+      const acceptedImport=selected("source.json",historical.raw);
+      const approval=await acceptedDialog;
+      const match=approval.message().match(/ID: ([0-9a-f-]{36})/i);
+      assert.ok(match,"Import must disclose its fresh UUID before consent");
+      importedId=match[1];
+      await approval.accept();
+      await acceptedImport;
       await expect(panel.getByRole("status")).toContainText(
         "Configurazione importata",{timeout:15000});
       const stored=await rival.evaluate(id=>
@@ -4816,10 +4822,7 @@ if (!inside) {
 
       // Another tab tombstones the fresh UUID while consent is open.
       // IDB expected=null must not revive it or fabricate a second ID.
-      let onDialog;
-      const pendingDialog=new Promise(resolve=>{onDialog=resolve;});
-      const listener=dialog=>onDialog(dialog);
-      page.on("dialog",listener);
+      const pendingDialog=page.waitForEvent("dialog");
       const pending=selected("source.json",historical.raw);
       const dialog=await pendingDialog;
       const raceId=dialog.message().match(/ID: ([0-9a-f-]{36})/i)?.[1];
@@ -4833,7 +4836,6 @@ if (!inside) {
       assert.equal(tombstone.revision,2);
       await dialog.accept();
       await pending;
-      page.off("dialog",listener);
       await expect(panel.getByRole("alert")).toContainText(
         "non confermato",{timeout:15000});
       assert.deepEqual(await rival.evaluate(id=>
