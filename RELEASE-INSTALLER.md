@@ -28,3 +28,9 @@ After rootless runner installation on the dedicated Linux UID1000 host, use node
 ## RC.4 candidate: source freshness and UI downgrade prevention (#131)
 
 The CI-gated `v0.2.0-rc.4` candidate is intended to publish a new source-verified runner installer from the **exact passing Factory CI commit**, incorporating the security work after RC.3. The static UI now requires `v0.2.0-rc.2` or newer and sorts eligible SemVer tags numerically rather than accepting an arbitrary ordering of the Releases API. The build remains immutable, verified against its source manifest, and packaged with SHA-256 checksums. Neither the Release nor the checksum is an independent vendor signature or a real Docker rootless, reboot or Cloudflare Access acceptance test.
+
+## RC.5 candidate: updated source manifest and safe CAS handoff (#90/#173)
+
+The `v0.2.0-rc.5` prerelease re-packages **exactly the main commit approved by Factory CI**, including the assisted legacy→IndexedDB migration's per-project cooperative write barrier (#173), the operator-only recovery docs, and the current runner installer sources. The archive and its SHA-256 checksum are generated and verified by the release workflow from the CI-approved SHA; existing release tags are never repointed or overwritten. Do not mistake a successful but skipped release workflow for a newly published archive.
+
+This remains an **experimental Linux installer**. A verified source manifest/checksum does not guarantee vendor signatures, real rootless Docker on a dedicated host, reboot survival, external Tunnel/Access, or safe automatic cross-device CAS; operator validation is required.
