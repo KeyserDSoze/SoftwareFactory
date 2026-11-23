@@ -1359,3 +1359,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Prima di `await parseCasEmptyLibraryBackupZip(...)`, copiare i byte compressi del backup #183 in un buffer privato, indipendente dal `Uint8Array` del compressor (anche offset view/SharedArrayBuffer).
 - Passare la stessa copia privata al parser #189 e restituire **solo quei byte** al download dopo i digest: non rileggere il buffer esterno dopo `await`. Non modificare ZIP v1, limiti 20 MB, consensi e atomicità del restore.
 - Vitest con SHA sospeso e buffer modificato durante la verifica deve dimostrare la corrispondenza ZIP/manifest/RAW; nessun localStorage, upload, prova runner/Code Reviewer o migrazione live #139.
+
+## Backup offline bozza NON confermata del CAS-only (#194)
+- Se la scrittura native CAS fallisce per quota, stale token o versionchange, preservare snapshot pinned e testi in React. L'export emergenziale può avvenire anche con controller `blocked` senza lettura IndexedDB e senza toccare lo stato del progetto.
+- Formato separato `softwarefactory-cas-uncommitted-draft`: `base` RAW+revisione (potenzialmente stale), `draft` con soli campi UI, `authoritative:false`, `automaticRestore:false`; non farlo passare come JSON restore #148/ZIP #189 né prova di Code Reviewer/runner/GitHub. Nessuna API key/PAT dai settings.
+- Avviso di testo sensibile in chiaro e consenso prima del download; file non attestato sul disco, nessun retry, scrittura o rebase. Vitest + Chromium 2 tab sul controller bloccato; #139/#91/#92 ancora aperte.

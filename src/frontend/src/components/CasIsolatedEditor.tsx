@@ -50,6 +50,8 @@ import {
   hasCasIsolatedStackDraft,
 } from "../application/cas-isolated-stack-config";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
+import {prepareCasUncommittedDraftBackup}
+  from "../application/cas-uncommitted-draft-backup";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
   buildCasIsolatedManualStage,canCommitCasIsolatedManualStage,
@@ -579,6 +581,40 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function exportUncommittedDraft():void {
+    // This intentionally works even after the CAS controller was blocked.
+    // Only pinned React state is read — no IndexedDB, cloud or legacy access.
+    if(!snapshot || !dirty || inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      let backup;
+      try{
+        backup=prepareCasUncommittedDraftBackup({
+          snapshot,name:draftName,description:draftDescription,
+          requirements:draftRequirements,stack:draftStack,
+          manualStage,manualOutput,codeRequest,codeProposalJson,
+        });
+      }catch{
+        setError(t(locale,"casIsoDraftBackupFailure"));return;
+      }
+      if(!window.confirm(t(locale,"casIsoDraftBackupConsent")+"\n"+
+          snapshot.id+" / rev. "+snapshot.revision))return;
+      let url:string|undefined;
+      try{
+        url=URL.createObjectURL(new Blob([backup.raw],{
+          type:"application/json",
+        }));
+        const link=document.createElement("a");
+        link.href=url;link.download=backup.fileName;
+        document.body.appendChild(link);link.click();link.remove();
+        // No filesystem ACK and no state mutation, even on blocked IDB.
+        setNotice(t(locale,"casIsoDraftBackupOffered"));
+      }catch{
+        setError(t(locale,"casIsoDraftBackupFailure"));
+      }finally{
+        if(url)setTimeout(()=>URL.revokeObjectURL(url),30000);
+      }
+    });
+  }
   function refresh():void {
     if(inFlight.current) return;
     // A ready controller retains its pinned snapshot and draft on refresh.
@@ -1427,6 +1463,15 @@ export default function CasIsolatedEditor({
       {snapshot && <div data-testid="cas-isolated-active">
         <p><strong>{t(locale,"casIsoSelected")}</strong> ·
           rev. {snapshot.revision} · {snapshot.id}</p>
+        <section data-testid="cas-isolated-uncommitted-draft-backup">
+          <p className="helper">{t(locale,"casIsoDraftBackupExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-isolated-draft-backup-action"
+            disabled={working || pipelineRunning || !dirty}
+            onClick={exportUncommittedDraft}>
+            {t(locale,"casIsoDraftBackupAction")}
+          </button>
+        </section>
         {onRequestLegacy && <div data-testid="cas-selected-revision-check">
           <p className="helper">{t(locale,"casRevisionCheckExplain")}</p>
           <button type="button" className="secondary"

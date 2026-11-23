@@ -15,6 +15,12 @@ describe("installer and GitHub Actions i18n", () => {
     expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
     expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
   });
+  it("labels the uncommitted CAS draft recovery as offline, not an IndexedDB ACK",()=>{
+    expect(t("it","casIsoDraftBackupExplain")).toContain("NON SALVATA");
+    expect(t("en","casIsoDraftBackupExplain")).toContain("UNCOMMITTED");
+    expect(t("it","casIsoDraftBackupOffered")).toContain("NON certifica");
+    expect(t("en","casIsoDraftBackupConsent")).toContain("CANNOT");
+  });
   it("normalizes a language preference safely and translates operational steps", () => {
     expect(normalizeLocale("en")).toBe("en");
     expect(normalizeLocale("not-a-locale")).toBe("it");

@@ -1970,6 +1970,54 @@ if (!inside) {
       assert.deepEqual(await page.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
         "Rival-tab CAS winner must never be overwritten or auto-merged");
+      // #194: emergency export MUST still work after the stale CAS writer
+      // has been blocked and detached. Include the original pinned RAW plus
+      // the rejected in-memory requirements; never upload, adopt or rewrite.
+      const draftBackup=panel.getByTestId("cas-isolated-draft-backup-action");
+      await expect(draftBackup).toBeEnabled();
+      page.removeAllListeners("dialog");
+      let refusedDraftDownloads=0;
+      const countDraftDownload=()=>{refusedDraftDownloads++;};
+      page.on("download",countDraftDownload);
+      page.once("dialog",dialog=>{
+        assert.match(dialog.message(),/NON SALVATE/);
+        void dialog.dismiss();
+      });
+      await draftBackup.click();
+      assert.equal(refusedDraftDownloads,0,
+        "No draft download or file handoff before consent");
+      page.off("download",countDraftDownload);
+      page.once("dialog",dialog=>{
+        assert.match(dialog.message(),/OBSOLETA/);
+        void dialog.accept();
+      });
+      const emergencyDownload=page.waitForEvent("download");
+      await draftBackup.click();
+      const emergency=await emergencyDownload;
+      assert.equal(emergency.suggestedFilename(),
+        "softwarefactory-cas-uncommitted-draft-"+original[1].id+"-r1.json");
+      const payload=JSON.parse((await readFile(await emergency.path()))
+        .toString("utf8"));
+      assert.equal(payload.format,"softwarefactory-cas-uncommitted-draft");
+      assert.equal(payload.schemaVersion,1);
+      assert.equal(payload.authoritative,false);
+      assert.equal(payload.automaticRestore,false);
+      assert.equal(payload.uncommitted,true);
+      assert.deepEqual(payload.base,original[1],
+        "Uncommitted backup must carry EXACT pinned revision, not rival");
+      assert.equal(payload.draft.config.requirements,
+        "Unsaved requirements must lose to rival");
+      assert.equal(payload.draft.config.description,"Existing brief 1");
+      assert.equal(payload.draft.manualStage,"features");
+      assert.equal(payload.draft.manualOutput,"");
+      assert.equal(payload.draft.codeRequest,"");
+      assert.equal(payload.draft.codeProposalJson,"");
+      await expect(requirements).toHaveValue(
+        "Unsaved requirements must lose to rival");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
+        "Emergency JSON cannot overwrite the other tab's CAS winner");
+      console.log("FACTORY_CAS_UNCOMMITTED_DRAFT_E2E_PASS: after stale CAS block, explicit consent and offline download preserve pinned original RAW plus unsaved draft without any native/legacy writes or automatic restore");
       // #154: after blocked CAS, the rejected draft remains valuable human
       // text. A normal refresh must NOT erase it without another consent.
       page.removeAllListeners("dialog");
