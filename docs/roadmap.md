@@ -1378,3 +1378,5 @@ Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un li
 - [x] #179: restore tombstone CAS-only da backup JSON con due consensi e revision fencing, senza editor/writer legacy o nuove prove test; #139 resta aperta. CI da verificare.
 
 - [x] #181: inventario read-only esplicito ID/revisione delle tombstone native CAS; niente recupero automatico o nuovo writer legacy, ADR 0132 (CI da verificare).
+
+- [x] #183: backup offline ZIP di tutta la libreria IndexedDB CAS con snapshot readonly atomico, doppio consenso, digest verificati e race fail-closed; NO migration legacy automatica (CI da verificare).

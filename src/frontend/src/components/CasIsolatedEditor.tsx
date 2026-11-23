@@ -66,6 +66,8 @@ import {
   prepareCasIsolatedExport,confirmCasIsolatedExport,
 } from "../application/cas-isolated-export";
 import {prepareCasIsolatedSourceZip} from "../application/cas-isolated-source-zip";
+import {prepareCasLibraryRecoveryBundle,confirmCasLibraryRecoveryBundle}
+  from "../application/cas-library-recovery-bundle";
 import {
   buildCasIsolatedHumanApplyPendingPatch,
   canApplyCasIsolatedHumanPendingPatch,
@@ -629,6 +631,60 @@ export default function CasIsolatedEditor({
     });
   }
 
+
+  function exportLibraryBackup():void {
+    if(inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      // A consistent, whole-library native IDB snapshot. Any unsaved draft
+      // in a selected project stays untouched and is NOT in this archive.
+      let ticket;
+      try{
+        ticket=await prepareCasLibraryRecoveryBundle();
+      }catch{
+        setError(t(locale,"casLibraryBackupUnavailable"));return;
+      }
+      const identity=ticket.snapshot.projects.length+" "+t(locale,"casLibraryBackupCount");
+      if(!window.confirm(t(locale,"casLibraryBackupConsent")+"\n"+identity))return;
+      if(!window.confirm(t(locale,"casLibraryBackupFinalConsent")+"\n"+identity))return;
+      let files:Readonly<Record<string,string>>;
+      try{
+        const confirmed=await confirmCasLibraryRecoveryBundle(ticket,true);
+        files=confirmed.files;
+      }catch{
+        // A race or ambiguous readback cannot authorize download of a
+        // silently rebased or partial library. No auto-retry.
+        setError(t(locale,"casLibraryBackupStale"));return;
+      }
+      let downloadUrl:string;
+      try{
+        const entries:Record<string,Uint8Array>=Object.create(null);
+        for(const [path,raw] of Object.entries(files))
+          entries[path]=strToU8(raw);
+        const zipped=zipSync(entries,{level:6});
+        const bytes=new Uint8Array(zipped.length);
+        bytes.set(zipped);
+        downloadUrl=URL.createObjectURL(new Blob([bytes],{
+          type:"application/zip",
+        }));
+      }catch{
+        setError(t(locale,"casLibraryBackupUnavailable"));return;
+      }
+      try{
+        const link=document.createElement("a");
+        link.href=downloadUrl;
+        link.download=ticket.fileName;
+        document.body.appendChild(link);link.click();link.remove();
+        // Browser handoff is NOT proof that the user saved the archive.
+        if(window.confirm(t(locale,"casLibraryBackupSavedConfirm")))
+          setNotice(t(locale,"casLibraryBackupSaved")+" "+identity);
+        else
+          setNotice(t(locale,"casLibraryBackupUnverified")+" "+identity);
+      }finally{
+        setTimeout(()=>URL.revokeObjectURL(downloadUrl),30000);
+      }
+    });
+  }
+
   function exportSelected():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot;
@@ -1167,6 +1223,13 @@ export default function CasIsolatedEditor({
             }}/>
         </label>
       </div>
+      <section data-testid="cas-library-backup">
+        <p className="helper">{t(locale,"casLibraryBackupExplain")}</p>
+        <button type="button" className="secondary"
+          data-testid="cas-library-backup-action"
+          disabled={working || pipelineRunning}
+          onClick={exportLibraryBackup}>{t(locale,"casLibraryBackupAction")}</button>
+      </section>
       <section data-testid="cas-isolated-tombstone-inventory">
         <p className="helper">{t(locale,"casIsoTombstoneExplain")}</p>
         <button type="button" className="secondary"

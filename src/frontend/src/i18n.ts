@@ -87,6 +87,17 @@ export const messages = {
     casIsoTombstoneScan: "Controlla ID eliminati in IndexedDB",
     casIsoTombstoneSnapshot: "Istantanea locale: un'altra scheda può modificare queste tombstone. Nessun progetto è stato aperto o ripristinato.",
     casIsoTombstoneEmpty: "Nessuna tombstone IndexedDB in questa istantanea.",
+    casLibraryBackupExplain: "Backup di emergenza dell'INTERA libreria IndexedDB CAS SOLO LOCALE: ZIP con JSON RAW esatti dei progetti attivi, manifest SHA-256 e sole revisioni/ID delle tombstone. Contiene testo storico anche SENSIBILE e prove AI/runner/Code Agent/GitHub NON riverificate: custodisci il file OFFLINE. Non include bozze non salvate, non importa né sincronizza nulla, non è cifrato. Limite totale 16 milioni di caratteri; verifica ogni file prima di condividerlo.",
+    casLibraryBackupAction: "Scarica backup ZIP COMPLETO libreria CAS",
+    casLibraryBackupCount: "progetti IndexedDB attivi (bozze escluse)",
+    casLibraryBackupConsent: "PRIMA CONFERMA: preparare backup ZIP RAW in CHIARO della libreria CAS? Può contenere dati sensibili e vecchi output non verificati. Solo progetti attivi, nessun payload eliminato. Non verrà scritto o sincronizzato nulla.",
+    casLibraryBackupFinalConsent: "ULTIMA CONFERMA: consentire il download dell'intero ZIP CAS? Un'altra scheda potrebbe aver cambiato un ID, la revisione o una tombstone: in quel caso il download sarà bloccato. SHA-256 NON è una firma né una prova di test.",
+    casLibraryBackupSavedConfirm: "Hai SALVATO il file ZIP completo su disco e in luogo sicuro? Il browser non può certificarlo. Nessun progetto sarà importato automaticamente.",
+    casLibraryBackupSaved: "Download backup ZIP CAS consegnato al browser con SALVATAGGIO dichiarato dall'operatore (NON verificabile). Archivio storico, nessun nuovo test attestato.",
+    casLibraryBackupUnverified: "Download backup ZIP CAS avviato, ma SALVATAGGIO NON confermato. Nessuna garanzia di recupero: controlla il file scaricato.",
+    casLibraryBackupStale: "BACKUP BLOCCATO: libreria IndexedDB modificata in un'altra scheda, tombstone cambiata o verifica fallita. Nessuno ZIP consegnato; controlla la libreria e riprova SOLO manualmente.",
+    casLibraryBackupUnavailable: "Backup COMPLETO CAS non disponibile: nessun progetto attivo, IndexedDB indisponibile, archive corrotto, oltre limite 16M o errore ZIP. Nessun backup parziale prodotto.",
+
 
 
     casIsoTitle: "Editor IndexedDB isolato — anteprima",
@@ -460,6 +471,17 @@ export const messages = {
     casIsoTombstoneScan: "Inspect deleted IndexedDB IDs",
     casIsoTombstoneSnapshot: "Local snapshot: another tab can change these tombstones. No project was opened or restored.",
     casIsoTombstoneEmpty: "No IndexedDB tombstones in this snapshot.",
+    casLibraryBackupExplain: "Emergency backup of the ENTIRE LOCAL IndexedDB CAS library: a ZIP of exact active-project RAW JSON files, a SHA-256 manifest and tombstone IDs/revisions ONLY. Contains potentially SENSITIVE historical text and UNVERIFIED AI/runner/Code Agent/GitHub evidence: store OFFLINE. Does not include unsaved drafts, import, encryption or cloud sync. 16 million total raw character limit; inspect files before sharing.",
+    casLibraryBackupAction: "Download FULL CAS library backup ZIP",
+    casLibraryBackupCount: "active IndexedDB projects (drafts excluded)",
+    casLibraryBackupConsent: "FIRST CONFIRMATION: prepare a PLAINTEXT RAW ZIP backup of the entire CAS library? This may contain sensitive data and old unverified outputs. Active projects only; deleted payloads cannot be recovered. No cloud or legacy writes.",
+    casLibraryBackupFinalConsent: "FINAL CONFIRMATION: allow download of the full CAS ZIP? A rival tab may change an ID, revision or tombstone: then download is blocked. SHA-256 is NOT a signature or proof of testing.",
+    casLibraryBackupSavedConfirm: "Did you actually SAVE the complete ZIP on disk in a safe place? The browser cannot prove this. No projects are imported automatically.",
+    casLibraryBackupSaved: "CAS ZIP backup handed to the browser with user-declared (NOT verified) disk save. Historical archive, no new tests attested.",
+    casLibraryBackupUnverified: "CAS ZIP backup download offered, but disk save NOT confirmed. No recovery assurance: inspect the downloaded file.",
+    casLibraryBackupStale: "BACKUP BLOCKED: IndexedDB library, tombstone or verification changed in another tab. No ZIP delivered; inspect the library and retry ONLY manually.",
+    casLibraryBackupUnavailable: "FULL CAS backup unavailable: no active projects, IndexedDB unavailable, corrupt archive, exceeds 16M limit or ZIP error. No partial backup produced.",
+
 
 
     casIsoTitle: "Isolated IndexedDB editor — preview",
