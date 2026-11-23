@@ -13,3 +13,5 @@ L'utente deve confermare espressamente il nuovo ID. La scrittura usa una sola \`
 Si tratta di un **nuovo progetto pulito**, non di restore storico o migrazione live; il backup originale rimane intatto e deve essere conservato. I vecchi writer legacy e i dispositivi remoti non condividono la CAS nativa. Non rivendicare parità o sicurezza multi-device, né test/approvazioni preesistenti. La baseline #139/#91/#92 resta aperta.
 
 Vitest \`cas-external-config-import.test.ts\` prova schema/size/segreti, reset prove, ticket manomessi, consenso e native insert-only/fault. Il gate complessivo rimane Factory CI, Pages e Installer candidate sullo stesso commit.
+
+Il browser E2E in Chromium reale controlla input JSON scelto, consenso rifiutato, commit nativo pulito, concorrenza con tombstone di seconda scheda, reload e nessuna modifica del legacy: marker `FACTORY_CAS_EXTERNAL_CONFIG_IMPORT_E2E_PASS`.

@@ -4721,6 +4721,142 @@ if (!inside) {
       await freshCasContext.close();
     }
 
+
+    // #178: manual LOCAL JSON from the CAS-only route must create only a
+    // new native configuration, never resurrect historical AI/test proof,
+    // touch the legacy store or silently retry after a rival tombstone.
+    const externalImportContext=await browser.newContext({acceptDownloads:true});
+    try {
+      const page=await externalImportContext.newPage();
+      const rival=await externalImportContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      for(const tab of [page,rival])
+        await tab.addScriptTag({content:casBundle});
+      const legacyBefore=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        keys:Object.keys(localStorage).sort(),
+      }));
+      const panel=page.getByTestId("cas-isolated-editor");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const create=panel.getByTestId("cas-isolated-create");
+      await create.locator("input").fill("External source 178");
+      await create.locator("textarea").fill("Only the stack should be copied");
+      page.once("dialog",dialog=>void dialog.accept());
+      await create.getByRole("button",{
+        name:"Crea nuovo progetto SOLO IndexedDB",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("External source 178");
+      const original=await rival.evaluate(async()=>{
+        const list=await window.FactoryProjectCas.listCasProjects();
+        return await window.FactoryProjectCas.readCasProject(list[0].id);
+      });
+      const historical=await rival.evaluate(async snapshot=>{
+        const project=JSON.parse(snapshot.raw);
+        project.stages[0].status="complete";
+        project.stages[0].output="UNVERIFIED_AI_178";
+        project.stages[0].completionOrigin="manual";
+        project.githubDestination={owner:"historic",repo:"historic",branch:"main",
+          authMode:"pat",appGateway:"",privateRepo:false};
+        project.githubTestReceipt={requestId:"OLD_RECEIPT_178",
+          repository:"historic/historic",branch:"main",
+          commitSha:"OLD_SHA_178",createdAt:project.updatedAt,
+          selected:["web-build"]};
+        return window.FactoryProjectCas.compareAndSwapCasProject(project,snapshot);
+      },original);
+      const file=panel.getByTestId("cas-isolated-import-file");
+      const selected=async(name,content)=>file.setInputFiles({
+        name,mimeType:"application/json",buffer:Buffer.from(content,"utf8"),
+      });
+      await selected("invalid.json","{broken");
+      await expect(panel.getByRole("alert"))
+        .toContainText("JSON non valido");
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,1);
+
+      page.once("dialog",dialog=>void dialog.dismiss());
+      await selected("source.json",historical.raw);
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,1,
+      "Rejected import consent must never create an IndexedDB row");
+      let importedId="";
+      page.once("dialog",dialog=>{
+        const match=dialog.message().match(/ID: ([0-9a-f-]{36})/i);
+        assert.ok(match,"Import must disclose its fresh UUID before consent");
+        importedId=match[1];
+        void dialog.accept();
+      });
+      await selected("source.json",historical.raw);
+      await expect(panel.getByRole("status")).toContainText(
+        "Configurazione importata",{timeout:15000});
+      const stored=await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),importedId);
+      assert.equal(stored.revision,1);
+      const clean=JSON.parse(stored.raw);
+      assert.notEqual(clean.id,historical.id);
+      assert.equal(clean.config.name,"External source 178 (import)");
+      assert.equal(clean.config.description,"Only the stack should be copied");
+      assert.ok(clean.stages.every(stage=>
+        stage.status==="pending" && stage.output==="" &&
+        stage.sources.length===0));
+      assert.deepEqual(Object.keys(clean).sort(),
+        ["config","createdAt","id","stages","updatedAt"]);
+      assert.equal(stored.raw.includes("UNVERIFIED_AI_178"),false);
+      assert.equal(stored.raw.includes("OLD_RECEIPT_178"),false);
+      assert.equal(await panel.getByTestId("cas-isolated-active").count(),0,
+        "No automatic selection or auto-reuse of imported evidence");
+
+      // Another tab tombstones the fresh UUID while consent is open.
+      // IDB expected=null must not revive it or fabricate a second ID.
+      let onDialog;
+      const pendingDialog=new Promise(resolve=>{onDialog=resolve;});
+      const listener=dialog=>onDialog(dialog);
+      page.on("dialog",listener);
+      const pending=selected("source.json",historical.raw);
+      const dialog=await pendingDialog;
+      const raceId=dialog.message().match(/ID: ([0-9a-f-]{36})/i)?.[1];
+      assert.ok(raceId);
+      const tombstone=await rival.evaluate(async id=>{
+        const p={id,config:{name:"Rival tombstone 178"},stages:[],
+          updatedAt:"2026-11-23T13:00:00.000Z"};
+        const created=await window.FactoryProjectCas.compareAndSwapCasProject(p,null);
+        return window.FactoryProjectCas.deleteCasProject(id,created);
+      },raceId);
+      assert.equal(tombstone.revision,2);
+      await dialog.accept();
+      await pending;
+      page.off("dialog",listener);
+      await expect(panel.getByRole("alert")).toContainText(
+        "non confermato",{timeout:15000});
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),raceId),
+        {state:"tombstone",revision:2});
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,2,
+        "Rival tombstone may not create another active project");
+      const legacyAfter=await page.evaluate(()=>({
+        pointer:localStorage.getItem("softwarefactory.project.v1"),
+        keys:Object.keys(localStorage).sort(),
+      }));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "CAS-only import may not read/write any legacy project slots");
+      await page.reload({waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      assert.deepEqual(await page.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),importedId),stored,
+        "Clean native import must survive reload with exact raw and revision");
+      console.log("FACTORY_CAS_EXTERNAL_CONFIG_IMPORT_E2E_PASS: explicit JSON file, invalid and declined consent, new clean native revision, evidence stripped, concurrent tombstone fenced, reload and unchanged legacy");
+    } finally {
+      await externalImportContext.close();
+    }
+
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
     // creation or encourage a second new UUID; operator can recover via ID.
