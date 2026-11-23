@@ -1386,3 +1386,5 @@ Dal progetto IndexedDB selezionato, con sessione pulita e consenso, genera un li
 - [x] #186: secondo fence della baseline sul writer legacy checked dopo scansione libreria; E2E Chromium due tab e ADR 0135 (CI da verificare). Non è CAS atomico / cutover.
 
 - [x] #188: fence dell'ACK GitHub autosync su JSON RAW, repository/opt-in/lock dopo token e push, outbox blocked per commit ambigui; non è cutover CAS async (CI da verificare).
+
+- [x] #189: import offline ZIP #183 SOLO su libreria CAS completamente vuota, atomic single-IDB-transaction, i18n IT/EN, SHA-256/hard limits, ADR 0137 (CI da verificare). NON è cutover writer live.

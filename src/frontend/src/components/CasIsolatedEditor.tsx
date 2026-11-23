@@ -28,7 +28,7 @@ import {
 import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
-import {listCasProjects,listCasTombstones} from "../infrastructure/project-cas";
+import {listCasProjects,listCasTombstones,readCasLibraryBackupSnapshot} from "../infrastructure/project-cas";
 import type {CasProjectTombstone} from "../infrastructure/project-cas";
 import {
   prepareCasIsolatedNewProject,confirmCasIsolatedNewProject,
@@ -70,6 +70,10 @@ import {prepareCasSelectedRevisionReconcile,confirmCasSelectedRevisionReconcile}
   from "../application/cas-selected-revision-reconcile";
 import {prepareCasLibraryRecoveryBundle,confirmCasLibraryRecoveryBundle}
   from "../application/cas-library-recovery-bundle";
+import {
+  prepareCasEmptyLibraryRestorePreview,confirmCasEmptyLibraryBackupRestore,
+  MAX_CAS_LIBRARY_ZIP_BYTES,
+} from "../application/cas-empty-library-zip-restore";
 import {
   buildCasIsolatedHumanApplyPendingPatch,
   canApplyCasIsolatedHumanPendingPatch,
@@ -717,6 +721,65 @@ export default function CasIsolatedEditor({
   }
 
 
+
+  function restoreWholeCasLibraryZip(file:File):void {
+    // Only the isolated root can initiate a new, native IDB writer.
+    // Never mount this import in LegacyFactoryApp's embedded preview.
+    if(!onRequestLegacy || snapshot || active.current ||
+       inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      if(snapshot || active.current || pipelineRunning || !file ||
+         file.size===0 || file.size>MAX_CAS_LIBRARY_ZIP_BYTES ||
+         !file.name.toLowerCase().endsWith(".zip")){
+        setError(t(locale,"casLibraryRestoreInvalid"));return;
+      }
+      let ticket;
+      try{
+        const bytes=new Uint8Array(await file.arrayBuffer());
+        ticket=await prepareCasEmptyLibraryRestorePreview(bytes);
+      }catch{
+        setError(t(locale,"casLibraryRestoreInvalid"));return;
+      }
+      // Source revisions are historical. Each newly inserted native slot
+      // starts at revision 1, and deleted payloads are NEVER imported.
+      const count=ticket.projects.length+" "+t(locale,"casLibraryRestoreCount")+
+        "; "+ticket.tombstones.length+" "+t(locale,"casLibraryRestoreTombstones");
+      if(!window.confirm(t(locale,"casLibraryRestoreFirstConsent")+
+        "\n"+count))return;
+      if(!window.confirm(t(locale,"casLibraryRestoreFinalConsent")+
+        "\n"+count))return;
+      if(active.current || snapshot || resumeView.current.snapshot ||
+         resumeView.current.dirty || resumeView.current.pipelineRunning){
+        setError(t(locale,"casLibraryRestoreInvalid"));return;
+      }
+      let saved:ReadonlyArray<CasProjectSnapshot>;
+      try{
+        // Transaction's own cursor rejects even a tombstone or a newly
+        // created ID during consent, with ZERO partial inserts.
+        saved=await confirmCasEmptyLibraryBackupRestore(ticket,true);
+      }catch{
+        setError(t(locale,"casLibraryRestoreUnverified"));return;
+      }
+      setDeleted(null);setList(null);
+      // Tx.oncomplete has acknowledged ALL rows, but another tab may
+      // change them before readback. Never repeat this import after ACK.
+      try{
+        const current=await readCasLibraryBackupSnapshot();
+        if(current.tombstones.length!==0 ||
+           current.projects.length!==saved.length ||
+           !saved.every(expected=>current.projects.some(item=>
+             exact(item,expected))))
+          throw Error("Post-ACK library changed");
+        setList(await listCasProjects());
+        setNotice(t(locale,"casLibraryRestoreDone")+
+          " "+saved.length+" "+t(locale,"casLibraryRestoreCount"));
+      }catch{
+        setList(null);
+        setNotice(t(locale,"casLibraryRestorePostAck"));
+      }
+    });
+  }
+
   function exportLibraryBackup():void {
     if(inFlight.current || pipelineRunning)return;
     void run(async()=>{
@@ -1308,6 +1371,20 @@ export default function CasIsolatedEditor({
             }}/>
         </label>
       </div>
+      {onRequestLegacy && <section data-testid="cas-library-zip-restore">
+        <p className="helper">{t(locale,"casLibraryRestoreExplain")}</p>
+        <label>{t(locale,"casLibraryRestoreLabel")}
+          <input type="file" accept=".zip,application/zip"
+            data-testid="cas-library-zip-restore-file"
+            disabled={working || Boolean(snapshot) ||
+              Boolean(active.current) || pipelineRunning}
+            onChange={e=>{
+              const file=e.currentTarget.files?.[0];
+              e.currentTarget.value="";
+              if(file)restoreWholeCasLibraryZip(file);
+            }}/>
+        </label>
+      </section>}
       <section data-testid="cas-library-backup">
         <p className="helper">{t(locale,"casLibraryBackupExplain")}</p>
         <button type="button" className="secondary"
