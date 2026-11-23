@@ -4035,10 +4035,10 @@ if (!inside) {
 
     // #172: persist a running stage as after a tab crash. A rival CAS
     // update during the last operator consent must win, without lost data.
-    const recoveryContext=await browser.newContext({acceptDownloads:true});
+    const runningStageRecoveryContext=await browser.newContext({acceptDownloads:true});
     try {
-      const page=await recoveryContext.newPage();
-      const rival=await recoveryContext.newPage();
+      const page=await runningStageRecoveryContext.newPage();
+      const rival=await runningStageRecoveryContext.newPage();
       await Promise.all([
         page.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
         rival.goto("http://127.0.0.1:4174/",{waitUntil:"networkidle"}),
@@ -4158,7 +4158,7 @@ if (!inside) {
         window.FactoryProjectCas.readCasProject(id),source.id),saved);
       console.log("FACTORY_INDEXEDDB_RUNNING_RECOVERY_E2E_PASS: backup, 3 consents, race, reload, no false AI completion");
     }finally{
-      await recoveryContext.close();
+      await runningStageRecoveryContext.close();
     }
 
     // #150: A new project can be created directly in the standalone CAS

@@ -807,7 +807,7 @@ export default function CasIsolatedEditor({
         throw Error("Stale running CAS recovery or active local work");
       const ticket=prepareCasRunningRecovery(expected);
       if(!window.confirm(t(locale,"casIsoRunningRecoveryBackupConfirm")+
-          "\\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
+          "\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
         return;
       const url=URL.createObjectURL(new Blob([expected.raw],{
         type:"application/json",
@@ -820,7 +820,7 @@ export default function CasIsolatedEditor({
       setTimeout(()=>URL.revokeObjectURL(url),30000);
       if(!window.confirm(t(locale,"casIsoRunningRecoverySavedConfirm")))return;
       if(!window.confirm(t(locale,"casIsoRunningRecoveryFinalConfirm")+
-          "\\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
+          "\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
         return;
       // A rival writer during the dialogs wins the same native IDB compare.
       // No retry, rebase, remote cancellation claim, or localStorage fallback.
