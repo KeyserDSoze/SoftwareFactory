@@ -68,6 +68,8 @@ import {
 import {
   buildCasIsolatedStageReset,canResetCasIsolatedStage,
 } from "../application/cas-isolated-stage-reset";
+import {inspectCasRunningStage,prepareCasRunningRecovery}
+  from "../application/cas-running-recovery";
 
 type Props={
   locale:FactoryLocale;settings:FactorySettings;
@@ -137,6 +139,7 @@ export default function CasIsolatedEditor({
   // This projection is read-only and pinned to the selection's exact CAS
   // revision; a rival tab cannot silently replace the text being inspected.
   const inspectedStages=inspectCasIsolatedStages(snapshot);
+  const strandedStage=useMemo(()=>inspectCasRunningStage(snapshot),[snapshot]);
   const inspectedCodePatch=inspectCasIsolatedPendingCodePatch(snapshot);
   // Bounded source projections are expensive (generated scaffold baseline):
   // memoize by the pinned IDB snapshot, not draft edits or rival-tab events.
@@ -796,6 +799,42 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function recoverRunningStage():void {
+    void run(async()=>{
+      const controller=active.current,expected=snapshot;
+      if(!controller || !expected || controller.state()!=="ready" ||
+         dirty || pipelineRunning || !exact(controller.snapshot(),expected))
+        throw Error("Stale running CAS recovery or active local work");
+      const ticket=prepareCasRunningRecovery(expected);
+      if(!window.confirm(t(locale,"casIsoRunningRecoveryBackupConfirm")+
+          "\\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
+        return;
+      const url=URL.createObjectURL(new Blob([expected.raw],{
+        type:"application/json",
+      }));
+      const link=document.createElement("a");
+      link.href=url;
+      link.download="softwarefactory-cas-before-running-recovery-"+expected.id+
+        "-r"+expected.revision+".json";
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      if(!window.confirm(t(locale,"casIsoRunningRecoverySavedConfirm")))return;
+      if(!window.confirm(t(locale,"casIsoRunningRecoveryFinalConfirm")+
+          "\\n"+ticket.stage+" / "+expected.id+" / rev. "+expected.revision))
+        return;
+      // A rival writer during the dialogs wins the same native IDB compare.
+      // No retry, rebase, remote cancellation claim, or localStorage fallback.
+      const committed=await controller.commit(ticket.candidate,expected);
+      if(!exact(committed,{
+        id:ticket.candidate.id,revision:expected.revision+1,
+        raw:JSON.stringify(ticket.candidate),
+      }))throw Error("Inconsistent running recovery ACK");
+      accept(committed);setList(null);
+      setNotice(t(locale,"casIsoRunningRecoveryDone")+
+        " ("+ticket.stage+", rev. "+committed.revision+")");
+    });
+  }
+
   function executeCasStage():void {
     void run(async()=>{
       const controller=active.current,expected=snapshot,stage=stageToRun;
@@ -1362,6 +1401,17 @@ export default function CasIsolatedEditor({
               active.current?.state()!=="ready" ||
               !canResetCasIsolatedStage(snapshot,stageToReset)}
             onClick={resetStage}>{t(locale,"casIsoStageResetAction")}</button>
+        </div>
+        <div data-testid="cas-isolated-running-recovery">
+          <p className="helper">{t(locale,"casIsoRunningRecoveryExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-isolated-running-recovery-action"
+            disabled={working || pipelineRunning || Boolean(dirty) ||
+              active.current?.state()!=="ready" || !strandedStage}
+            onClick={recoverRunningStage}>
+            {t(locale,"casIsoRunningRecoveryAction")}
+            {strandedStage ? " ("+strandedStage+")" : ""}
+          </button>
         </div>
         <div data-testid="cas-isolated-ai-stage">
           <p className="helper">{t(locale,"casIsoPipelineExplain")}</p>
