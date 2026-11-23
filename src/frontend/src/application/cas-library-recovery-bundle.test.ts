@@ -132,9 +132,13 @@ describe("native CAS full library historical recovery bundle #183",()=>{
     }))).rejects.toThrow(/troppo grande/);
   });
   it("round-trips the exact compressed backup through the native restore ZIP parser",async()=>{
-    const base=fixture();
-    base.projects[0].raw=base.projects[0].raw.replace(
-      '"Backup second"','"Backup 日本語 🗂️ second"');
+    const source=fixture();
+    const base:CasLibraryBackupSnapshot={
+      projects:source.projects.map((p,i)=>i===0?{
+        ...p,raw:p.raw.replace('"Backup second"','"Backup 日本語 🗂️ second"'),
+      }:p),
+      tombstones:source.tombstones,
+    };
     const sha=async(raw:string)=>createHash("sha256").update(raw).digest("hex");
     const ticket=await prepareCasLibraryRecoveryBundle(async()=>base);
     const archive=await confirmCasLibraryRecoveryBundle(ticket,true,async()=>base,sha);
