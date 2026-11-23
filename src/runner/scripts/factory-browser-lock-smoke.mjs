@@ -5,6 +5,7 @@
  * It serves the pre-built Factory SPA over container-local loopback.
  */
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -5176,6 +5177,197 @@ if (!inside) {
       console.log("FACTORY_CAS_TOMBSTONE_INVENTORY_E2E_PASS: manual-only ID+revision, stale rival restore, draft preserved, corrupt full-reject, 257-row cap, reload and unchanged legacy");
     }finally {
       await tombInventoryContext.close();
+    }
+
+
+    // #183: complete native CAS library plaintext historical recovery ZIP.
+    // Read-only transaction snapshots all projects AND tombstones together.
+    // Rival writers are fenced across both human consents and SHA-256.
+    const libraryBackupContext=await browser.newContext({acceptDownloads:true});
+    try{
+      const page=await libraryBackupContext.newPage();
+      const rival=await libraryBackupContext.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      const legacyBefore=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project.")).sort()
+        .map(k=>[k,localStorage.getItem(k)]));
+      const prepared=await rival.evaluate(async()=>{
+        const cas=window.FactoryProjectCas;
+        const base={stages:[],updatedAt:"2026-11-23T15:00:00.000Z"};
+        const first={...base,id:"a1830000-1111-4111-8111-111111111183",
+          config:{name:"Library One 183",description:"HISTORICAL_UNVERIFIED_183"}};
+        const second={...base,id:"b1830000-1111-4111-8111-111111111183",
+          config:{name:"Library Two 183",description:"SECOND_183"}};
+        const deleted={...base,id:"c1830000-1111-4111-8111-111111111183",
+          config:{name:"Never in backup",description:"DELETED_PRIVATE_183"}};
+        const a=await cas.compareAndSwapCasProject(first,null);
+        const b=await cas.compareAndSwapCasProject(second,null);
+        const c=await cas.compareAndSwapCasProject(deleted,null);
+        const tombstone=await cas.deleteCasProject(c.id,c);
+        return {first,second,deleted,a,b,tombstone};
+      });
+      const panel=page.getByTestId("cas-isolated-editor");
+      assert.equal(await panel.getByTestId("cas-library-backup-action").count(),
+        0,"Root CAS must not prepare full backup before panel opt-in");
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const action=panel.getByTestId("cas-library-backup-action");
+      const hadDownload=[];
+      const observeDownload=d=>hadDownload.push(d.suggestedFilename());
+      page.on("download",observeDownload);
+      const cancelReady=page.waitForEvent("dialog");
+      const cancelAttempt=action.click();
+      const cancelled=await cancelReady;
+      await cancelled.dismiss();
+      await cancelAttempt;
+      assert.equal(hadDownload.length,0,
+        "No ZIP before first human consent");
+
+      // Pick a native project and deliberately keep UNSAVED UI text. A
+      // library backup may include ONLY the persisted raw from IndexedDB.
+      await panel.getByRole("button",{
+        name:"Ricarica libreria IndexedDB (non cambia la revisione selezionata)",
+      }).click();
+      await expect(panel.getByTestId("cas-isolated-library"))
+        .toContainText("Library One 183");
+      const selectReady=page.waitForEvent("dialog");
+      const select=panel.getByRole("button",{
+        name:"Apri copia IDB: Library One 183",
+      }).click();
+      await (await selectReady).accept();
+      await select;
+      const draft=panel.getByLabel("Nome progetto (solo IndexedDB)");
+      await draft.fill("UNSAVED_DRAFT_NEVER_IN_BUNDLE_183");
+
+      const firstReady=page.waitForEvent("dialog");
+      const positive=action.click();
+      const first=await firstReady;
+      assert.match(first.message(),/PRIMA CONFERMA/);
+      const secondReady=page.waitForEvent("dialog");
+      await first.accept();
+      const second=await secondReady;
+      assert.match(second.message(),/ULTIMA CONFERMA/);
+      const downloadReady=page.waitForEvent("download");
+      const savedReady=page.waitForEvent("dialog");
+      await second.accept();
+      const download=await downloadReady;
+      assert.equal(download.suggestedFilename(),
+        "softwarefactory-cas-library-recovery-v1.zip");
+      const saved=await savedReady;
+      assert.match(saved.message(),/SALVATO/);
+      await saved.accept();
+      await positive;
+      await expect(panel.getByRole("status")).toContainText(
+        "Download backup ZIP CAS consegnato",{timeout:15000});
+      assert.equal(await draft.inputValue(),
+        "UNSAVED_DRAFT_NEVER_IN_BUNDLE_183");
+      const archive=unzipSync(new Uint8Array(await readFile(await download.path())));
+      const paths=Object.keys(archive).sort();
+      assert.equal(paths.length,3,"Exactly 2 active raw files + one manifest");
+      const manifest=JSON.parse(strFromU8(archive["manifest.json"]));
+      assert.equal(manifest.format,"softwarefactory-cas-library-recovery");
+      assert.equal(manifest.schemaVersion,1);
+      assert.equal(manifest.automaticRestore,false);
+      assert.equal(manifest.projects.length,2);
+      assert.deepEqual(manifest.tombstones,[prepared.tombstone]);
+      for(const item of manifest.projects){
+        const bytes=archive[item.file];
+        assert.ok(bytes,"Manifest entry must correspond to a real raw file");
+        const rawText=strFromU8(bytes);
+        const expected=item.id===prepared.a.id?
+          prepared.a:prepared.b;
+        assert.equal(item.revision,expected.revision);
+        assert.equal(rawText,expected.raw,
+          "Native historical raw JSON must be byte-identical in ZIP");
+        assert.equal(item.sha256,
+          createHash("sha256").update(rawText).digest("hex"));
+        assert.ok(!rawText.includes("UNSAVED_DRAFT_NEVER_IN_BUNDLE_183"),
+          "Unsaved UI draft cannot enter historical native backup");
+      }
+      assert.ok(!Object.values(archive).some(content=>
+        strFromU8(content).includes("DELETED_PRIVATE_183")),
+        "Tombstones must NEVER contain deleted historical project payload");
+      assert.equal(manifest.warning.includes("NOT a signature"),true);
+      assert.equal(hadDownload.length,1);
+
+      // A rival TAB changes an active raw/revision while the FIRST
+      // confirmation is held. No partial or secretly rebased backup.
+      const raceFirst=page.waitForEvent("dialog");
+      const raceAttempt=action.click();
+      const held=await raceFirst;
+      const revised=await rival.evaluate(async snapshot=>{
+        const p=JSON.parse(snapshot.raw);
+        p.config.name="RIVAL_UPDATED_183";
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,snapshot);
+      },prepared.b);
+      const raceSecond=page.waitForEvent("dialog");
+      await held.accept();
+      await (await raceSecond).accept();
+      await raceAttempt;
+      await expect(panel.getByRole("alert")).toContainText(
+        "BACKUP BLOCCATO",{timeout:15000});
+      assert.equal(hadDownload.length,1,
+        "A changed native project must prevent all ZIP downloads");
+
+      // A tombstone generation change is part of the same archive fence.
+      const tombReady=page.waitForEvent("dialog");
+      const tombAttempt=action.click();
+      const tombDialog=await tombReady;
+      const resurrected=await rival.evaluate(async({project,tombstone})=>
+        window.FactoryProjectCas.restoreCasTombstoneProject(
+          project,tombstone,JSON.stringify(project),true,
+        ),{project:prepared.deleted,tombstone:prepared.tombstone});
+      assert.equal(resurrected.revision,3);
+      const tombNext=page.waitForEvent("dialog");
+      await tombDialog.accept();
+      await (await tombNext).accept();
+      await tombAttempt;
+      await expect(panel.getByRole("alert")).toContainText("BACKUP BLOCCATO");
+      assert.equal(hadDownload.length,1);
+      assert.equal(await draft.inputValue(),
+        "UNSAVED_DRAFT_NEVER_IN_BUNDLE_183",
+        "Historical export failures must preserve a human draft");
+
+      // A corrupt row in the native store is NOT quietly omitted, even when
+      // other active records are valid. The entire backup is rejected.
+      await rival.evaluate(async()=>{
+        const request=indexedDB.open("softwarefactory.project.cas.v1",1);
+        const db=await new Promise((resolve,reject)=>{
+          request.onsuccess=()=>resolve(request.result);
+          request.onerror=()=>reject(request.error);
+        });
+        try{
+          await new Promise((resolve,reject)=>{
+            const tx=db.transaction("projects","readwrite");
+            tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
+            const id="d1830000-1111-4111-8111-111111111183";
+            tx.objectStore("projects").put({id,revision:0,raw:null},id);
+          });
+        }finally{db.close();}
+      });
+      await action.click();
+      await expect(panel.getByRole("alert")).toContainText(
+        "Backup COMPLETO CAS non disponibile");
+      assert.equal(hadDownload.length,1);
+      const legacyAfter=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project.")).sort()
+        .map(k=>[k,localStorage.getItem(k)]));
+      assert.deepEqual(legacyAfter,legacyBefore,
+        "Full CAS backup must never access/write legacy project slots");
+      await page.reload({waitUntil:"networkidle"});
+      assert.equal(await page.getByTestId("cas-library-backup").count(),0,
+        "No on-mount automatic backup or re-open after reload");
+      page.off("download",observeDownload);
+      console.log("FACTORY_CAS_LIBRARY_RECOVERY_E2E_PASS: full raw zip+SHA manifest, tombstone metadata, 2 consents, disk acknowledgement, dirty draft intact, active/tombstone rival fences, corrupt fail-closed, no legacy or auto-run on reload");
+    }finally{
+      await libraryBackupContext.close();
     }
 
     // #153: the IDB create transaction commits but the next read-only open
