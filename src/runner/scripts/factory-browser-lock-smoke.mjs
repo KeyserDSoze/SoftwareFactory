@@ -38,7 +38,7 @@ if (!inside) {
   const require = createRequire(path.join(root,
     "src/frontend/generated-fixture/src/frontend/web/package.json"));
   const { chromium, expect } = require("@playwright/test");
-  const { unzipSync, strFromU8 } = require("fflate");
+  const { unzipSync, strFromU8, zipSync, strToU8 } = require("fflate");
   // A minimal static server never writes to the read-only checkout. Vite's
   // preview command would attempt a .vite-temp config file under node_modules.
   const dist = path.join(root,"src/frontend/dist");
@@ -5802,6 +5802,243 @@ if (!inside) {
         .githubSync.lastCommit,slot),"c".repeat(40));
       console.log("FACTORY_GITHUB_AUTOSYNC_PIN_E2E_PASS: real 2-tab RAW changed during token blocks push, destination and rival changed after push blocks ACK, stable matching ACK succeeds, reload preserves it, no GitHub provider calls");
     }finally{await autosyncFenceContext.close();}
+
+
+    // #189: whole native CAS library ZIP v1 -> ONE atomic readwrite import
+    // on a TRULY EMPTY store, including no tombstones. This exercises the
+    // actual exporter #183, SHA/manifest, 2 human consents and a rival tab
+    // inserting/deleting while the browser confirmation is held.
+    const backup189Context=await browser.newContext({acceptDownloads:true});
+    let zip189, historical189;
+    try{
+      const source=await backup189Context.newPage();
+      await source.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await source.addScriptTag({content:casBundle});
+      historical189=await source.evaluate(async()=>{
+        const cas=window.FactoryProjectCas;
+        const base={
+          createdAt:"2026-11-23T16:10:00.000Z",
+          updatedAt:"2026-11-23T16:10:00.000Z",
+        };
+        const first={...base,id:"a1890000-1111-4111-8111-111111111189",
+          config:{name:"Recovered library A 189",description:"Historical data"},
+          stages:[{id:"features",status:"complete",
+            output:"HISTORICAL_RUNNER_UNVERIFIED_189",sources:[]}]};
+        const second={...base,id:"b1890000-1111-4111-8111-111111111189",
+          config:{name:"Recovered library B 189"},stages:[]};
+        const removed={...base,id:"c1890000-1111-4111-8111-111111111189",
+          config:{name:"Deleted private content",description:"DELETED_ONLY_189"},
+          stages:[]};
+        const a=await cas.compareAndSwapCasProject(first,null);
+        const b=await cas.compareAndSwapCasProject(second,null);
+        const removedSnapshot=await cas.compareAndSwapCasProject(removed,null);
+        const tombstone=await cas.deleteCasProject(removed.id,removedSnapshot);
+        return {a,b,tombstone,removed};
+      });
+      await source.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const sourceAction=source.getByTestId("cas-library-backup-action");
+      const consentA=source.waitForEvent("dialog");
+      const backupAttempt=sourceAction.click();
+      const dialogA=await consentA;
+      assert.match(dialogA.message(),/PRIMA CONFERMA/);
+      const consentB=source.waitForEvent("dialog");
+      await dialogA.accept();
+      const dialogB=await consentB;
+      assert.match(dialogB.message(),/ULTIMA CONFERMA/);
+      const downloadEvent=source.waitForEvent("download");
+      const savedEvent=source.waitForEvent("dialog");
+      await dialogB.accept();
+      const zipped=await downloadEvent;
+      assert.equal(zipped.suggestedFilename(),
+        "softwarefactory-cas-library-recovery-v1.zip");
+      const saveDialog=await savedEvent;
+      await saveDialog.dismiss();
+      await backupAttempt;
+      zip189=await readFile(await zipped.path());
+      assert.ok(zip189.length>100 && zip189.length<20_000_000);
+      const contents=unzipSync(new Uint8Array(zip189));
+      const manifest=JSON.parse(strFromU8(contents["manifest.json"]));
+      assert.equal(manifest.projects.length,2);
+      assert.deepEqual(manifest.tombstones,[historical189.tombstone]);
+      assert.equal(Object.keys(contents).length,3);
+    }finally{await backup189Context.close();}
+
+    // A NEW isolated Chromium profile has a new IDB. The same-origin
+    // second tab reads the entire committed batch, never a subset.
+    const restored189Context=await browser.newContext();
+    try{
+      const page=await restored189Context.newPage();
+      const rival=await restored189Context.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      const legacyBefore=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      assert.equal(await page.getByTestId("cas-library-zip-restore").count(),0,
+        "Import must NOT read ZIP or start on mount");
+      await page.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const picker=page.getByTestId("cas-library-zip-restore-file");
+      const setZip=()=>picker.setInputFiles({
+        name:"softwarefactory-cas-library-recovery-v1.zip",
+        mimeType:"application/zip",buffer:zip189,
+      });
+      assert.equal(await picker.isEnabled(),true);
+      const cancelledEvent=page.waitForEvent("dialog");
+      const cancelAttempt=setZip();
+      const cancelled=await cancelledEvent;
+      assert.match(cancelled.message(),/PRIMA CONFERMA/);
+      await cancelled.dismiss();
+      await cancelAttempt;
+      assert.deepEqual(await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects()),[],
+        "Declined consent must leave native library entirely empty");
+      const first=page.waitForEvent("dialog");
+      const acceptAttempt=setZip();
+      const confirmFirst=await first;
+      assert.match(confirmFirst.message(),/PRIMA CONFERMA/);
+      const second=page.waitForEvent("dialog");
+      await confirmFirst.accept();
+      const confirmSecond=await second;
+      assert.match(confirmSecond.message(),/ULTIMA CONFERMA/);
+      await confirmSecond.accept();
+      await acceptAttempt;
+      await expect(page.getByRole("status")).toContainText(
+        "Ripristino ZIP libreria CAS CONFERMATO",{timeout:18000});
+      const imported=await rival.evaluate(async()=>{
+        const cas=window.FactoryProjectCas;
+        const all=await cas.listCasProjects();
+        const snapshots=await Promise.all(all.map(p=>cas.readCasProject(p.id)));
+        return {all,snapshots,
+          tombstone:await cas.readCasProjectSlot(
+            "c1890000-1111-4111-8111-111111111189")};
+      });
+      assert.equal(imported.all.length,2);
+      assert.equal(imported.snapshots.length,2);
+      for(const expected of [historical189.a,historical189.b]){
+        const actual=imported.snapshots.find(x=>x.id===expected.id);
+        assert.equal(actual.raw,expected.raw,
+          "Historical raw bytes MUST survive an atomic library ZIP import");
+        assert.equal(actual.revision,1,
+          "A new native profile must start at revision 1, not old generation");
+      }
+      assert.deepEqual(imported.tombstone,{state:"missing"},
+        "Historical tombstone metadata must never revive or create a row");
+      assert.ok(imported.snapshots.some(p=>p.raw.includes(
+        "HISTORICAL_RUNNER_UNVERIFIED_189")));
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0,
+        "Restore must not select or auto-run any imported historical project");
+      const after=await page.evaluate(()=>Object.keys(localStorage)
+        .filter(k=>k.startsWith("softwarefactory.project."))
+        .sort().map(k=>[k,localStorage.getItem(k)]));
+      assert.deepEqual(after,legacyBefore,
+        "Atomic ZIP import never writes legacy project slots or index");
+      // Same ZIP into occupied profile is refused even before consent.
+      await setZip();
+      await expect(page.getByRole("alert")).toContainText(
+        "Backup ZIP CAS invalido");
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,2);
+      await page.reload({waitUntil:"networkidle"});
+      assert.equal(await page.getByTestId("cas-library-zip-restore").count(),0);
+      assert.equal(await page.getByTestId("cas-isolated-active").count(),0);
+      assert.equal((await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects())).length,2);
+    }finally{await restored189Context.close();}
+
+    // Reject corrupted SHA or unexpected ZIP entry before any confirmation
+    // or IDB mutation. A corrupt or malicious archive is never a fallback.
+    const malformed189Context=await browser.newContext();
+    try{
+      const page=await malformed189Context.newPage();
+      await page.goto("http://127.0.0.1:4174/?workspace=cas",
+        {waitUntil:"networkidle"});
+      await page.addScriptTag({content:casBundle});
+      await page.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const zipFiles=unzipSync(new Uint8Array(zip189));
+      const target=Object.keys(zipFiles).find(p=>p.startsWith("projects/"));
+      assert.ok(target);
+      zipFiles[target]=strToU8(strFromU8(zipFiles[target])+" ");
+      const tampered=zipSync(zipFiles,{level:6});
+      await page.getByTestId("cas-library-zip-restore-file").setInputFiles({
+        name:"damaged189.zip",mimeType:"application/zip",buffer:tampered,
+      });
+      await expect(page.getByRole("alert")).toContainText(
+        "Backup ZIP CAS invalido",{timeout:18000});
+      assert.deepEqual(await page.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects()),[]);
+    }finally{await malformed189Context.close();}
+
+    // Rival non-cooperative CAS INSERT during first consent occupies the
+    // destination. The importing single readwrite tx must reject ALL rows.
+    const race189Context=await browser.newContext();
+    try{
+      const page=await race189Context.newPage();
+      const rival=await race189Context.newPage();
+      await Promise.all([
+        page.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+        rival.goto("http://127.0.0.1:4174/?workspace=cas",
+          {waitUntil:"networkidle"}),
+      ]);
+      await rival.addScriptTag({content:casBundle});
+      await page.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      const first=page.waitForEvent("dialog");
+      const attempt=page.getByTestId("cas-library-zip-restore-file")
+        .setInputFiles({name:"backup189.zip",mimeType:"application/zip",
+          buffer:zip189});
+      const held=await first;
+      const newNative=await rival.evaluate(async()=>{
+        const p={id:"d1890000-1111-4111-8111-111111111189",
+          createdAt:"2026-11-23T16:11:00.000Z",
+          updatedAt:"2026-11-23T16:11:00.000Z",
+          config:{name:"Rival inserted mid-consent"},stages:[]};
+        return window.FactoryProjectCas.compareAndSwapCasProject(p,null);
+      });
+      const final=page.waitForEvent("dialog");
+      await held.accept();
+      await (await final).accept();
+      await attempt;
+      await expect(page.getByRole("alert")).toContainText(
+        "Ripristino libreria CAS RIFIUTATO",{timeout:15000});
+      const rows=await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects());
+      assert.deepEqual(rows.map(x=>x.id),[newNative.id],
+        "If a rival inserts during consent NO archived project may appear");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),newNative.id),
+        newNative,"Rival native raw must remain byte-exact");
+
+      // Now the rival deletes its own single row, leaving a TOMBSTONE
+      // (zero active). A new file selection must NOT mistake that for empty.
+      const tombstone=await rival.evaluate(snap=>
+        window.FactoryProjectCas.deleteCasProject(snap.id,snap),newNative);
+      assert.equal(tombstone.revision,2);
+      await page.getByTestId("cas-library-zip-restore-file").setInputFiles({
+        name:"backup189.zip",mimeType:"application/zip",buffer:zip189,
+      });
+      await expect(page.getByRole("alert")).toContainText(
+        "Backup ZIP CAS invalido");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProjectSlot(id),newNative.id),
+        {state:"tombstone",revision:2});
+      assert.deepEqual(await rival.evaluate(()=>
+        window.FactoryProjectCas.listCasProjects()),[]);
+    }finally{await race189Context.close();}
+    console.log("FACTORY_CAS_LIBRARY_ZIP_ATOMIC_RESTORE_E2E_PASS: #183 ZIP -> fresh empty IDB single transaction/2 active rev1, tombstones metadata only, declined consent, corrupted digest, concurrent rival insert/tombstone fail-closed, unchanged legacy, readback and reload");
 
     // #153: the IDB create transaction commits but the next read-only open
     // is deliberately unavailable. The SPA MUST NOT misreport uncommitted
