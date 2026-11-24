@@ -15,6 +15,12 @@ describe("installer and GitHub Actions i18n", () => {
     expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
     expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
   });
+  it("does not label local CAS form copy as a committed write (#196)",()=>{
+    expect(t("it","casIsoDraftCopyInMemory")).toContain("NON SALVATA");
+    expect(t("en","casIsoDraftCopyInMemory")).toContain("UNSAVED");
+    expect(t("it","casIsoDraftCopyRefused")).toContain("Nessun campo copiato");
+    expect(t("en","casIsoDraftCopyExplain")).toContain("No storage write");
+  });
   it("translates offline-only draft inspection without implying a CAS write (#195)",()=>{
     expect(t("it","casIsoDraftInspectWarning")).toContain("SOLO LETTURA");
     expect(t("en","casIsoDraftInspectWarning")).toContain("READ-ONLY");

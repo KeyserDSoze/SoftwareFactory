@@ -117,6 +117,9 @@ export function prepareCasUncommittedDraftBackup(
  */
 export type CasUncommittedDraftInspection=Readonly<{
   id:string;revision:number;originalName:string;
+  /** Exact read-only base RAW pinned to the original emergency export.
+   * NOT evidence of a current native CAS revision. (#196) */
+  baseRaw:string;
   config:Readonly<{name:string;description:string;requirements:string}>;
   stack:ProjectConfig|null;manualStage:StageId;manualOutput:string;
   codeRequest:string;codeProposalJson:string;
@@ -170,6 +173,7 @@ export function inspectCasUncommittedDraftBackup(
       id:input.snapshot.id,
       revision:input.snapshot.revision,
       originalName:source.config.name,
+      baseRaw:input.snapshot.raw,
       config:Object.freeze({name:input.name,
         description:input.description,requirements:input.requirements}),
       stack:input.stack===null?null:structuredClone(input.stack),

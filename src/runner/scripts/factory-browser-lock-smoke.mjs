@@ -2040,6 +2040,10 @@ if (!inside) {
       await expect(draftPreview.getByTestId("cas-uncommitted-draft-requirements"))
         .toContainText("Unsaved requirements must lose to rival");
       await expect(draftPreview).toContainText(/SOLO LETTURA/);
+      // #196: this archived rev.1 must NOT be copyable while native
+      // rev.2 belongs to a rival and the selected controller is blocked.
+      const localCopy=panel.getByTestId("cas-uncommitted-draft-copy-action");
+      await expect(localCopy).toBeDisabled();
       await expect(requirements).toHaveValue("Unsaved requirements must lose to rival");
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB);
@@ -2084,6 +2088,55 @@ if (!inside) {
       await expect(description).toHaveValue("Written first by noncooperating tab");
       await expect(requirements).toHaveValue("Rival constraints take precedence");
       await expect(page.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      // #196 positive path: a NEW emergency draft is pinned to the
+      // confirmed current rev.2, then reopened from disk after closing
+      // the editor and manually copied into a pristine local form.
+      await requirements.fill("RECOVERABLE_LOCAL_FORM_ONLY_196_🦊");
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/POTENZIALMENTE OBSOLETA/);
+        void dlg.accept();
+      });
+      const newEmergencyDownload=page.waitForEvent("download");
+      await draftBackup.click();
+      const newEmergency=await newEmergencyDownload;
+      const newEmergencyPayload=JSON.parse(
+        (await readFile(await newEmergency.path())).toString("utf8"));
+      assert.equal(newEmergencyPayload.base.revision,2);
+      assert.equal(newEmergencyPayload.base.raw,rivalB.raw);
+      assert.equal(newEmergencyPayload.draft.config.requirements,
+        "RECOVERABLE_LOCAL_FORM_ONLY_196_🦊");
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Chiudi editor separato"}).click();
+      await expect(panel.getByTestId("cas-isolated-active")).toHaveCount(0);
+      await panel.getByRole("button",{
+        name:"Apri editor IndexedDB separato",
+      }).click();
+      await panel.getByRole("button",{name:/Ricarica libreria IndexedDB/}).click();
+      page.once("dialog",dlg=>void dlg.accept());
+      await panel.getByRole("button",{name:"Apri copia IDB: IDB pilot B"}).click();
+      await expect(panel.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      await expect(requirements).toHaveValue("Rival constraints take precedence");
+      page.once("dialog",dlg=>void dlg.accept());
+      await inspectFile.setInputFiles(await newEmergency.path());
+      const validPreview=panel.getByTestId("cas-uncommitted-draft-preview");
+      await expect(validPreview).toContainText("rev. 2");
+      const copyButton=panel.getByTestId("cas-uncommitted-draft-copy-action");
+      await expect(copyButton).toBeEnabled();
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await copyButton.click();
+      await expect(requirements).toHaveValue("Rival constraints take precedence");
+      page.once("dialog",dlg=>void dlg.accept());
+      await copyButton.click();
+      await expect(requirements).toHaveValue("RECOVERABLE_LOCAL_FORM_ONLY_196_🦊");
+      await expect(copyButton).toBeDisabled(); // a dirty form cannot be overwritten
+      await expect(panel.getByRole("status"))
+        .toContainText("ancora NON SALVATA");
+      await expect(panel.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
+        "Only React fields are copied; no native CAS commit or implicit rebase");
+      console.log("FACTORY_CAS_DRAFT_LOCAL_COPY_E2E_PASS: rev.1 stale archive remains read-only, rev.2 exact archive copied after consent to LOCAL draft only, persisted native revision and rival writer unchanged");
       // Confirming close with a fresh dirty draft drops only React state,
       // never the stored project or the active localStorage Factory.
       await requirements.fill("Close with intentional discard after warning");

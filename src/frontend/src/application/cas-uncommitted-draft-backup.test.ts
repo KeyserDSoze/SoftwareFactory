@@ -102,6 +102,7 @@ describe("opt-in CAS uncommitted draft emergency offline backup #194",()=>{
     const projection=inspectCasUncommittedDraftBackup(archive.raw);
     expect(projection).toEqual({
       id:f.snapshot.id,revision:7,originalName:"Baseline name",
+      baseRaw:f.snapshot.raw,
       config:{name:input.name,description:input.description,
         requirements:input.requirements},
       stack:input.stack,manualStage:"technical",

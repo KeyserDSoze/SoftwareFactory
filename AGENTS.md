@@ -1369,3 +1369,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Il file di recupero #194 è **non autoritativo**: aprirlo nel pilota CAS solo dopo consenso, validando gli STESSI byte JSON canonici del builder e max 6 MB. Mostrare i campi in testo React escapato, mai render HTML/eseguire patch, non trasferire segreti a provider e non suggerire restore/merge automatico.
 - L'anteprima deve rimanere possibile con controller `blocked` o senza selezione, ma NON attiva pipeline/transazioni. Un file alterato invalida la preview, senza `commit`, `setDraft*`, IndexedDB, localStorage, sessionStorage o rete. La corrispondenza byte-esatta del formato non è una firma/autenticazione dell'artefatto.
 - Verificare Vitest + E2E 2 tab con caricamento del file realmente scaricato e writer rivale intatto. #139/#91/#92 rimangono aperte.
+
+## Copia controllata di bozze JSON nei soli campi CAS (#196)
+- Non trasformare un backup `uncommitted` in `FactoryProject`, `commit`, reviewer pass o sync. Il comando di copia form richiede baseline id/revision/**RAW** identica, controller `ready`, nessuna bozza sporca o pipeline in corso, due letture native read-only che circondano il consenso; ogni fallimento mantiene il form intatto.
+- Soltanto dopo questi guard la UI può copiare `name,description,requirements,stack,manualStage,manualOutput,codeRequest,codeProposalJson` in stato React. Nessun IndexedDB readwrite, localStorage, cloud, GitHub, Code Agent execution o ripristino automatico. Le successive scritture richiedono normali backup + consensi + CAS transazionale.
+- Test Vitest di stale ID/revision/RAW e browser reale 2 tab con snapshot stale non copiabile e snapshot esatto importato solo nel form. Lasciare aperte #139/#91/#92.

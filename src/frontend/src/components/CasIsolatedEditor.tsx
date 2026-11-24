@@ -28,7 +28,9 @@ import {
 import type {FactoryLocale} from "../i18n";
 import {t} from "../i18n";
 import type {CasProjectChoice,CasProjectSnapshot} from "../infrastructure/project-cas";
-import {listCasProjects,listCasTombstones,readCasLibraryBackupSnapshot} from "../infrastructure/project-cas";
+import {
+  listCasProjects,listCasTombstones,readCasProject,readCasLibraryBackupSnapshot,
+} from "../infrastructure/project-cas";
 import type {CasProjectTombstone} from "../infrastructure/project-cas";
 import {
   prepareCasIsolatedNewProject,confirmCasIsolatedNewProject,
@@ -56,6 +58,9 @@ import {
 } from "../application/cas-uncommitted-draft-backup";
 import type {CasUncommittedDraftInspection}
   from "../application/cas-uncommitted-draft-backup";
+import {
+  canCopyCasUncommittedDraftLocally,prepareCasUncommittedDraftLocalCopy,
+} from "../application/cas-uncommitted-draft-local-copy";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
   buildCasIsolatedManualStage,canCommitCasIsolatedManualStage,
@@ -603,6 +608,52 @@ export default function CasIsolatedEditor({
         setNotice(t(locale,"casIsoDraftInspectReady"));
       }catch{
         setError(t(locale,"casIsoDraftInspectFailure"));
+      }
+    });
+  }
+  function copyUncommittedDraftIntoForm():void {
+    const controller=active.current;
+    const expected=snapshot;
+    const preview=emergencyPreview;
+    if(!controller || !expected || !preview || inFlight.current ||
+       !canCopyCasUncommittedDraftLocally(preview,expected,
+         controller.state()==="ready" &&
+           exact(controller.snapshot(),expected),
+         dirty,pipelineRunning))return;
+    void run(async()=>{
+      const stable=()=>active.current===controller &&
+        controller.state()==="ready" &&
+        resumeView.current.snapshot===expected &&
+        !resumeView.current.dirty &&
+        !resumeView.current.pipelineRunning &&
+        exact(controller.snapshot(),expected);
+      try{
+        if(!stable())throw Error("stale");
+        const copy=prepareCasUncommittedDraftLocalCopy(preview,expected);
+        // A valid file is NOT evidence that its base revision still exists.
+        // Check the live native store before and AFTER a synchronous dialog.
+        const before=await readCasProject(expected.id);
+        if(!stable() || !before || !exact(before,expected))
+          throw Error("Stale native project before consent");
+        if(!window.confirm(t(locale,"casIsoDraftCopyConsent")+
+            "\n"+expected.id+" / rev. "+expected.revision))return;
+        const after=await readCasProject(expected.id);
+        if(!stable() || !after || !exact(after,expected))
+          throw Error("Stale native project after consent");
+        // These setState calls are the ONLY effect: never a CAS commit.
+        // The normal save/stage paths still revalidate and need their
+        // own backup and independent human consents.
+        setDraftName(copy.name);
+        setDraftDescription(copy.description);
+        setDraftRequirements(copy.requirements);
+        setDraftStack(copy.stack);
+        setManualStage(copy.manualStage);
+        setManualOutput(copy.manualOutput);
+        setCodeRequest(copy.codeRequest);
+        setCodeProposalJson(copy.codeProposalJson);
+        setNotice(t(locale,"casIsoDraftCopyInMemory"));
+      }catch{
+        setError(t(locale,"casIsoDraftCopyRefused"));
       }
     });
   }
@@ -1504,6 +1555,17 @@ export default function CasIsolatedEditor({
           <p><strong>{t(locale,"casIsoDraftInspectCodeJson")}</strong></p>
           <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
             maxHeight:180,overflow:"auto"}}>{emergencyPreview.codeProposalJson}</pre>
+          <p className="helper">{t(locale,"casIsoDraftCopyExplain")}</p>
+          <button type="button" className="secondary"
+            data-testid="cas-uncommitted-draft-copy-action"
+            disabled={working || !canCopyCasUncommittedDraftLocally(
+              emergencyPreview,snapshot,
+              Boolean(active.current?.state()==="ready" &&
+                snapshot && exact(active.current.snapshot(),snapshot)),
+              dirty,pipelineRunning)}
+            onClick={copyUncommittedDraftIntoForm}>
+            {t(locale,"casIsoDraftCopyAction")}
+          </button>
           <button type="button" className="secondary"
             data-testid="cas-uncommitted-draft-clear-preview"
             disabled={working}
