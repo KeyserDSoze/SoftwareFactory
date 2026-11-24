@@ -2123,12 +2123,19 @@ if (!inside) {
       await expect(validPreview).toContainText("rev. 2");
       const copyButton=panel.getByTestId("cas-uncommitted-draft-copy-action");
       await expect(copyButton).toBeEnabled();
-      page.once("dialog",dlg=>void dlg.dismiss());
-      await copyButton.click();
+      // The consent runs after an async native read; Playwright click may
+      // resolve BEFORE the dialog is shown. Join each dialog explicitly
+      // rather than leaving page.once handlers alive for the next click.
+      const declinedCopyDialog=page.waitForEvent("dialog",{timeout:15000});
+      const declinedCopyClick=copyButton.click();
+      await (await declinedCopyDialog).dismiss();
+      await declinedCopyClick;
       await expect(requirements).toHaveValue("Rival constraints take precedence");
       await expect(copyButton).toBeEnabled();
-      page.once("dialog",dlg=>void dlg.accept());
-      await copyButton.click();
+      const acceptedCopyDialog=page.waitForEvent("dialog",{timeout:15000});
+      const acceptedCopyClick=copyButton.click();
+      await (await acceptedCopyDialog).accept();
+      await acceptedCopyClick;
       await expect(requirements).toHaveValue("RECOVERABLE_LOCAL_FORM_ONLY_196_🦊");
       await expect(copyButton).toBeDisabled(); // a dirty form cannot be overwritten
       // Both the read-only preview and the editor notice have role=status.
