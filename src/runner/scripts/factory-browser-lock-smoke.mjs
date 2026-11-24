@@ -2126,11 +2126,14 @@ if (!inside) {
       page.once("dialog",dlg=>void dlg.dismiss());
       await copyButton.click();
       await expect(requirements).toHaveValue("Rival constraints take precedence");
+      await expect(copyButton).toBeEnabled();
       page.once("dialog",dlg=>void dlg.accept());
       await copyButton.click();
       await expect(requirements).toHaveValue("RECOVERABLE_LOCAL_FORM_ONLY_196_🦊");
       await expect(copyButton).toBeDisabled(); // a dirty form cannot be overwritten
-      await expect(panel.getByRole("status"))
+      // Both the read-only preview and the editor notice have role=status.
+      // The editor notice is the last status node after the panel content.
+      await expect(panel.locator('p[role="status"]').last())
         .toContainText("ancora NON SALVATA");
       await expect(panel.getByTestId("cas-isolated-active")).toContainText("rev. 2");
       assert.deepEqual(await rival.evaluate(id=>
