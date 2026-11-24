@@ -15,6 +15,12 @@ describe("installer and GitHub Actions i18n", () => {
     expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
     expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
   });
+  it("never translates a byte match as confirmed writer ACK (#197)",()=>{
+    expect(t("it","casFailedWriteCandidatePresent")).toContain("NON prova");
+    expect(t("en","casFailedWriteCandidatePresent")).toContain("does NOT prove");
+    expect(t("it","casFailedWriteIntro")).toContain("NON SALVATA");
+    expect(t("en","casFailedWriteReadDone")).toContain("READ-ONLY");
+  });
   it("does not label local CAS form copy as a committed write (#196)",()=>{
     expect(t("it","casIsoDraftCopyInMemory")).toContain("NON SALVATA");
     expect(t("en","casIsoDraftCopyInMemory")).toContain("UNSAVED");

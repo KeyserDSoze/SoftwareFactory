@@ -1374,3 +1374,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Non trasformare un backup `uncommitted` in `FactoryProject`, `commit`, reviewer pass o sync. Il comando di copia form richiede baseline id/revision/**RAW** identica, controller `ready`, nessuna bozza sporca o pipeline in corso, due letture native read-only che circondano il consenso; ogni fallimento mantiene il form intatto.
 - Soltanto dopo questi guard la UI può copiare `name,description,requirements,stack,manualStage,manualOutput,codeRequest,codeProposalJson` in stato React. Nessun IndexedDB readwrite, localStorage, cloud, GitHub, Code Agent execution o ripristino automatico. Le successive scritture richiedono normali backup + consensi + CAS transazionale.
 - Test Vitest di stale ID/revision/RAW e browser reale 2 tab con snapshot stale non copiabile e snapshot esatto importato solo nel form. Lasciare aperte #139/#91/#92.
+
+## Diagnosi read-only dei commit CAS non confermati (#197)
+- Pin source+candidate RAW/id/revision in un ticket volatile **solo dopo** un vero `controller.commit` che blocca la sessione (non su preflight o commit riuscito). Gli 8 writer espliciti dell'editor isolato usano il wrapper; la pipeline lunga ha il suo distinto fencing.
+- La lettura diagnostica usa `readCasProjectSlot` e restituisce `unchanged/candidate_present/diverged/tombstone/missing` senza cambiare il progetto, i token, le bozze o il contenuto legacy. `candidate_present` non è ACK né prova di paternità del writer. Fallire chiuso su raw/revisioni impossibili, nessun auto-retry.
+- Verificare Vitest e Chromium con 2 tab reali, UI IT/EN, ADR 0139. #139/#91/#92 restano aperte; non dichiarare completato il cutover né l'affidabilità cloud.

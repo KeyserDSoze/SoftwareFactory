@@ -1967,6 +1967,20 @@ if (!inside) {
       await expect(panel.getByRole("alert")).toContainText("non confermata");
       await expect(panel.getByRole("status")).toContainText("Sessione IndexedDB bloccata");
       await expect(save).toBeDisabled();
+      // #197: after native CAS is blocked, the source+attempt ticket
+      // remains in React RAM. The independent IDB read must report the
+      // real rival without changing the rejected human text.
+      const diagnose=panel.getByTestId("cas-failed-write-inspect-action");
+      await expect(diagnose).toBeEnabled();
+      await diagnose.click();
+      await expect(panel.getByTestId("cas-failed-write-inspection-result"))
+        .toContainText("Revisione concorrente DIVERSA");
+      await expect(panel.getByTestId("cas-failed-write-inspection-result"))
+        .toContainText("rev. 2");
+      await expect(requirements).toHaveValue("Unsaved requirements must lose to rival");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB);
+      console.log("FACTORY_CAS_FAILED_WRITE_DIAGNOSIS_E2E_PASS: native conflict blocks controller, read-only probe reports rival revision, no retry/rebase/legacy write or draft loss");
       assert.deepEqual(await page.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
         "Rival-tab CAS winner must never be overwritten or auto-merged");

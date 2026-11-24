@@ -52,6 +52,10 @@ import {
   hasCasIsolatedStackDraft,
 } from "../application/cas-isolated-stack-config";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
+import {prepareCasFailedWriteTicket,inspectCasFailedWrite}
+  from "../application/cas-failed-write-diagnosis";
+import type {CasFailedWriteTicket,CasFailedWriteObservation}
+  from "../application/cas-failed-write-diagnosis";
 import {
   prepareCasUncommittedDraftBackup,inspectCasUncommittedDraftBackup,
   MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES,
@@ -154,6 +158,9 @@ export default function CasIsolatedEditor({
   const [resumeLink,setResumeLink]=useState<CasRevisionResumeLink|null>(null);
   const [emergencyPreview,setEmergencyPreview]=
     useState<CasUncommittedDraftInspection|null>(null);
+  const [failedWrite,setFailedWrite]=useState<CasFailedWriteTicket|null>(null);
+  const [failedWriteObservation,setFailedWriteObservation]=
+    useState<CasFailedWriteObservation|null>(null);
   const active=useRef<CasSelectionController|null>(null);
   const inFlight=useRef(false);
   const pipelineAbort=useRef<AbortController|null>(null);
@@ -171,6 +178,8 @@ export default function CasIsolatedEditor({
     codeRequest.length>0 || codeProposalJson.length>0;
   const resumeView=useRef({snapshot,dirty,pipelineRunning});
   resumeView.current={snapshot,dirty,pipelineRunning};
+  const failedWriteView=useRef({failedWrite,snapshot});
+  failedWriteView.current={failedWrite,snapshot};
   const shownResumeLink=snapshot && resumeLink &&
     snapshot.id===resumeLink.id &&
     snapshot.revision===resumeLink.revision &&
@@ -196,10 +205,47 @@ export default function CasIsolatedEditor({
     catch{return null;}
   },[snapshot]);
 
+  async function commitSelectedWithProbe(
+    controller:CasSelectionController,candidate:FactoryProject,
+    expected:CasProjectSnapshot,
+  ):Promise<CasProjectSnapshot> {
+    // Preserve proposed RAW only on a genuinely blocked native CAS commit.
+    const ticket=prepareCasFailedWriteTicket(expected,candidate);
+    try{
+      const committed=await controller.commit(candidate,expected);
+      setFailedWrite(null);setFailedWriteObservation(null);
+      return committed;
+    }catch(error){
+      if(controller.state()==="blocked"){
+        setFailedWrite(ticket);setFailedWriteObservation(null);
+      }
+      throw error;
+    }
+  }
+  function inspectBlockedWrite():void {
+    const ticket=failedWrite,pinned=snapshot;
+    if(!ticket || !pinned || !exact(ticket.old,pinned) ||
+       inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      setFailedWriteObservation(null);
+      try{
+        const observed=await inspectCasFailedWrite(ticket);
+        if(failedWriteView.current.failedWrite!==ticket ||
+           resumeView.current.snapshot!==pinned ||
+           resumeView.current.pipelineRunning)
+          throw Error("Stale failed write inspection");
+        setFailedWriteObservation(observed);
+        setNotice(t(locale,"casFailedWriteReadDone"));
+      }catch{
+        setError(t(locale,"casFailedWriteReadUnavailable"));
+      }
+    });
+  }
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
     const p=JSON.parse(current.raw) as {config:{name:string;description:string;requirements?:string}};
     setSnapshot(current);
+    setFailedWrite(null);setFailedWriteObservation(null);
     setResumeLink(null);
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
@@ -303,6 +349,7 @@ export default function CasIsolatedEditor({
     // An explicit rejection keeps both the CAS selection and all text.
     if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm"))) return;
     active.current=null; setExpanded(false);
+    setFailedWrite(null);setFailedWriteObservation(null);
     setResumeLink(null);
     setList(null); setDeleted(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
@@ -709,6 +756,7 @@ export default function CasIsolatedEditor({
       const available=await listCasProjects();
       if(resetsSelection) {
         active.current=null;setSnapshot(null);
+        setFailedWrite(null);setFailedWriteObservation(null);
         setDraftName("");setDraftDescription("");setDraftRequirements("");
         setDraftStack(null);
         setManualOutput("");setCodeRequest("");setCodeProposalJson("");
@@ -824,7 +872,7 @@ export default function CasIsolatedEditor({
       document.body.appendChild(link);link.click();link.remove();
       setTimeout(()=>URL.revokeObjectURL(url),30000);
       if(!window.confirm(t(locale,"casIsoSavedConfirm"))) return;
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1075,7 +1123,7 @@ export default function CasIsolatedEditor({
         stage+" / "+expected.id+" / rev. "+expected.revision))return;
       // Exactly one native CAS write. A competitor is fenced by revision+raw
       // *inside* the transaction; no retries or silent adoption.
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1113,7 +1161,7 @@ export default function CasIsolatedEditor({
       if(!window.confirm(t(locale,"casIsoCodeBackupSavedConfirm")))return;
       if(!window.confirm(t(locale,"casIsoCodeFinalConfirm")+"\n"+
          expected.id+" / rev. "+expected.revision))return;
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1147,7 +1195,7 @@ export default function CasIsolatedEditor({
       if(!window.confirm(t(locale,"casIsoCodeDiscardSavedConfirm")))return;
       if(!window.confirm(t(locale,"casIsoCodeDiscardFinalConfirm")+"\n"+
          expected.id+" / rev. "+expected.revision))return;
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1189,7 +1237,7 @@ export default function CasIsolatedEditor({
          record.paths.join("\n")))return;
       // One native IndexedDB write with exact ID/revision/raw inside tx.
       // On a rival win, controller blocks; retain pending and any drafts.
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1227,7 +1275,7 @@ export default function CasIsolatedEditor({
         ticket.files.map(f=>f.path).join("\n")))return;
       // Sole native compare-and-swap. A rival writer cannot be overwritten:
       // no retry, rebase, fallback to legacy or source patch reconstruction.
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1263,7 +1311,7 @@ export default function CasIsolatedEditor({
       if(!window.confirm(t(locale,"casIsoStageResetFinalConfirm")+
         "\\n"+stageToReset+" / "+expected.id+" / rev. "+expected.revision))
         return;
-      const committed=await controller.commit(candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,candidate,expected);
       if(!exact(committed,{
         id:candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(candidate),
@@ -1299,7 +1347,7 @@ export default function CasIsolatedEditor({
         return;
       // A rival writer during the dialogs wins the same native IDB compare.
       // No retry, rebase, remote cancellation claim, or localStorage fallback.
-      const committed=await controller.commit(ticket.candidate,expected);
+      const committed=await commitSelectedWithProbe(controller,ticket.candidate,expected);
       if(!exact(committed,{
         id:ticket.candidate.id,revision:expected.revision+1,
         raw:JSON.stringify(ticket.candidate),
@@ -1616,6 +1664,29 @@ export default function CasIsolatedEditor({
             {t(locale,"casIsoDraftBackupAction")}
           </button>
         </section>
+        {failedWrite && exact(failedWrite.old,snapshot) &&
+          <section data-testid="cas-failed-write-inspection">
+            <p className="helper">{t(locale,"casFailedWriteIntro")}</p>
+            <button type="button" className="secondary"
+              data-testid="cas-failed-write-inspect-action"
+              disabled={working || pipelineRunning}
+              onClick={inspectBlockedWrite}>
+              {t(locale,"casFailedWriteAction")}
+            </button>
+            {failedWriteObservation &&
+              <p data-testid="cas-failed-write-inspection-result">
+                {t(locale,failedWriteObservation.state==="unchanged"?
+                  "casFailedWriteUnchanged":
+                  failedWriteObservation.state==="candidate_present"?
+                    "casFailedWriteCandidatePresent":
+                  failedWriteObservation.state==="diverged"?
+                    "casFailedWriteDiverged":
+                  failedWriteObservation.state==="tombstone"?
+                    "casFailedWriteTombstone":"casFailedWriteMissing")}
+                {failedWriteObservation.observedRevision===null?"":(
+                  " / rev. "+failedWriteObservation.observedRevision)}
+              </p>}
+          </section>}
         {onRequestLegacy && <div data-testid="cas-selected-revision-check">
           <p className="helper">{t(locale,"casRevisionCheckExplain")}</p>
           <button type="button" className="secondary"
