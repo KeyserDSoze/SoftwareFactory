@@ -15,6 +15,11 @@ describe("installer and GitHub Actions i18n", () => {
     expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
     expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
   });
+  it("distinguishes unconfirmed pipeline transactions in both languages (#198)",()=>{
+    expect(t("it","casPipelineFailedWriteOperation")).toContain("NON CONFERMATA");
+    expect(t("en","casPipelineFailedWriteOperation")).toContain("UNCONFIRMED");
+    expect(t("it","casPipelineWriteComplete")).not.toBe(t("it","casPipelineWriteBegin"));
+  });
   it("never translates a byte match as confirmed writer ACK (#197)",()=>{
     expect(t("it","casFailedWriteCandidatePresent")).toContain("NON prova");
     expect(t("en","casFailedWriteCandidatePresent")).toContain("does NOT prove");

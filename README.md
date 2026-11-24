@@ -1149,3 +1149,7 @@ Dopo l'ispezione del JSON di recupero (#194/#195), il workspace `?workspace=cas`
 ## Diagnosi di scritture CAS non confermate (#197)
 
 Nel workspace opt-in `?workspace=cas`, se un commit IndexedDB dell'editor fallisce e blocca la sessione, la proposta esatta resta **temporaneamente in RAM**. L'azione «Controlla esito incerto della scrittura CAS» legge IndexedDB **senza scrivere** e distingue: versione di partenza invariata, byte della proposta presenti, altra revisione concorrente, tombstone o ID mancante. **Byte identici non provano quale scheda abbia scritto né confermano un ACK:** nessuna adozione, retry, rebase, upload o perdita della bozza avviene automaticamente. La verifica riguarda gli otto commit espliciti dell'editor CAS isolato, non tutti i writer legacy né la pipeline AI lunga. Conservare le bozze tramite #194 e riconciliare manualmente. ADR 0139 e #139 per il cutover completo.
+
+## Diagnosi dei checkpoint pipeline CAS non confermati (#198)
+
+Nel pilota IndexedDB, avvio/completamento/annullamento/errore della singola fase AI usano la diagnosi volatile di #197: se il CAS si blocca, la UI mantiene come base l'ultimo checkpoint nativo confermato (running dopo begin riuscito), espone il tipo di tentativo e consente solo un confronto read-only. Non conserva il risultato come completamento attestato, non ripete la richiesta provider, non adotta la revisione concorrente. I ticket restano in RAM e vengono scartati all'uscita/nuova selezione. ADR 0140; il cutover dell'editor legacy #139 rimane aperto.

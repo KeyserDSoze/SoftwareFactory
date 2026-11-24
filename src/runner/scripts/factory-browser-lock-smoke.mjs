@@ -4257,6 +4257,22 @@ if (!inside) {
         window.FactoryProjectCas.readCasProject(id),ids[2]),winner,
         "Stale AI completion MUST lose to native rival CAS writer");
       await expect(start).toBeDisabled();
+      // #198: the running ACK, not the initial pre-provider revision or
+      // unacknowledged completion, remains the pinned read-only baseline.
+      await expect(panel.getByTestId("cas-isolated-active")).toContainText("rev. 2");
+      const uncertain=panel.getByTestId("cas-pipeline-failed-write-operation");
+      await expect(uncertain).toContainText("Completamento fase");
+      await expect(uncertain).toContainText("rev. 2");
+      const postsBeforeDiagnosis=posts;
+      await panel.getByTestId("cas-failed-write-inspect-action").click();
+      const diagnosis=panel.getByTestId("cas-failed-write-inspection-result");
+      await expect(diagnosis).toContainText("Revisione concorrente DIVERSA");
+      await expect(diagnosis).toContainText("rev. 3");
+      await expect(start).toBeDisabled();
+      assert.equal(posts,postsBeforeDiagnosis,"Diagnosis must never re-call the provider");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[2]),winner);
+      console.log("FACTORY_CAS_PIPELINE_FAILED_WRITE_DIAGNOSIS_E2E_PASS: real IDB running ACK pinned, late completion rejected, readonly rival classification, no retry or provider call");
       page.removeAllListeners("dialog");
       await page.reload({waitUntil:"networkidle"});
       await page.addScriptTag({content:casBundle});

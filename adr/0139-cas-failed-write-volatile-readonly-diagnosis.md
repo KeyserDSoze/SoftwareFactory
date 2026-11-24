@@ -10,3 +10,6 @@ Il pulsante esplicito di sola lettura, disponibile anche a controller bloccato e
 
 ## Test e limiti
 Vitest con 5 esiti, RAW/ID/revisione, tamper, assenza di I/O storage/provider non autorizzati; Chromium reale con conflitto a due schede, read-only `diverged` e bozza/copia vincitrice invariata; marker `FACTORY_CAS_FAILED_WRITE_DIAGNOSIS_E2E_PASS`. Validare Factory CI, Pages e Installer candidate sullo stesso SHA. Non migra gli altri writer dell'editor live legacy (#139), né prova provider GitHub/PAT/OneDrive (#91/#92).
+
+## Estensione #198
+Le quattro transazioni della pipeline sono coperte separatamente nell'ADR 0140. La limitazione alla sola UI con otto commit descrive #197, non la versione successiva.

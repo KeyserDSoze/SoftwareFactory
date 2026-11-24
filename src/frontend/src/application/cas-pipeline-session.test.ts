@@ -102,6 +102,54 @@ describe("async CAS pipeline stage contract (#156)",()=>{
     await expect(coordinator.abort(ticket)).rejects.toThrow(/obsoleto/);
     expect(x.commit).toHaveBeenCalledTimes(1);
   });
+  it.each(["begin","complete","abort","fail"] as const)(
+    "pins only the blocked %s transaction, never retries or advances its ACK (#198)",
+    async(operation)=>{
+      const {p,snapshot}=fixture(),x=arrange(snapshot);
+      const coordinator=await openCasPipelineSession(p.id);
+      const started=operation==="begin"?null:await coordinator.begin("technical");
+      const before=coordinator.snapshot();
+      expect(coordinator.failedWrite()).toBeNull();
+      let attemptedRaw="";
+      x.commit.mockImplementationOnce(async(next,expected)=>{
+        expect(expected).toEqual(before);
+        attemptedRaw=JSON.stringify(next);
+        x.block();
+        throw Error("Unconfirmed native CAS write");
+      });
+      const pending=operation==="begin"?coordinator.begin("technical"):
+        operation==="complete"?coordinator.complete(started!,"Actual AI output",[]):
+        operation==="abort"?coordinator.abort(started!):
+        coordinator.fail(started!,"provider");
+      await expect(pending).rejects.toThrow(/Unconfirmed/);
+      const diagnostic=coordinator.failedWrite();
+      expect(diagnostic).toEqual({operation,stage:"technical",ticket:{
+        old:before,proposed:{
+          id:before.id,revision:before.revision+1,raw:attemptedRaw,
+        },
+      }});
+      expect(Object.isFrozen(diagnostic)).toBe(true);
+      expect(coordinator.snapshot()).toEqual(before);
+      expect(coordinator.state()).toBe("blocked");
+      if(started)await expect(coordinator.complete(started,"Late",[]))
+        .rejects.toThrow(/obsoleto/);
+      else await expect(coordinator.begin("technical")).rejects.toThrow(/occupata/);
+      expect(coordinator.failedWrite()).toBe(diagnostic);
+      expect(x.commit).toHaveBeenCalledTimes(operation==="begin"?1:2);
+    },
+  );
+  it("does not create an uncertain ticket for a validation refusal or success (#198)",async()=>{
+    const {p,snapshot}=fixture(),x=arrange(snapshot);
+    const coordinator=await openCasPipelineSession(p.id);
+    await expect(coordinator.begin("implementation")).rejects.toThrow();
+    expect(coordinator.failedWrite()).toBeNull();
+    const started=await coordinator.begin("technical");
+    await expect(coordinator.complete(started," ",[])).rejects.toThrow();
+    expect(coordinator.failedWrite()).toBeNull();
+    await coordinator.complete(started,"Valid result",[]);
+    expect(coordinator.failedWrite()).toBeNull();
+    expect(x.commit).toHaveBeenCalledTimes(2);
+  });
   it("fails closed on malformed stage rows without localStorage access",async()=>{
     const {p,snapshot}=fixture();
     const x=arrange({...snapshot,raw:JSON.stringify({...p,stages:p.stages.slice(0,3)})});

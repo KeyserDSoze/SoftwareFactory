@@ -1379,3 +1379,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Pin source+candidate RAW/id/revision in un ticket volatile **solo dopo** un vero `controller.commit` che blocca la sessione (non su preflight o commit riuscito). Gli 8 writer espliciti dell'editor isolato usano il wrapper; la pipeline lunga ha il suo distinto fencing.
 - La lettura diagnostica usa `readCasProjectSlot` e restituisce `unchanged/candidate_present/diverged/tombstone/missing` senza cambiare il progetto, i token, le bozze o il contenuto legacy. `candidate_present` non è ACK né prova di paternità del writer. Fallire chiuso su raw/revisioni impossibili, nessun auto-retry.
 - Verificare Vitest e Chromium con 2 tab reali, UI IT/EN, ADR 0139. #139/#91/#92 restano aperte; non dichiarare completato il cutover né l'affidabilità cloud.
+
+## Pipeline CAS: diagnosi dei quattro checkpoint (#198)
+- begin/complete/abort/fail costruiscono il ticket RAW prima di commit e lo espongono soltanto se la sessione nativa diventa blocked. Nessun ticket da preflight o successo, nessun retry dopo errore.
+- Dopo l'ACK running conservare quella revisione come base read-only e non il controller precedente. Riutilizzare la diagnosi #197 con l'operazione pipeline. I byte proposti non sono ACK, attestazione AI, billing o prova del writer.
+- Chromium due tab con HTTP simulato, completion concorrente, controllo della base running e zero nuova richiesta; unit test di tutte le quattro transizioni. ADR 0140. Non chiudere #139/#91/#92.

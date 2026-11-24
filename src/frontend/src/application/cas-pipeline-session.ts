@@ -11,6 +11,8 @@ import {serializeCasProject} from "../infrastructure/project-cas";
 import type {CasProjectSnapshot} from "../infrastructure/project-cas";
 import {openCasEditorSession} from "../infrastructure/project-cas-editor-session";
 import type {CasEditorSession} from "../infrastructure/project-cas-editor-session";
+import {prepareCasFailedWriteTicket} from "./cas-failed-write-diagnosis";
+import type {CasFailedWriteTicket} from "./cas-failed-write-diagnosis";
 
 const MAX_STAGE_OUTPUT=60_000;
 const MAX_SOURCES=32;
@@ -20,9 +22,16 @@ export type CasPipelineRunTicket=Readonly<{
   id:string;stage:StageId;started:CasProjectSnapshot;
 }>;
 export type CasPipelineFailureKind="provider"|"timeout"|"invalid_result";
+/** Volatile diagnostics, never an acknowledgement or permission to retry. */
+export type CasPipelineFailedWrite=Readonly<{
+  operation:"begin"|"complete"|"abort"|"fail";
+  stage:StageId;
+  ticket:CasFailedWriteTicket;
+}>;
 export type CasPipelineSession=Readonly<{
   snapshot():CasProjectSnapshot;
   state():ReturnType<CasEditorSession["state"]>;
+  failedWrite():CasPipelineFailedWrite|null;
   begin(stage:StageId):Promise<CasPipelineRunTicket>;
   complete(ticket:CasPipelineRunTicket,output:string,sources:ResearchSource[]):Promise<CasProjectSnapshot>;
   abort(ticket:CasPipelineRunTicket):Promise<CasProjectSnapshot>;
@@ -95,6 +104,25 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
   // Explicit native IDB open: no bootstrap, tombstone revival or fallback.
   const session=await openCasEditorSession(id);
   let active:CasPipelineRunTicket|null=null;
+  let failedWrite:CasPipelineFailedWrite|null=null;
+  async function commitWithDiagnosis(
+    operation:CasPipelineFailedWrite["operation"],stage:StageId,
+    next:FactoryProject,expected:CasProjectSnapshot,
+  ):Promise<CasProjectSnapshot>{
+    // Capture exact bytes before the native write, not after an uncertain
+    // outcome. A rejected preflight cannot create a failed-write receipt.
+    const ticket=prepareCasFailedWriteTicket(expected,next);
+    try{
+      const acknowledged=await session.commit(next,expected);
+      failedWrite=null;
+      return acknowledged;
+    }catch(error){
+      if(session.state()==="blocked"){
+        failedWrite=Object.freeze({operation,stage,ticket});
+      }
+      throw error;
+    }
+  }
   function currentTicket(ticket:CasPipelineRunTicket):FactoryProject {
     if(!ticket || active!==ticket ||
        session.state()!=="ready" ||
@@ -107,15 +135,18 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
   }
   async function finishTicket(
     ticket:CasPipelineRunTicket,project:FactoryProject,
+    operation:"complete"|"abort"|"fail",
   ):Promise<CasProjectSnapshot> {
     // The native session updates the token only on IDB transaction oncomplete.
-    const confirmed=await session.commit(project,ticket.started);
+    const confirmed=await commitWithDiagnosis(
+      operation,ticket.stage,project,ticket.started);
     active=null;
     return confirmed;
   }
   return Object.freeze({
     snapshot:()=>session.snapshot(),
     state:()=>session.state(),
+    failedWrite:()=>failedWrite,
     begin:async(stageId:StageId)=>{
       const index=STAGES.findIndex(stage=>stage.id===stageId);
       if(index<0) throw Error("Fase pipeline CAS non riconosciuta.");
@@ -140,7 +171,7 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
         updatedAt:now,
       };
       serializeCasProject(next);
-      const acknowledged=await session.commit(next,before);
+      const acknowledged=await commitWithDiagnosis("begin",stageId,next,before);
       const ticket:CasPipelineRunTicket=Object.freeze({
         id:acknowledged.id,stage:stageId,started:Object.freeze({
           id:acknowledged.id,revision:acknowledged.revision,raw:acknowledged.raw,
@@ -160,7 +191,7 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
         stage.id===ticket.stage?
           {...stage,completionOrigin:"ai" as const}:stage)};
       serializeCasProject(next);
-      return finishTicket(ticket,next);
+      return finishTicket(ticket,next,"complete");
     },
     abort:async(ticket:CasPipelineRunTicket)=>{
       const project=currentTicket(ticket);
@@ -171,7 +202,7 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
           output:"",sources:[],
         }:stage),
       };
-      return finishTicket(ticket,next);
+      return finishTicket(ticket,next,"abort");
     },
     fail:async(ticket:CasPipelineRunTicket,kind:CasPipelineFailureKind)=>{
       const project=currentTicket(ticket);
@@ -189,7 +220,7 @@ export async function openCasPipelineSession(id:string):Promise<CasPipelineSessi
           output:"",sources:[],error:messages[kind],updatedAt:now,
         }:stage),
       };
-      return finishTicket(ticket,next);
+      return finishTicket(ticket,next,"fail");
     },
   } satisfies CasPipelineSession);
 }

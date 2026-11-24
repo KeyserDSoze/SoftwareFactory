@@ -56,6 +56,8 @@ import {prepareCasFailedWriteTicket,inspectCasFailedWrite}
   from "../application/cas-failed-write-diagnosis";
 import type {CasFailedWriteTicket,CasFailedWriteObservation}
   from "../application/cas-failed-write-diagnosis";
+import type {CasPipelineFailedWrite,CasPipelineRunTicket,CasPipelineSession}
+  from "../application/cas-pipeline-session";
 import {
   prepareCasUncommittedDraftBackup,inspectCasUncommittedDraftBackup,
   MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES,
@@ -159,6 +161,8 @@ export default function CasIsolatedEditor({
   const [emergencyPreview,setEmergencyPreview]=
     useState<CasUncommittedDraftInspection|null>(null);
   const [failedWrite,setFailedWrite]=useState<CasFailedWriteTicket|null>(null);
+  const [pipelineFailedWrite,setPipelineFailedWrite]=
+    useState<CasPipelineFailedWrite|null>(null);
   const [failedWriteObservation,setFailedWriteObservation]=
     useState<CasFailedWriteObservation|null>(null);
   const active=useRef<CasSelectionController|null>(null);
@@ -213,7 +217,7 @@ export default function CasIsolatedEditor({
     const ticket=prepareCasFailedWriteTicket(expected,candidate);
     try{
       const committed=await controller.commit(candidate,expected);
-      setFailedWrite(null);setFailedWriteObservation(null);
+      setFailedWrite(null);setFailedWriteObservation(null);setPipelineFailedWrite(null);
       return committed;
     }catch(error){
       if(controller.state()==="blocked"){
@@ -241,11 +245,26 @@ export default function CasIsolatedEditor({
       }
     });
   }
+  function preserveBlockedPipeline(
+    pipeline:CasPipelineSession,baseline:CasProjectSnapshot,
+  ):void {
+    // baseline is an earlier native oncomplete ACK (or the selected source
+    // for a rejected begin), NOT the proposed result or a newer rival.
+    active.current=null;setList(null);
+    accept(baseline);
+    const failed=pipeline.failedWrite();
+    if(failed && exact(failed.ticket.old,baseline)){
+      setFailedWrite(failed.ticket);
+      setPipelineFailedWrite(failed);
+    }
+    setNotice(t(locale,"casIsoPipelineBlocked")+
+      " ID: "+baseline.id+" / rev. "+baseline.revision);
+  }
   function accept(current:CasProjectSnapshot):void {
     // openCasSelectionController validates canonical raw before exposing it.
     const p=JSON.parse(current.raw) as {config:{name:string;description:string;requirements?:string}};
     setSnapshot(current);
-    setFailedWrite(null);setFailedWriteObservation(null);
+    setFailedWrite(null);setFailedWriteObservation(null);setPipelineFailedWrite(null);
     setResumeLink(null);
     setDraftName(p.config.name);
     setDraftDescription(p.config.description || "");
@@ -349,7 +368,7 @@ export default function CasIsolatedEditor({
     // An explicit rejection keeps both the CAS selection and all text.
     if(dirty && !window.confirm(t(locale,"casIsoCloseDirtyConfirm"))) return;
     active.current=null; setExpanded(false);
-    setFailedWrite(null);setFailedWriteObservation(null);
+    setFailedWrite(null);setFailedWriteObservation(null);setPipelineFailedWrite(null);
     setResumeLink(null);
     setList(null); setDeleted(null); setSnapshot(null); setError(""); setNotice("");
     setDraftName(""); setDraftDescription("");setDraftRequirements("");
@@ -756,7 +775,7 @@ export default function CasIsolatedEditor({
       const available=await listCasProjects();
       if(resetsSelection) {
         active.current=null;setSnapshot(null);
-        setFailedWrite(null);setFailedWriteObservation(null);
+        setFailedWrite(null);setFailedWriteObservation(null);setPipelineFailedWrite(null);
         setDraftName("");setDraftDescription("");setDraftRequirements("");
         setDraftStack(null);
         setManualOutput("");setCodeRequest("");setCodeProposalJson("");
@@ -1394,7 +1413,20 @@ export default function CasIsolatedEditor({
       if(!exact(pipeline.snapshot(),expected))
         throw Error("CAS project changed during provider consent");
       // tx.oncomplete for "running" MUST happen before any provider request.
-      const ticket=await pipeline.begin(stage);
+      let ticket:CasPipelineRunTicket;
+      try{
+        ticket=await pipeline.begin(stage);
+      }catch(error){
+        if(pipeline.state()==="blocked"){
+          preserveBlockedPipeline(pipeline,expected);
+          return;
+        }
+        throw error;
+      }
+      // Keep the durable running checkpoint as the read-only selection.
+      // Never retain a controller pointing to the earlier revision.
+      active.current=null;
+      accept(ticket.started);
       const cancellation=new AbortController();
       pipelineAbort.current=cancellation;
       setPipelineRunning(true);
@@ -1421,10 +1453,7 @@ export default function CasIsolatedEditor({
       }catch{
         pipelineAbort.current=null;
         if(pipeline.state()!=="ready"){
-          active.current=null;setList(null);
-          setPipelineStatus("");
-          setNotice(t(locale,"casIsoPipelineBlocked")+
-            " ID: "+expected.id+" / rev. "+ticket.started.revision);
+          preserveBlockedPipeline(pipeline,ticket.started);
           return;
         }
         outcome=cancellation.signal.aborted?"abort":"fail";
@@ -1434,10 +1463,7 @@ export default function CasIsolatedEditor({
             await pipeline.fail(ticket,
               providerReturned?"invalid_result":"provider");
         }catch{
-          active.current=null;setList(null);
-          setPipelineStatus("");
-          setNotice(t(locale,"casIsoPipelineBlocked")+
-            " ID: "+expected.id+" / rev. "+ticket.started.revision);
+          preserveBlockedPipeline(pipeline,ticket.started);
           return;
         }
       }finally{
@@ -1667,6 +1693,15 @@ export default function CasIsolatedEditor({
         {failedWrite && exact(failedWrite.old,snapshot) &&
           <section data-testid="cas-failed-write-inspection">
             <p className="helper">{t(locale,"casFailedWriteIntro")}</p>
+            {pipelineFailedWrite && pipelineFailedWrite.ticket===failedWrite &&
+              <p data-testid="cas-pipeline-failed-write-operation">
+                {t(locale,"casPipelineFailedWriteOperation")}{" "}
+                {t(locale,pipelineFailedWrite.operation==="begin"?
+                  "casPipelineWriteBegin":pipelineFailedWrite.operation==="complete"?
+                  "casPipelineWriteComplete":pipelineFailedWrite.operation==="abort"?
+                  "casPipelineWriteAbort":"casPipelineWriteFail")}
+                {" · "+pipelineFailedWrite.stage+" · rev. "+failedWrite.old.revision}
+              </p>}
             <button type="button" className="secondary"
               data-testid="cas-failed-write-inspect-action"
               disabled={working || pipelineRunning}
