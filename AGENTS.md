@@ -1384,3 +1384,20 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - begin/complete/abort/fail costruiscono il ticket RAW prima di commit e lo espongono soltanto se la sessione nativa diventa blocked. Nessun ticket da preflight o successo, nessun retry dopo errore.
 - Dopo l'ACK running conservare quella revisione come base read-only e non il controller precedente. Riutilizzare la diagnosi #197 con l'operazione pipeline. I byte proposti non sono ACK, attestazione AI, billing o prova del writer.
 - Chromium due tab con HTTP simulato, completion concorrente, controllo della base running e zero nuova richiesta; unit test di tutte le quattro transizioni. ADR 0140. Non chiudere #139/#91/#92.
+
+
+## Copia offline di tentativi CAS non confermati (#199)
+
+- Solo il pilota IndexedDB CAS-only offre export manuale read-only per
+  \`failedWrite\` pinned e bloccato: utility pura valida snapshot old/proposed
+  byte-esatti e metadati operation/stage; cap file 6 MiB. Non creare un file
+  se il tentativo è un semplice preflight rifiutato o un commit già confermato.
+- Consent esplicito **prima** di offrire JSON plaintext, con messaggio privacy
+  IT/EN. Il browser non attesta che il file sia stato realmente salvato.
+  Il pacchetto \`softwarefactory-cas-failed-write\` v1 è esplicitamente
+  \`authoritative:false\`, \`automaticRestore:false\`, \`unconfirmed:true\`.
+- Mai usare questo pacchetto per auto-import, retry, rebase, write su IDB,
+  restore, chiamate provider o modifica delle revisioni; una proposta
+  \`complete\` AI non è un risultato attestato né una review approvata.
+- Conservare Vitest del parser/bytes e Chromium due tab con provider fake,
+  rival CAS immutato, nessun secondo provider call. ADR 0141; #139 aperta.

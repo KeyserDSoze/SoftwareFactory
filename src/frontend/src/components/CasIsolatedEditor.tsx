@@ -52,9 +52,11 @@ import {
   hasCasIsolatedStackDraft,
 } from "../application/cas-isolated-stack-config";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
-import {prepareCasFailedWriteTicket,inspectCasFailedWrite}
+import {prepareCasFailedWriteTicket,inspectCasFailedWrite,
+  prepareCasFailedWriteBackup}
   from "../application/cas-failed-write-diagnosis";
-import type {CasFailedWriteTicket,CasFailedWriteObservation}
+import type {CasFailedWriteTicket,CasFailedWriteObservation,
+  CasFailedWriteBackupContext}
   from "../application/cas-failed-write-diagnosis";
 import type {CasPipelineFailedWrite,CasPipelineRunTicket,CasPipelineSession}
   from "../application/cas-pipeline-session";
@@ -242,6 +244,50 @@ export default function CasIsolatedEditor({
         setNotice(t(locale,"casFailedWriteReadDone"));
       }catch{
         setError(t(locale,"casFailedWriteReadUnavailable"));
+      }
+    });
+  }
+  function exportFailedWriteBackup():void {
+    // The ticket is volatile and the selected baseline is the last ACK,
+    // never the uncertain proposal. There is deliberately NO IDB read/write.
+    const ticket=failedWrite,pinned=snapshot;
+    if(!ticket || !pinned || !exact(ticket.old,pinned) ||
+       inFlight.current || pipelineRunning)return;
+    const context:CasFailedWriteBackupContext=
+      pipelineFailedWrite?.ticket===ticket
+        ?{operation:pipelineFailedWrite.operation,
+          stage:pipelineFailedWrite.stage}
+        :{operation:"editor",stage:null};
+    void run(async()=>{
+      let backup;
+      try{backup=prepareCasFailedWriteBackup(ticket,context);}
+      catch{setError(t(locale,"casFailedWriteBackupFailure"));return;}
+      const pinnedView=()=>failedWriteView.current.failedWrite===ticket &&
+        resumeView.current.snapshot===pinned &&
+        !resumeView.current.pipelineRunning;
+      if(!pinnedView()){
+        setError(t(locale,"casFailedWriteBackupFailure"));return;
+      }
+      if(!window.confirm(t(locale,"casFailedWriteBackupConsent")+"\n"+
+          pinned.id+" / rev. "+pinned.revision))return;
+      // Selection may change during the explicit human consent dialog.
+      if(!pinnedView()){
+        setError(t(locale,"casFailedWriteBackupFailure"));return;
+      }
+      let url:string|undefined;
+      try{
+        url=URL.createObjectURL(new Blob([backup.raw],{
+          type:"application/json",
+        }));
+        const link=document.createElement("a");
+        link.href=url;link.download=backup.fileName;
+        document.body.appendChild(link);link.click();link.remove();
+        setNotice(t(locale,"casFailedWriteBackupOffered"));
+      }catch{
+        setError(t(locale,"casFailedWriteBackupFailure"));
+      }finally{
+        const objectUrl=url;
+        if(objectUrl)setTimeout(()=>URL.revokeObjectURL(objectUrl),30000);
       }
     });
   }
@@ -1707,6 +1753,13 @@ export default function CasIsolatedEditor({
               disabled={working || pipelineRunning}
               onClick={inspectBlockedWrite}>
               {t(locale,"casFailedWriteAction")}
+            </button>
+            <p className="helper">{t(locale,"casFailedWriteBackupExplain")}</p>
+            <button type="button" className="secondary"
+              data-testid="cas-failed-write-backup-action"
+              disabled={working || pipelineRunning}
+              onClick={exportFailedWriteBackup}>
+              {t(locale,"casFailedWriteBackupAction")}
             </button>
             {failedWriteObservation &&
               <p data-testid="cas-failed-write-inspection-result">

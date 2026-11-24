@@ -1153,3 +1153,16 @@ Nel workspace opt-in `?workspace=cas`, se un commit IndexedDB dell'editor fallis
 ## Diagnosi dei checkpoint pipeline CAS non confermati (#198)
 
 Nel pilota IndexedDB, avvio/completamento/annullamento/errore della singola fase AI usano la diagnosi volatile di #197: se il CAS si blocca, la UI mantiene come base l'ultimo checkpoint nativo confermato (running dopo begin riuscito), espone il tipo di tentativo e consente solo un confronto read-only. Non conserva il risultato come completamento attestato, non ripete la richiesta provider, non adotta la revisione concorrente. I ticket restano in RAM e vengono scartati all'uscita/nuova selezione. ADR 0140; il cutover dell'editor legacy #139 rimane aperto.
+
+
+### Backup diagnostico di commit IndexedDB non confermato (#199)
+
+Il pilota CAS-only espone nella diagnosi di una scrittura bloccata un pulsante
+per offrire **solo su consenso esplicito** un file JSON locale in chiaro.
+Il pacchetto contiene \`old\` (l'ultima revisione effettivamente confermata)
+e \`proposed\` (il candidato mai confermato), con operation/stage nel caso
+pipeline. È una copia di emergenza volatile, può contenere informazioni
+sensibili, e **non** è un restore, una prova AI o una conferma di avvenuto
+salvataggio del file/commit CAS. Non legge nuovamente la banca dati, non
+effettua retry, non pubblica nulla e non adotta revisioni rivali. Il ticket
+si perde al reload. L'editor principale legacy non è stato migrato (#139).

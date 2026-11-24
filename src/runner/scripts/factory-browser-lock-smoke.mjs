@@ -4272,6 +4272,36 @@ if (!inside) {
       assert.equal(posts,postsBeforeDiagnosis,"Diagnosis must never re-call the provider");
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),ids[2]),winner);
+      // #199: only an explicit plaintext export may retain the rejected AI
+      // candidate after reload. Decline first: no file, no provider retry.
+      const backupAction=panel.getByTestId("cas-failed-write-backup-action");
+      await expect(backupAction).toBeEnabled();
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.dismiss());
+      await backupAction.click();
+      assert.equal(posts,postsBeforeDiagnosis);
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>void dlg.accept());
+      const backupDownload=page.waitForEvent("download");
+      await backupAction.click();
+      const backed=JSON.parse((await readFile(
+        await (await backupDownload).path())).toString("utf8"));
+      assert.equal(backed.format,"softwarefactory-cas-failed-write");
+      assert.equal(backed.authoritative,false);
+      assert.equal(backed.automaticRestore,false);
+      assert.equal(backed.unconfirmed,true);
+      assert.equal(backed.operation,"complete");
+      assert.equal(backed.stage,"features");
+      assert.deepEqual(backed.old,running);
+      assert.equal(backed.proposed.id,running.id);
+      assert.equal(backed.proposed.revision,running.revision+1);
+      assert.equal(JSON.parse(backed.proposed.raw).stages[0].status,"complete");
+      assert.equal(JSON.parse(backed.proposed.raw).stages[0].output,
+        "PROVIDER_HTTP_RESULT");
+      assert.equal(posts,postsBeforeDiagnosis);
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),ids[2]),winner);
+      console.log("FACTORY_CAS_FAILED_WRITE_BACKUP_E2E_PASS: explicit local unconfirmed candidate retained, rival unchanged, no AI retry");
       console.log("FACTORY_CAS_PIPELINE_FAILED_WRITE_DIAGNOSIS_E2E_PASS: real IDB running ACK pinned, late completion rejected, readonly rival classification, no retry or provider call");
       page.removeAllListeners("dialog");
       await page.reload({waitUntil:"networkidle"});

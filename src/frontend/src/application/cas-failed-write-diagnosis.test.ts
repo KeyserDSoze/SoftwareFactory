@@ -1,8 +1,12 @@
 import {afterEach,describe,expect,it,vi} from "vitest";
+import {STAGES} from "../domain/defaults";
 import {createProject} from "../domain/defaults";
 import type {CasProjectSlot} from "../infrastructure/project-cas";
-import {inspectCasFailedWrite,prepareCasFailedWriteTicket}
-  from "./cas-failed-write-diagnosis";
+import {
+  inspectCasFailedWrite,prepareCasFailedWriteTicket,
+  prepareCasFailedWriteBackup,CAS_FAILED_WRITE_BACKUP_FORMAT,
+  MAX_CAS_FAILED_WRITE_BACKUP_BYTES,
+} from "./cas-failed-write-diagnosis";
 function fixture(){
   const p=createProject();p.config.name="Pinned writer 197";
   const old={id:p.id,revision:5,raw:JSON.stringify(p)};
@@ -100,5 +104,66 @@ describe("native CAS failed write diagnosis #197",()=>{
     await expect(inspectCasFailedWrite(ticket,async()=>{
       throw Error("Native store unavailable");
     })).rejects.toThrow(/unavailable/);
+  });
+});
+
+
+describe("CAS unconfirmed-write voluntary offline backup #199",()=>{
+  afterEach(()=>vi.unstubAllGlobals());
+  it("exports exact old/proposed bytes as explicit non-authoritative data",()=>{
+    const {ticket}=fixture();
+    const result=prepareCasFailedWriteBackup(ticket,{
+      operation:"complete",stage:STAGES[0].id,
+    });
+    const envelope=JSON.parse(result.raw);
+    expect(envelope).toEqual({
+      format:CAS_FAILED_WRITE_BACKUP_FORMAT,schemaVersion:1,
+      authoritative:false,automaticRestore:false,unconfirmed:true,
+      warning:expect.stringContaining("PLAINTEXT"),
+      operation:"complete",stage:STAGES[0].id,
+      old:ticket.old,proposed:ticket.proposed,
+    });
+    expect(envelope.old.raw).toBe(ticket.old.raw);
+    expect(envelope.proposed.raw).toBe(ticket.proposed.raw);
+    expect(result.fileName).toBe("softwarefactory-cas-unconfirmed-"+
+      ticket.old.id+"-r5-to-r6.json");
+    expect(new TextEncoder().encode(result.raw).byteLength)
+      .toBeLessThanOrEqual(MAX_CAS_FAILED_WRITE_BACKUP_BYTES);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(prepareCasFailedWriteBackup(ticket,{
+      operation:"editor",stage:null,
+    }).raw).toContain('"operation": "editor"');
+  });
+  it("fails closed on missing, malformed and contradictory context/ticket",()=>{
+    const {ticket}=fixture();
+    for(const context of [
+      {operation:"editor",stage:STAGES[0].id},
+      {operation:"begin",stage:null},
+      {operation:"complete",stage:"fake-stage"},
+      {operation:"approve",stage:null},
+      null,
+    ])expect(()=>prepareCasFailedWriteBackup(ticket,context as never))
+      .toThrow();
+    for(const bad of [
+      {...ticket,proposed:{...ticket.proposed,revision:7}},
+      {...ticket,proposed:{...ticket.proposed,raw:ticket.old.raw}},
+      {...ticket,old:{...ticket.old,raw:ticket.old.raw+" "}},
+      {...ticket,old:{...ticket.old,id:"../unsafe"}},
+    ])expect(()=>prepareCasFailedWriteBackup(bad,{
+      operation:"editor",stage:null,
+    })).toThrow();
+  });
+  it("never touches native IDB, legacy storage, session secrets or network",()=>{
+    const {ticket}=fixture();
+    const deny=vi.fn(()=>{throw Error("FORBIDDEN_IO");});
+    vi.stubGlobal("indexedDB",{open:deny});
+    vi.stubGlobal("localStorage",{getItem:deny,setItem:deny});
+    vi.stubGlobal("sessionStorage",{getItem:deny,setItem:deny});
+    vi.stubGlobal("fetch",deny);
+    const backup=prepareCasFailedWriteBackup(ticket,{
+      operation:"abort",stage:STAGES[0].id,
+    });
+    expect(JSON.parse(backup.raw).unconfirmed).toBe(true);
+    expect(deny).not.toHaveBeenCalled();
   });
 });
