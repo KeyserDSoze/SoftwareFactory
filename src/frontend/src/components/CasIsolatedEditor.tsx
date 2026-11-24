@@ -50,7 +50,11 @@ import {
   hasCasIsolatedStackDraft,
 } from "../application/cas-isolated-stack-config";
 import {hasCasIsolatedUnsavedDraft} from "../application/cas-isolated-draft";
-import {prepareCasUncommittedDraftBackup}
+import {
+  prepareCasUncommittedDraftBackup,inspectCasUncommittedDraftBackup,
+  MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES,
+} from "../application/cas-uncommitted-draft-backup";
+import type {CasUncommittedDraftInspection}
   from "../application/cas-uncommitted-draft-backup";
 import {inspectCasIsolatedStages} from "../application/cas-isolated-stage-inspection";
 import {
@@ -143,6 +147,8 @@ export default function CasIsolatedEditor({
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [resumeLink,setResumeLink]=useState<CasRevisionResumeLink|null>(null);
+  const [emergencyPreview,setEmergencyPreview]=
+    useState<CasUncommittedDraftInspection|null>(null);
   const active=useRef<CasSelectionController|null>(null);
   const inFlight=useRef(false);
   const pipelineAbort=useRef<AbortController|null>(null);
@@ -581,6 +587,25 @@ export default function CasIsolatedEditor({
     });
   }
 
+  function inspectOfflineUncommittedDraft(file:File):void {
+    if(inFlight.current || pipelineRunning)return;
+    void run(async()=>{
+      // No native IDB read or selected CAS writer is consulted, even after
+      // an unrelated project becomes stale. This is LOCAL, inert text.
+      setEmergencyPreview(null);
+      if(file.size<1 || file.size>MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES){
+        setError(t(locale,"casIsoDraftInspectFailure"));return;
+      }
+      if(!window.confirm(t(locale,"casIsoDraftInspectConsent")))return;
+      try{
+        const inspected=inspectCasUncommittedDraftBackup(await file.text());
+        setEmergencyPreview(inspected);
+        setNotice(t(locale,"casIsoDraftInspectReady"));
+      }catch{
+        setError(t(locale,"casIsoDraftInspectFailure"));
+      }
+    });
+  }
   function exportUncommittedDraft():void {
     // This intentionally works even after the CAS controller was blocked.
     // Only pinned React state is read — no IndexedDB, cloud or legacy access.
@@ -1431,6 +1456,62 @@ export default function CasIsolatedEditor({
             }}/>
         </label>
       </section>}
+      <section data-testid="cas-uncommitted-draft-inspection">
+        <p className="helper">{t(locale,"casIsoDraftInspectExplain")}</p>
+        <label>{t(locale,"casIsoDraftInspectLabel")}
+          <input type="file" accept=".json,application/json"
+            data-testid="cas-uncommitted-draft-inspect-file"
+            disabled={working || pipelineRunning}
+            onChange={e=>{
+              const file=e.currentTarget.files?.[0];
+              e.currentTarget.value="";
+              if(file)inspectOfflineUncommittedDraft(file);
+            }}/>
+        </label>
+        {emergencyPreview && <div
+          data-testid="cas-uncommitted-draft-preview">
+          <p role="status">{t(locale,"casIsoDraftInspectWarning")}</p>
+          <p><strong>{t(locale,"casIsoDraftInspectIdentity")}</strong>
+            {" "+emergencyPreview.id+" / rev. "+emergencyPreview.revision}
+          </p>
+          <p><strong>{t(locale,"casIsoDraftInspectBaseName")}</strong>
+            {" "+emergencyPreview.originalName}</p>
+          <p><strong>{t(locale,"casIsoDraftInspectName")}</strong></p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>{emergencyPreview.config.name}</pre>
+          <p><strong>{t(locale,"casIsoDraftInspectDescription")}</strong></p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>{emergencyPreview.config.description}</pre>
+          <p><strong>{t(locale,"casIsoDraftInspectRequirements")}</strong></p>
+          <pre data-testid="cas-uncommitted-draft-requirements"
+            style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+              maxHeight:180,overflow:"auto"}}>
+            {emergencyPreview.config.requirements}
+          </pre>
+          <p><strong>{t(locale,"casIsoDraftInspectStack")}</strong></p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>
+            {emergencyPreview.stack===null ? "-" :
+              JSON.stringify(emergencyPreview.stack,null,2)}
+          </pre>
+          <p><strong>{t(locale,"casIsoDraftInspectManual")}</strong>
+            {" "+emergencyPreview.manualStage}</p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>{emergencyPreview.manualOutput}</pre>
+          <p><strong>{t(locale,"casIsoDraftInspectCodeRequest")}</strong></p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>{emergencyPreview.codeRequest}</pre>
+          <p><strong>{t(locale,"casIsoDraftInspectCodeJson")}</strong></p>
+          <pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",
+            maxHeight:180,overflow:"auto"}}>{emergencyPreview.codeProposalJson}</pre>
+          <button type="button" className="secondary"
+            data-testid="cas-uncommitted-draft-clear-preview"
+            disabled={working}
+            onClick={()=>setEmergencyPreview(null)}>
+            {t(locale,"casIsoDraftInspectClear")}
+          </button>
+        </div>}
+      </section>
       <section data-testid="cas-library-backup">
         <p className="helper">{t(locale,"casLibraryBackupExplain")}</p>
         <button type="button" className="secondary"

@@ -15,6 +15,12 @@ describe("installer and GitHub Actions i18n", () => {
     expect(t("it","casLibraryBackupNotRestorable")).toContain("JSON");
     expect(t("en","casLibraryBackupNotRestorable")).toContain("JSON");
   });
+  it("translates offline-only draft inspection without implying a CAS write (#195)",()=>{
+    expect(t("it","casIsoDraftInspectWarning")).toContain("SOLO LETTURA");
+    expect(t("en","casIsoDraftInspectWarning")).toContain("READ-ONLY");
+    expect(t("it","casIsoDraftInspectConsent")).toContain("NON CONFERMATA");
+    expect(t("en","casIsoDraftInspectReady")).toContain("not imported");
+  });
   it("labels the uncommitted CAS draft recovery as offline, not an IndexedDB ACK",()=>{
     expect(t("it","casIsoDraftBackupExplain")).toContain("NON SALVATA");
     expect(t("en","casIsoDraftBackupExplain")).toContain("UNCOMMITTED");

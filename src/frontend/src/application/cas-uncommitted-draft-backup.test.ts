@@ -1,8 +1,10 @@
 import {describe,expect,it,vi,afterEach} from "vitest";
 import {createProject} from "../domain/defaults";
 import {readCasIsolatedStackConfig} from "./cas-isolated-stack-config";
-import {CAS_UNCOMMITTED_DRAFT_FORMAT,prepareCasUncommittedDraftBackup}
-  from "./cas-uncommitted-draft-backup";
+import {
+  CAS_UNCOMMITTED_DRAFT_FORMAT,prepareCasUncommittedDraftBackup,
+  inspectCasUncommittedDraftBackup,MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES,
+} from "./cas-uncommitted-draft-backup";
 import type {CasUncommittedDraftInput} from "./cas-uncommitted-draft-backup";
 
 function fixture():CasUncommittedDraftInput {
@@ -85,6 +87,74 @@ describe("opt-in CAS uncommitted draft emergency offline backup #194",()=>{
       {...f,requirements:"dirty",manualStage:"unknown" as never},
       {...f,requirements:"dirty",stack:{...f.stack!,deployment:"invalid" as never}},
     ])expect(()=>prepareCasUncommittedDraftBackup(value))
+      .toThrow(/non esportabile/);
+  });
+
+  it("reads a byte-canonical Unicode emergency file for manual inspection only (#195)",()=>{
+    const f=fixture();
+    const input={...f,name:"星 🌙 source",
+      requirements:"Testo umano non confermato\n  second line",
+      manualStage:"technical" as const,manualOutput:"Human result <script>alert(1)</script>",
+      codeRequest:"Draft code request",
+      codeProposalJson:'{"source":"still unreviewed"}',
+      stack:{...f.stack!,deployment:"aws" as const}};
+    const archive=prepareCasUncommittedDraftBackup(input);
+    const projection=inspectCasUncommittedDraftBackup(archive.raw);
+    expect(projection).toEqual({
+      id:f.snapshot.id,revision:7,originalName:"Baseline name",
+      config:{name:input.name,description:input.description,
+        requirements:input.requirements},
+      stack:input.stack,manualStage:"technical",
+      manualOutput:input.manualOutput,codeRequest:input.codeRequest,
+      codeProposalJson:input.codeProposalJson,
+    });
+    expect(Object.isFrozen(projection)).toBe(true);
+    expect(Object.isFrozen(projection.config)).toBe(true);
+    expect(projection.originalName).not.toBe(projection.config.name);
+    expect(archive.raw).toContain('"authoritative": false');
+  });
+  it("inspects the STALE base without touching IDB, localStorage or the network (#195)",()=>{
+    const f=fixture(),archive=prepareCasUncommittedDraftBackup(
+      {...f,requirements:"Never persisted, rival won"});
+    const forbidden=vi.fn(()=>{throw Error("NO_IO_ALLOWED");});
+    vi.stubGlobal("indexedDB",{open:forbidden});
+    vi.stubGlobal("localStorage",{getItem:forbidden,setItem:forbidden});
+    vi.stubGlobal("sessionStorage",{getItem:forbidden,setItem:forbidden});
+    vi.stubGlobal("fetch",forbidden);
+    const inspect=inspectCasUncommittedDraftBackup(archive.raw);
+    expect(inspect.revision).toBe(7);
+    expect(inspect.config.requirements).toBe("Never persisted, rival won");
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+  it("refuses noncanonical JSON, wrong flags, injected fields, corrupt source or malformed drafts (#195)",()=>{
+    const f=fixture(),archive=prepareCasUncommittedDraftBackup(
+      {...f,requirements:"recover"});
+    const parsed=JSON.parse(archive.raw);
+    const mutated=[
+      {...parsed,authoritative:true},
+      {...parsed,automaticRestore:true},
+      {...parsed,uncommitted:false},
+      {...parsed,format:"softwarefactory-cas-library-backup"},
+      {...parsed,schemaVersion:2},
+      {...parsed,unexpected:"privileged extra"},
+      {...parsed,warning:"TRUSTED OFFICIAL REPORT"},
+      {...parsed,base:{...parsed.base,raw:parsed.base.raw+" "}},
+      {...parsed,base:{...parsed.base,revision:-1}},
+      {...parsed,draft:{...parsed.draft,arbitrarySecret:"key"}},
+      {...parsed,draft:{...parsed.draft,manualStage:"unknown"}},
+      {...parsed,draft:{...parsed.draft,codeRequest:"x".repeat(2_001)}},
+    ];
+    for(const bad of mutated)
+      expect(()=>inspectCasUncommittedDraftBackup(JSON.stringify(bad,null,2)))
+        .toThrow(/non esportabile/);
+    expect(()=>inspectCasUncommittedDraftBackup(
+      JSON.stringify(parsed))).toThrow(/non esportabile/);
+    expect(()=>inspectCasUncommittedDraftBackup(
+      archive.raw.replace('"schemaVersion": 1',
+        '"schemaVersion": 1, "schemaVersion": 1')))
+      .toThrow(/non esportabile/);
+    expect(()=>inspectCasUncommittedDraftBackup(
+      "x".repeat(MAX_CAS_UNCOMMITTED_DRAFT_FILE_BYTES+1)))
       .toThrow(/non esportabile/);
   });
   it("does not serialize extra injected secrets/settings as top-level fields",()=>{

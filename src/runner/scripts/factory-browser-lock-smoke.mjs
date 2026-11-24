@@ -2017,6 +2017,46 @@ if (!inside) {
       assert.deepEqual(await rival.evaluate(id=>
         window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB,
         "Emergency JSON cannot overwrite the other tab's CAS winner");
+      // #195: inspect the REAL file just downloaded in an inert, local
+      // view, even though the selected CAS session is still blocked.
+      const inspectFile=panel.getByTestId("cas-uncommitted-draft-inspect-file");
+      page.removeAllListeners("dialog");
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/SENSIBILE/);
+        void dlg.dismiss();
+      });
+      await inspectFile.setInputFiles(await emergency.path());
+      await expect(panel.getByTestId("cas-uncommitted-draft-preview"))
+        .toHaveCount(0);
+      page.once("dialog",dlg=>{
+        assert.match(dlg.message(),/OBSOLETA/);
+        void dlg.accept();
+      });
+      await inspectFile.setInputFiles(await emergency.path());
+      const draftPreview=panel.getByTestId("cas-uncommitted-draft-preview");
+      await expect(draftPreview).toContainText(original[1].id);
+      await expect(draftPreview).toContainText("rev. 1");
+      await expect(draftPreview).toContainText("IDB pilot B");
+      await expect(draftPreview.getByTestId("cas-uncommitted-draft-requirements"))
+        .toContainText("Unsaved requirements must lose to rival");
+      await expect(draftPreview).toContainText(/SOLO LETTURA/);
+      await expect(requirements).toHaveValue("Unsaved requirements must lose to rival");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB);
+      page.once("dialog",dlg=>void dlg.accept());
+      await inspectFile.setInputFiles({
+        name:"tampered-cas-uncommitted.json",
+        mimeType:"application/json",
+        buffer:Buffer.from(JSON.stringify({...payload,authoritative:true},null,2)),
+      });
+      await expect(panel.getByTestId("cas-uncommitted-draft-preview"))
+        .toHaveCount(0);
+      await expect(panel.getByRole("alert"))
+        .toContainText(/non valido|manomesso/);
+      await expect(requirements).toHaveValue("Unsaved requirements must lose to rival");
+      assert.deepEqual(await rival.evaluate(id=>
+        window.FactoryProjectCas.readCasProject(id),original[1].id),rivalB);
+      console.log("FACTORY_CAS_UNCOMMITTED_DRAFT_INSPECT_E2E_PASS: downloaded JSON read after explicit consent on blocked CAS session, exact pinned revision and unsaved text visible, malformed file denied, rival IDB remains authoritative");
       console.log("FACTORY_CAS_UNCOMMITTED_DRAFT_E2E_PASS: after stale CAS block, explicit consent and offline download preserve pinned original RAW plus unsaved draft without any native/legacy writes or automatic restore");
       // #154: after blocked CAS, the rejected draft remains valuable human
       // text. A normal refresh must NOT erase it without another consent.

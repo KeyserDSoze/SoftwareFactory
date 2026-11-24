@@ -1364,3 +1364,8 @@ Nel SOLO root `?workspace=cas` il file picker **Ripristina libreria CAS da ZIP o
 - Se la scrittura native CAS fallisce per quota, stale token o versionchange, preservare snapshot pinned e testi in React. L'export emergenziale può avvenire anche con controller `blocked` senza lettura IndexedDB e senza toccare lo stato del progetto.
 - Formato separato `softwarefactory-cas-uncommitted-draft`: `base` RAW+revisione (potenzialmente stale), `draft` con soli campi UI, `authoritative:false`, `automaticRestore:false`; non farlo passare come JSON restore #148/ZIP #189 né prova di Code Reviewer/runner/GitHub. Nessuna API key/PAT dai settings.
 - Avviso di testo sensibile in chiaro e consenso prima del download; file non attestato sul disco, nessun retry, scrittura o rebase. Vitest + Chromium 2 tab sul controller bloccato; #139/#91/#92 ancora aperte.
+
+## Lettore read-only JSON bozze CAS #195
+- Il file di recupero #194 è **non autoritativo**: aprirlo nel pilota CAS solo dopo consenso, validando gli STESSI byte JSON canonici del builder e max 6 MB. Mostrare i campi in testo React escapato, mai render HTML/eseguire patch, non trasferire segreti a provider e non suggerire restore/merge automatico.
+- L'anteprima deve rimanere possibile con controller `blocked` o senza selezione, ma NON attiva pipeline/transazioni. Un file alterato invalida la preview, senza `commit`, `setDraft*`, IndexedDB, localStorage, sessionStorage o rete. La corrispondenza byte-esatta del formato non è una firma/autenticazione dell'artefatto.
+- Verificare Vitest + E2E 2 tab con caricamento del file realmente scaricato e writer rivale intatto. #139/#91/#92 rimangono aperte.
